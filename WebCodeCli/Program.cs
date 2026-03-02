@@ -54,6 +54,12 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddServicesFromAssemblies("WebCodeCli", "WebCodeCli.Domain");
 
+// 添加 HttpClient 工厂（飞书 CardKit 客户端需要）
+builder.Services.AddHttpClient();
+
+// 添加飞书渠道服务
+builder.Services.AddFeishuChannel(builder.Configuration);
+
 // 添加 YARP 反向代理
 builder.Services.AddHttpForwarder();
 
@@ -125,7 +131,9 @@ builder.Services.AddCors(options =>
 // 配置 Serilog 静态日志器
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
+    .MinimumLevel.Debug()
     .WriteTo.Console()
+    .WriteTo.File("logs/feishu-.log", rollingInterval: RollingInterval.Day, outputTemplate: "{Timestamp:HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
 
 // 将 Serilog 集成到 ASP.NET Core 日志系统

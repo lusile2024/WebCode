@@ -59,6 +59,11 @@ public interface ISystemSettingsService
     /// 保存启用的助手列表
     /// </summary>
     Task<bool> SaveEnabledAssistantsAsync(List<string> assistants);
+
+    /// <summary>
+    /// 检测本地 CLI 配置
+    /// </summary>
+    Task<LocalCliConfigDetectionResult> DetectLocalCliConfigsAsync();
 }
 
 /// <summary>
@@ -164,19 +169,22 @@ public class SystemSettingsService : ISystemSettingsService
     private readonly ICliToolEnvironmentVariableRepository _envRepository;
     private readonly CliToolsOption _cliOptions;
     private readonly AuthenticationOption _authOptions;
+    private readonly ILocalCliConfigDetector _localConfigDetector;
 
     public SystemSettingsService(
         ILogger<SystemSettingsService> logger,
         ISystemSettingsRepository repository,
         ICliToolEnvironmentVariableRepository envRepository,
         IOptions<CliToolsOption> cliOptions,
-        IOptions<AuthenticationOption> authOptions)
+        IOptions<AuthenticationOption> authOptions,
+        ILocalCliConfigDetector localConfigDetector)
     {
         _logger = logger;
         _repository = repository;
         _envRepository = envRepository;
         _cliOptions = cliOptions.Value;
         _authOptions = authOptions.Value;
+        _localConfigDetector = localConfigDetector;
     }
 
     /// <summary>
@@ -452,6 +460,14 @@ public class SystemSettingsService : ISystemSettingsService
             _logger.LogError(ex, "保存启用的助手列表失败");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 检测本地 CLI 配置
+    /// </summary>
+    public async Task<LocalCliConfigDetectionResult> DetectLocalCliConfigsAsync()
+    {
+        return await _localConfigDetector.DetectLocalConfigsAsync();
     }
 
     /// <summary>

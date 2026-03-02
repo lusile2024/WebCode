@@ -26,6 +26,11 @@ public partial class Setup : ComponentBase
     private Dictionary<string, string> _translations = new();
     private string _currentLanguage = "zh-CN";
 
+    // 检测到的本地配置
+    private LocalCliConfigDetectionResult? _detectedConfigs;
+    private bool _showImportPrompt = false;
+    private List<DetectedCliConfig> _configsToImport = new();
+
     private SystemInitConfig _config = new()
     {
         EnableAuth = true,
@@ -61,6 +66,9 @@ public partial class Setup : ComponentBase
         // 初始化默认环境变量
         InitializeDefaultEnvVars();
 
+        // 检测本地 CLI 配置
+        await DetectLocalConfigsAsync();
+
         // 初始化本地化
         try
         {
@@ -71,6 +79,108 @@ public partial class Setup : ComponentBase
         {
             Console.WriteLine($"[Setup] 初始化本地化失败: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 检测本地 CLI 配置
+    /// </summary>
+    private async Task DetectLocalConfigsAsync()
+    {
+        try
+        {
+            _detectedConfigs = await SystemSettingsService.DetectLocalCliConfigsAsync();
+
+            if (_detectedConfigs?.HasAnyConfig == true)
+            {
+                // 过滤出有实际环境变量的配置
+                _configsToImport = _detectedConfigs.DetectedConfigs
+                    .Where(c => c.EnvironmentVariables.Any())
+                    .ToList();
+
+                if (_configsToImport.Any())
+                {
+                    _showImportPrompt = true;
+                    Console.WriteLine($"[Setup] 检测到 {_configsToImport.Count} 个本地 CLI 配置");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Setup] 检测本地配置失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 导入检测到的本地配置
+    /// </summary>
+    private void ImportDetectedConfigs()
+    {
+        foreach (var config in _configsToImport)
+        {
+            switch (config.ToolId)
+            {
+                case "claude-code":
+                    _enableClaudeCode = true;
+                    // 合并环境变量（不覆盖已有值）
+                    foreach (var kvp in config.EnvironmentVariables)
+                    {
+                        var existing = _claudeEnvVars.FirstOrDefault(e => e.Key == kvp.Key);
+                        if (existing != null && string.IsNullOrWhiteSpace(existing.Value))
+                        {
+                            existing.Value = kvp.Value;
+                        }
+                        else if (existing == null)
+                        {
+                            _claudeEnvVars.Add(new EnvVarItem { Key = kvp.Key, Value = kvp.Value });
+                        }
+                    }
+                    break;
+
+                case "codex":
+                    _enableCodex = true;
+                    foreach (var kvp in config.EnvironmentVariables)
+                    {
+                        var existing = _codexEnvVars.FirstOrDefault(e => e.Key == kvp.Key);
+                        if (existing != null && string.IsNullOrWhiteSpace(existing.Value))
+                        {
+                            existing.Value = kvp.Value;
+                        }
+                        else if (existing == null)
+                        {
+                            _codexEnvVars.Add(new EnvVarItem { Key = kvp.Key, Value = kvp.Value });
+                        }
+                    }
+                    break;
+
+                case "opencode":
+                    _enableOpenCode = true;
+                    foreach (var kvp in config.EnvironmentVariables)
+                    {
+                        var existing = _openCodeEnvVars.FirstOrDefault(e => e.Key == kvp.Key);
+                        if (existing != null && string.IsNullOrWhiteSpace(existing.Value))
+                        {
+                            existing.Value = kvp.Value;
+                        }
+                        else if (existing == null)
+                        {
+                            _openCodeEnvVars.Add(new EnvVarItem { Key = kvp.Key, Value = kvp.Value });
+                        }
+                    }
+                    break;
+            }
+        }
+
+        _showImportPrompt = false;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 跳过导入本地配置
+    /// </summary>
+    private void SkipImportConfigs()
+    {
+        _showImportPrompt = false;
+        StateHasChanged();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

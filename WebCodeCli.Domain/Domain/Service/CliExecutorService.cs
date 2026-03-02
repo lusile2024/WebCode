@@ -32,14 +32,18 @@ public class CliExecutorService : ICliExecutorService
     // 缓存的有效工作区根目录
     private string? _effectiveWorkspaceRoot;
     private readonly object _workspaceRootLock = new();
-    
+
     // 存储每个会话的CLI Thread ID（适用于所有CLI工具）
     private readonly Dictionary<string, string> _cliThreadIds = new();
     private readonly object _cliSessionLock = new();
-    
+
     // Codex 配置文件缓存（避免每次执行都重新生成）
     private string? _lastCodexConfigHash;
     private readonly object _codexConfigLock = new();
+
+    // Claude Code 配置检测缓存（避免每次执行都检测）
+    private bool? _hasClaudeCodeConfig;
+    private readonly object _claudeConfigCheckLock = new();
 
     public CliExecutorService(
         ILogger<CliExecutorService> logger,
@@ -667,17 +671,23 @@ public class CliExecutorService : ICliExecutorService
             startInfo.WorkingDirectory = sessionWorkspace;
         }
 
-        // 设置环境变量 - 只有在有实际值的变量才设置(避免空值覆盖系统默认配置)
+        // 设置环境变量
         if (environmentVariables != null && environmentVariables.Count > 0)
         {
             foreach (var kvp in environmentVariables)
             {
-                // 跳过空值的环境变量，避免覆盖系统中已存在的配置
-                if (string.IsNullOrWhiteSpace(kvp.Value))
+                // 空字符串表示显式移除环境变量（用于取消继承父进程的环境变量）
+                // 这对于像 CLAUDECODE 这样的变量很重要，需要完全未设置而不是空字符串
+                if (string.IsNullOrEmpty(kvp.Value))
                 {
-                    _logger.LogDebug("跳过空值环境变量: {Key}", kvp.Key);
+                    if (startInfo.EnvironmentVariables.ContainsKey(kvp.Key))
+                    {
+                        startInfo.EnvironmentVariables.Remove(kvp.Key);
+                        _logger.LogDebug("移除环境变量: {Key}", kvp.Key);
+                    }
                     continue;
                 }
+                // 非空值正常设置
                 startInfo.EnvironmentVariables[kvp.Key] = kvp.Value;
                 _logger.LogDebug("设置环境变量: {Key} = {Value}", kvp.Key, kvp.Value);
             }
@@ -704,8 +714,17 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
+        // 开发调试模式：检测到本地 Claude Code CLI 配置时才移除 CLAUDECODE 环境变量
+        // 避免子进程检测到嵌套 Claude Code 会话导致启动失败
+        // 只有在使用 Claude Code CLI 开发调试 WebCode 时才需要（配置文件存在且有有效 API Key）
+        if (startInfo.EnvironmentVariables.ContainsKey("CLAUDECODE") && ShouldRemoveClaudeCodeEnvVar())
+        {
+            startInfo.EnvironmentVariables.Remove("CLAUDECODE");
+            _logger.LogDebug("检测到本地 Claude Code CLI 配置，移除 CLAUDECODE 环境变量避免嵌套会话检测");
+        }
+
         _logger.LogInformation("准备启动进程: {FileName} {Arguments}", startInfo.FileName, startInfo.Arguments);
-        
+
         process = new Process { StartInfo = startInfo };
 
         // 启动进程
@@ -898,7 +917,14 @@ public class CliExecutorService : ICliExecutorService
             lineCount++;
             // 添加换行符，保持原始格式
             var content = line + Environment.NewLine;
-            _logger.LogInformation(content);
+
+            // 只记录非系统钩子消息的摘要，避免日志过多
+            if (!line.TrimStart().StartsWith("{\"type\":\"system\""))
+            {
+                var preview = content.Length > 100 ? content[..100] + "..." : content;
+                _logger.LogDebug("CLI输出: {Preview}", preview);
+            }
+
             yield return (content, isErrorStream);
         }
     }
@@ -1599,7 +1625,7 @@ public class CliExecutorService : ICliExecutorService
     }
 
     /// <summary>
-    /// 获取指定工具的环境变量配置（优先从数据库读取）
+    /// 获取指定工具的环境变量配置（智能合并：当数据库API key与本地配置一致时，优先使用本地完整配置）
     /// </summary>
     public async Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId)
     {
@@ -1607,28 +1633,175 @@ public class CliExecutorService : ICliExecutorService
         {
             using var scope = _serviceProvider.CreateScope();
             var envService = scope.ServiceProvider.GetRequiredService<ICliToolEnvironmentService>();
-            var envVars = await envService.GetEnvironmentVariablesAsync(toolId);
-            
-            // 记录获取到的环境变量（用于调试）
-            _logger.LogInformation("获取工具 {ToolId} 的环境变量，共 {Count} 个", toolId, envVars.Count);
-            foreach (var kvp in envVars)
+            var dbEnvVars = await envService.GetEnvironmentVariablesAsync(toolId);
+
+            // 智能配置合并：检测本地CLI配置
+            var localConfig = await GetLocalCliConfigAsync(toolId);
+            if (localConfig != null && localConfig.HasValidApiKey)
             {
-                // 敏感信息只显示前几个字符
-                var maskedValue = kvp.Value.Length > 8 
-                    ? kvp.Value.Substring(0, 4) + "****" 
+                // 比较数据库和本地配置的 API key
+                var dbApiKey = GetApiKeyFromEnvVars(dbEnvVars, toolId);
+                var localApiKey = GetApiKeyFromEnvVars(localConfig.EnvironmentVariables, toolId);
+
+                // 如果 API key 一致，优先使用本地完整配置
+                if (!string.IsNullOrEmpty(dbApiKey) &&
+                    !string.IsNullOrEmpty(localApiKey) &&
+                    string.Equals(dbApiKey, localApiKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation(
+                        "工具 {ToolId} 的数据库API key与本地配置一致，优先使用本地完整配置",
+                        toolId);
+
+                    // 记录配置来源
+                    foreach (var kvp in localConfig.EnvironmentVariables)
+                    {
+                        var maskedValue = kvp.Value.Length > 8
+                            ? kvp.Value.Substring(0, 4) + "****"
+                            : "****";
+                        _logger.LogDebug("  本地环境变量: {Key} = {Value}", kvp.Key, maskedValue);
+                    }
+
+                    return localConfig.EnvironmentVariables;
+                }
+            }
+
+            // 默认使用数据库配置
+            _logger.LogInformation("获取工具 {ToolId} 的环境变量，共 {Count} 个", toolId, dbEnvVars.Count);
+            foreach (var kvp in dbEnvVars)
+            {
+                var maskedValue = kvp.Value.Length > 8
+                    ? kvp.Value.Substring(0, 4) + "****"
                     : "****";
                 _logger.LogDebug("  环境变量: {Key} = {Value}", kvp.Key, maskedValue);
             }
-            
-            return envVars;
+
+            return dbEnvVars;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "获取工具 {ToolId} 的环境变量失败", toolId);
-            
+
             // 降级到appsettings配置
             var tool = GetTool(toolId);
             return tool?.EnvironmentVariables ?? new Dictionary<string, string>();
+        }
+    }
+
+    /// <summary>
+    /// 从环境变量中提取 API key（根据工具类型）
+    /// </summary>
+    private string GetApiKeyFromEnvVars(Dictionary<string, string> envVars, string toolId)
+    {
+        return toolId.ToLower() switch
+        {
+            "claude-code" => envVars.GetValueOrDefault("ANTHROPIC_API_KEY", ""),
+            "codex" => envVars.GetValueOrDefault("OPENAI_API_KEY", "")
+                ?? envVars.GetValueOrDefault("NEW_API_KEY", ""),
+            "opencode" => envVars.GetValueOrDefault("OPENCODE_CONFIG_CONTENT", ""),
+            _ => ""
+        };
+    }
+
+    /// <summary>
+    /// 获取本地 CLI 配置
+    /// </summary>
+    private async Task<DetectedCliConfig?> GetLocalCliConfigAsync(string toolId)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var detector = scope.ServiceProvider.GetService<ILocalCliConfigDetector>();
+            if (detector == null)
+            {
+                return null;
+            }
+
+            var result = await detector.DetectLocalConfigsAsync();
+            return result?.DetectedConfigs?.FirstOrDefault(c =>
+                c.ToolId.Equals(toolId, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "获取本地 CLI 配置失败: {ToolId}", toolId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 检查是否应该移除 CLAUDECODE 环境变量
+    /// 只有在检测到本地 Claude Code CLI 配置文件存在且有有效 Auth Token 时才返回 true
+    /// </summary>
+    private bool ShouldRemoveClaudeCodeEnvVar()
+    {
+        // 使用缓存避免重复检测
+        lock (_claudeConfigCheckLock)
+        {
+            if (_hasClaudeCodeConfig.HasValue)
+            {
+                return _hasClaudeCodeConfig.Value;
+            }
+
+            try
+            {
+                // 检查 Claude Code 配置文件是否存在
+                var configPaths = new[]
+                {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "config.json"),
+                };
+
+                foreach (var configPath in configPaths)
+                {
+                    if (File.Exists(configPath))
+                    {
+                        try
+                        {
+                            var content = File.ReadAllText(configPath);
+                            var json = JsonDocument.Parse(content);
+
+                            // 检查新格式：env.ANTHROPIC_AUTH_TOKEN
+                            if (json.RootElement.TryGetProperty("env", out var envElement) &&
+                                envElement.TryGetProperty("ANTHROPIC_AUTH_TOKEN", out var authTokenElement))
+                            {
+                                var authToken = authTokenElement.GetString();
+                                if (!string.IsNullOrWhiteSpace(authToken) && authToken.Length > 20)
+                                {
+                                    _hasClaudeCodeConfig = true;
+                                    _logger.LogDebug("检测到有效的 Claude Code CLI 配置 (ANTHROPIC_AUTH_TOKEN): {Path}", configPath);
+                                    return true;
+                                }
+                            }
+
+                            // 检查旧格式：apiKey（向后兼容）
+                            if (json.RootElement.TryGetProperty("apiKey", out var apiKeyElement))
+                            {
+                                var apiKey = apiKeyElement.GetString();
+                                if (!string.IsNullOrWhiteSpace(apiKey) && apiKey.Length > 20)
+                                {
+                                    _hasClaudeCodeConfig = true;
+                                    _logger.LogDebug("检测到有效的 Claude Code CLI 配置 (apiKey): {Path}", configPath);
+                                    return true;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "解析 Claude Code 配置文件失败: {Path}", configPath);
+                        }
+                    }
+                }
+
+                // 未检测到有效配置
+                _hasClaudeCodeConfig = false;
+                _logger.LogDebug("未检测到有效的 Claude Code CLI 配置，保留 CLAUDECODE 环境变量");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "检查 Claude Code 配置时发生错误");
+                _hasClaudeCodeConfig = false;
+                return false;
+            }
         }
     }
 
