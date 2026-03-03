@@ -98,6 +98,14 @@ namespace WebCodeCli.Domain.Common.Extensions
             services.AddSingleton<FeishuHelpCardBuilder>();
             services.AddSingleton<FeishuCardActionService>();
 
+            // 显式注册卡片动作事件处理器（让 FeishuNetSdk 能够发现它）
+            services.AddSingleton<FeishuCardActionHandler>();
+
+            // 确保事件处理器类型被加载（触发静态构造函数）- 在 AddFeishuNetSdk 之前
+            Console.WriteLine("🔥🔥🔥 [Startup] 准备加载 FeishuCardActionHandler...");
+            var handlerType = typeof(FeishuCardActionHandler);
+            Console.WriteLine($"🔥🔥🔥 [Startup] FeishuCardActionHandler 已加载: {handlerType.FullName}");
+
             // 配置飞书 WebSocket 客户端（仅当启用时）
             if (options.Enabled)
             {
