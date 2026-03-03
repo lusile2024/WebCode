@@ -20,6 +20,9 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     private readonly FeishuOptions _options;
     private readonly ILogger<FeishuMessageHandler> _logger;
     private readonly IServiceProvider _serviceProvider;
+    private readonly FeishuCommandService _commandService;
+    private readonly FeishuHelpCardBuilder _cardBuilder;
+    private readonly IFeishuCardKitClient _cardKit;
 
     /// <summary>
     /// 静态消息收到事件（解决 SDK 创建不同实例的问题）
@@ -41,11 +44,17 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     public FeishuMessageHandler(
         IOptions<FeishuOptions> options,
         ILogger<FeishuMessageHandler> logger,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        FeishuCommandService commandService,
+        FeishuHelpCardBuilder cardBuilder,
+        IFeishuCardKitClient cardKit)
     {
         _options = options.Value;
         _logger = logger;
         _serviceProvider = serviceProvider;
+        _commandService = commandService;
+        _cardBuilder = cardBuilder;
+        _cardKit = cardKit;
 
         // 启动定时清理器（每 5 分钟清理一次过期消息）
         _cleanupTimer = new System.Threading.Timer(
@@ -97,6 +106,20 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
         // 解析消息内容
         var content = ParseMessageContent(message.Content, message.MessageType);
+
+        // 检测 feishuhelp 命令（飞书会自动去掉斜杠，所以不检测斜杠）
+        var trimmedContent = content.Trim();
+        if (!string.IsNullOrEmpty(trimmedContent) &&
+            (trimmedContent.StartsWith("feishuhelp", StringComparison.OrdinalIgnoreCase) ||
+             trimmedContent.StartsWith("/feishuhelp", StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogInformation("🔥 [Feishu] 检测到 feishuhelp 命令!");
+            var keyword = trimmedContent.StartsWith("/", StringComparison.Ordinal)
+                ? trimmedContent.Substring("/feishuhelp".Length).Trim()
+                : trimmedContent.Substring("feishuhelp".Length).Trim();
+            await HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword);
+            return;
+        }
 
         // 获取发送者信息
         var senderId = eventDto.Sender.SenderId.OpenId ?? eventDto.Sender.SenderId.UserId ?? string.Empty;
@@ -265,6 +288,57 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         {
             _cleanupTimer?.Dispose();
             _disposed = true;
+        }
+    }
+
+    /// <summary>
+    /// 处理 /feishuhelp 命令
+    /// </summary>
+    private async Task HandleFeishuHelpAsync(string chatId, string replyToMessageId, string keyword)
+    {
+        _logger.LogInformation("🔥 [FeishuHelp] 收到帮助请求: ChatId={ChatId}, ReplyToMessageId={ReplyToMessageId}, Keyword={Keyword}",
+            chatId, replyToMessageId, keyword);
+
+        try
+        {
+            List<FeishuCommandCategory> categories;
+            string cardJson;
+
+            _logger.LogInformation("🔥 [FeishuHelp] 开始获取命令列表...");
+            if (string.IsNullOrEmpty(keyword))
+            {
+                categories = await _commandService.GetCategorizedCommandsAsync();
+                _logger.LogInformation("🔥 [FeishuHelp] 获取到 {Count} 个分组", categories.Count);
+                cardJson = _cardBuilder.BuildCommandListCard(categories);
+            }
+            else
+            {
+                categories = await _commandService.FilterCommandsAsync(keyword);
+                _logger.LogInformation("🔥 [FeishuHelp] 过滤后获取到 {Count} 个分组", categories.Count);
+                cardJson = _cardBuilder.BuildFilteredCard(categories, keyword);
+            }
+
+            _logger.LogInformation("🔥 [FeishuHelp] 卡片JSON长度: {Length}", cardJson.Length);
+            _logger.LogDebug("🔥 [FeishuHelp] 卡片JSON内容: {CardJson}", cardJson);
+
+            // 使用 CardKit 发送原始JSON卡片
+            _logger.LogInformation("🔥 [FeishuHelp] 开始调用 ReplyRawCardAsync...");
+            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson);
+            _logger.LogInformation("✅ [FeishuHelp] 帮助卡片已发送, MessageId={MessageId}", messageId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [FeishuHelp] 发送帮助卡片失败");
+
+            // 降级到简单文本
+            try
+            {
+                _logger.LogInformation("🔥 [FeishuHelp] 尝试发送降级提示...");
+            }
+            catch (Exception innerEx)
+            {
+                _logger.LogError(innerEx, "❌ [FeishuHelp] 发送降级提示也失败了");
+            }
         }
     }
 }

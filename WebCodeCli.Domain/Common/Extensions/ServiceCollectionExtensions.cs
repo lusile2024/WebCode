@@ -9,7 +9,6 @@ using SqlSugar;
 using System.Reflection;
 using System;
 using FeishuNetSdk;
-using WebCodeCli.Domain.Domain.Service;  // 添加 using 语句
 using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Domain.Common.Extensions
@@ -93,6 +92,11 @@ namespace WebCodeCli.Domain.Common.Extensions
             // 注册主服务（Singleton，同时作为 HostedService 运行）
             services.AddSingleton<IFeishuChannelService, FeishuChannelService>();
             services.AddHostedService<FeishuChannelService>();
+
+            // 注册帮助功能服务
+            services.AddSingleton<FeishuCommandService>();
+            services.AddSingleton<FeishuHelpCardBuilder>();
+            services.AddSingleton<FeishuCardActionService>();
 
             // 配置飞书 WebSocket 客户端（仅当启用时）
             if (options.Enabled)

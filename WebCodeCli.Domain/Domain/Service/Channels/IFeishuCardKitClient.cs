@@ -59,4 +59,22 @@ public interface IFeishuCardKitClient
         string initialContent,
         string? title = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 发送原始JSON卡片消息（帮助功能专用）
+    /// </summary>
+    /// <param name="chatId">会话 ID</param>
+    /// <param name="cardJson">卡片JSON字符串</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>消息 ID</returns>
+    Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 回复原始JSON卡片消息（帮助功能专用）
+    /// </summary>
+    /// <param name="replyMessageId">被回复的消息 ID</param>
+    /// <param name="cardJson">卡片JSON字符串</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>回复消息 ID</returns>
+    Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default);
 }
