@@ -142,9 +142,9 @@
       "event": "事件 ({type})"
     },
     "content": {
-        "threadId": "线程标识: {id}",
-        "threadCreated": "已创建新的对话线程",
-        "turnStarted": "等待响应...",
+      "threadId": "线程标识: {id}",
+      "threadCreated": "已创建新的对话线程",
+      "turnStarted": "等待响应...",
       "turnCompleted": "本轮交互已完成。",
       "turnCompletedWithUsage": "本轮交互已完成，详见下方 token 统计。"
     },
@@ -343,7 +343,25 @@
     "addButton": "添加环境变量",
     "resetButton": "重置为默认",
     "saving": "保存中...",
-    "save": "保存"
+    "save": "保存",
+    "profilesTitle": "配置方案",
+    "profilesDesc": "创建多套环境变量方案，一键切换不同的 AI 配置",
+    "addProfile": "新建方案",
+    "profileNamePlaceholder": "方案名称，如 OpenAI / DeepSeek / Anthropic",
+    "activateProfile": "激活",
+    "activeProfile": "当前激活",
+    "editProfile": "编辑",
+    "deleteProfile": "删除",
+    "deleteProfileConfirm": "确认删除此配置方案？",
+    "deactivateProfile": "取消激活",
+    "profileSaved": "方案已保存",
+    "profileActivated": "方案已激活",
+    "profileDeactivated": "已切换回默认配置",
+    "profileDeleted": "方案已删除",
+    "editingProfile": "正在编辑方案：{name}",
+    "editingDefault": "编辑默认配置",
+    "saveProfile": "保存方案",
+    "cancelEdit": "取消编辑"
   },
   "contextPreview": {
     "title": "上下文预览",
@@ -471,7 +489,9 @@
     "workspaceRootDesc": "用于存放会话工作文件的目录。Docker 部署时建议使用默认值 {path}",
     "configTipTitle": "配置说明",
     "claudeConfigDesc": "配置 Claude Code 所需的环境变量。如果暂时不使用，可以跳过此步骤，稍后在设置中配置。",
-    "codexConfigDesc": "配置 Codex (OpenAI) 所需的环境变量。如果暂时不使用，可以跳过此步骤，稍后在设置中配置。",    "codexDocsLink": "查看 Codex 配置文档",    "opencodeConfigDesc": "配置 OpenCode CLI 所需的环境变量。如果暂时不使用，可以跳过此步骤，稍后在设置中配置。",
+    "codexConfigDesc": "配置 Codex (OpenAI) 所需的环境变量。如果暂时不使用，可以跳过此步骤，稍后在设置中配置。",
+    "codexDocsLink": "查看 Codex 配置文档",
+    "opencodeConfigDesc": "配置 OpenCode CLI 所需的环境变量。如果暂时不使用，可以跳过此步骤，稍后在设置中配置。",
     "opencodeDocsLink": "查看 OpenCode 环境变量文档",
     "envVarNameLabel": "环境变量名",
     "envVarValueLabel": "值",
@@ -798,4 +818,3 @@
     }
   }
 }
-

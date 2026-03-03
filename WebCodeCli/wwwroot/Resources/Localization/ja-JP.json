@@ -191,9 +191,9 @@
       "event": "イベント（{type}）"
     },
     "content": {
-        "threadId": "スレッドID: {id}",
-        "threadCreated": "新しい会話スレッドを作成しました。",
-        "turnStarted": "応答待ち...",
+      "threadId": "スレッドID: {id}",
+      "threadCreated": "新しい会話スレッドを作成しました。",
+      "turnStarted": "応答待ち...",
       "turnCompleted": "このターンは完了しました。",
       "turnCompletedWithUsage": "このターンは完了しました。下のトークン統計をご確認ください。"
     },
@@ -390,7 +390,25 @@
     "addButton": "環境変数を追加",
     "resetButton": "既定に戻す",
     "saving": "保存中...",
-    "save": "保存"
+    "save": "保存",
+    "profilesTitle": "設定プロファイル",
+    "profilesDesc": "複数の環境変数プロファイルを作成して、AI設定をすばやく切り替えられます",
+    "addProfile": "新規プロファイル",
+    "profileNamePlaceholder": "プロファイル名（例: OpenAI / DeepSeek / Anthropic）",
+    "activateProfile": "有効化",
+    "activeProfile": "有効中",
+    "editProfile": "編集",
+    "deleteProfile": "削除",
+    "deleteProfileConfirm": "このプロファイルを削除しますか？",
+    "deactivateProfile": "無効化",
+    "profileSaved": "プロファイルを保存しました",
+    "profileActivated": "プロファイルを有効化しました",
+    "profileDeactivated": "デフォルト設定に戻しました",
+    "profileDeleted": "プロファイルを削除しました",
+    "editingProfile": "プロファイルを編集中：{name}",
+    "editingDefault": "デフォルト設定を編集",
+    "saveProfile": "プロファイルを保存",
+    "cancelEdit": "編集をキャンセル"
   },
   "fileSearch": {
     "debugLabel": "デバッグ",
@@ -798,4 +816,3 @@
     }
   }
 }
-

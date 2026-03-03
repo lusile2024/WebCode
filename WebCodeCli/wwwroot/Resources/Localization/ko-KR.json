@@ -191,9 +191,9 @@
       "event": "이벤트 ({type})"
     },
     "content": {
-        "threadId": "스레드 ID: {id}",
-        "threadCreated": "새 대화 스레드를 만들었습니다.",
-        "turnStarted": "응답을 기다리는 중...",
+      "threadId": "스레드 ID: {id}",
+      "threadCreated": "새 대화 스레드를 만들었습니다.",
+      "turnStarted": "응답을 기다리는 중...",
       "turnCompleted": "이번 턴이 완료되었습니다.",
       "turnCompletedWithUsage": "이번 턴이 완료되었습니다. 아래 토큰 통계를 확인하세요."
     },
@@ -390,7 +390,25 @@
     "addButton": "환경 변수 추가",
     "resetButton": "기본값으로 재설정",
     "saving": "저장 중...",
-    "save": "저장"
+    "save": "저장",
+    "profilesTitle": "구성 프로파일",
+    "profilesDesc": "여러 환경 변수 프로파일을 생성하여 AI 구성을 빠르게 전환할 수 있습니다",
+    "addProfile": "새 프로파일",
+    "profileNamePlaceholder": "프로파일 이름 (예: OpenAI / DeepSeek / Anthropic)",
+    "activateProfile": "활성화",
+    "activeProfile": "활성",
+    "editProfile": "편집",
+    "deleteProfile": "삭제",
+    "deleteProfileConfirm": "이 구성 프로파일을 삭제하시겠습니까?",
+    "deactivateProfile": "비활성화",
+    "profileSaved": "프로파일이 저장되었습니다",
+    "profileActivated": "프로파일이 활성화되었습니다",
+    "profileDeactivated": "기본 구성으로 전환되었습니다",
+    "profileDeleted": "프로파일이 삭제되었습니다",
+    "editingProfile": "프로파일 편집 중: {name}",
+    "editingDefault": "기본 구성 편집",
+    "saveProfile": "프로파일 저장",
+    "cancelEdit": "편집 취소"
   },
   "fileSearch": {
     "debugLabel": "디버그",
@@ -798,4 +816,3 @@
     }
   }
 }
-

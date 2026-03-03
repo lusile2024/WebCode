@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
+using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Repositories.Base.CliToolEnv;
 
 namespace WebCodeCli.Domain.Domain.Service;
@@ -13,12 +15,12 @@ namespace WebCodeCli.Domain.Domain.Service;
 public interface ICliToolEnvironmentService
 {
     /// <summary>
-    /// 获取指定工具的环境变量配置（优先从数据库读取,否则从appsettings读取）
+    /// 获取指定工具的环境变量配置（优先使用激活方案，其次数据库默认配置，最后 appsettings）
     /// </summary>
     Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId);
 
     /// <summary>
-    /// 保存指定工具的环境变量配置到数据库
+    /// 保存指定工具的默认环境变量配置到数据库
     /// </summary>
     Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars);
 
@@ -31,6 +33,33 @@ public interface ICliToolEnvironmentService
     /// 重置为appsettings中的默认配置
     /// </summary>
     Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId);
+
+    // ── 配置方案（多套 AI 环境变量） ──
+
+    /// <summary>
+    /// 获取指定工具的所有配置方案
+    /// </summary>
+    Task<List<CliToolEnvProfile>> GetProfilesAsync(string toolId);
+
+    /// <summary>
+    /// 保存（新建或更新）一个配置方案
+    /// </summary>
+    Task<CliToolEnvProfile?> SaveProfileAsync(string toolId, int profileId, string profileName, Dictionary<string, string> envVars);
+
+    /// <summary>
+    /// 激活指定配置方案（将其设为当前生效方案）
+    /// </summary>
+    Task<bool> ActivateProfileAsync(string toolId, int profileId);
+
+    /// <summary>
+    /// 取消所有方案激活，回退到默认配置
+    /// </summary>
+    Task<bool> DeactivateProfilesAsync(string toolId);
+
+    /// <summary>
+    /// 删除指定配置方案
+    /// </summary>
+    Task<bool> DeleteProfileAsync(string toolId, int profileId);
 }
 
 /// <summary>
@@ -42,43 +71,54 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     private readonly ILogger<CliToolEnvironmentService> _logger;
     private readonly CliToolsOption _options;
     private readonly ICliToolEnvironmentVariableRepository _repository;
+    private readonly ICliToolEnvProfileRepository _profileRepository;
 
     public CliToolEnvironmentService(
         ILogger<CliToolEnvironmentService> logger,
         IOptions<CliToolsOption> options,
-        ICliToolEnvironmentVariableRepository repository)
+        ICliToolEnvironmentVariableRepository repository,
+        ICliToolEnvProfileRepository profileRepository)
     {
         _logger = logger;
         _options = options.Value;
         _repository = repository;
+        _profileRepository = profileRepository;
     }
 
     /// <summary>
-    /// 获取指定工具的环境变量配置（优先从数据库读取,否则从appsettings读取）
+    /// 获取指定工具的环境变量配置
+    /// 优先级：激活的配置方案 > 数据库默认配置 > appsettings 配置
     /// </summary>
     public async Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId)
     {
         try
         {
-            // 尝试从数据库读取
+            // 1. 优先使用激活的配置方案
+            var activeProfile = await _profileRepository.GetActiveProfileAsync(toolId);
+            if (activeProfile != null && !string.IsNullOrWhiteSpace(activeProfile.EnvVarsJson))
+            {
+                _logger.LogInformation("从激活方案 [{ProfileName}] 加载工具 {ToolId} 的环境变量配置", activeProfile.ProfileName, toolId);
+                var profileVars = JsonSerializer.Deserialize<Dictionary<string, string>>(activeProfile.EnvVarsJson) ?? new();
+                return profileVars
+                    .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+            }
+
+            // 2. 从数据库默认配置读取
             var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
-            
-            // 如果数据库中有配置,则使用数据库配置（过滤空值）
             if (dbEnvVars.Any())
             {
                 _logger.LogInformation("从数据库加载工具 {ToolId} 的环境变量配置", toolId);
-                // 过滤掉空值的环境变量，避免空字符串覆盖系统默认配置
                 return dbEnvVars
                     .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
                     .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
             }
 
-            // 否则从appsettings读取
+            // 3. 从 appsettings 读取
             var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
             if (tool?.EnvironmentVariables != null && tool.EnvironmentVariables.Any())
             {
                 _logger.LogInformation("从配置文件加载工具 {ToolId} 的环境变量配置", toolId);
-                // 同样过滤掉空值
                 return tool.EnvironmentVariables
                     .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
                     .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
@@ -159,6 +199,137 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
         {
             _logger.LogError(ex, "重置工具 {ToolId} 的环境变量失败", toolId);
             return new Dictionary<string, string>();
+        }
+    }
+
+    // ── 配置方案（多套 AI 环境变量） ──
+
+    /// <summary>
+    /// 获取指定工具的所有配置方案
+    /// </summary>
+    public async Task<List<CliToolEnvProfile>> GetProfilesAsync(string toolId)
+    {
+        try
+        {
+            return await _profileRepository.GetProfilesByToolIdAsync(toolId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取工具 {ToolId} 的配置方案列表失败", toolId);
+            return new List<CliToolEnvProfile>();
+        }
+    }
+
+    /// <summary>
+    /// 保存（新建或更新）一个配置方案
+    /// </summary>
+    public async Task<CliToolEnvProfile?> SaveProfileAsync(string toolId, int profileId, string profileName, Dictionary<string, string> envVars)
+    {
+        try
+        {
+            var envVarsJson = JsonSerializer.Serialize(envVars);
+
+            if (profileId <= 0)
+            {
+                // 新建方案
+                var newProfile = new CliToolEnvProfile
+                {
+                    ToolId = toolId,
+                    ProfileName = profileName,
+                    IsActive = false,
+                    EnvVarsJson = envVarsJson,
+                    CreatedAt = DateTime.Now,
+                    UpdatedAt = DateTime.Now
+                };
+                var newId = await _profileRepository.InsertReturnIdentityAsync(newProfile);
+                newProfile.Id = newId;
+                _logger.LogInformation("成功新建工具 {ToolId} 的配置方案 [{ProfileName}]", toolId, profileName);
+                return newProfile;
+            }
+            else
+            {
+                // 更新已有方案
+                var existing = await _profileRepository.GetByIdAsync(profileId);
+                if (existing == null || existing.ToolId != toolId)
+                {
+                    _logger.LogWarning("未找到工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
+                    return null;
+                }
+                existing.ProfileName = profileName;
+                existing.EnvVarsJson = envVarsJson;
+                existing.UpdatedAt = DateTime.Now;
+                await _profileRepository.UpdateAsync(existing);
+                _logger.LogInformation("成功更新工具 {ToolId} 的配置方案 [{ProfileName}]", toolId, profileName);
+                return existing;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "保存工具 {ToolId} 的配置方案失败", toolId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 激活指定配置方案
+    /// </summary>
+    public async Task<bool> ActivateProfileAsync(string toolId, int profileId)
+    {
+        try
+        {
+            var result = await _profileRepository.ActivateProfileAsync(toolId, profileId);
+            if (result)
+            {
+                _logger.LogInformation("成功激活工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "激活工具 {ToolId} 的配置方案 {ProfileId} 失败", toolId, profileId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 取消所有方案激活，回退到默认配置
+    /// </summary>
+    public async Task<bool> DeactivateProfilesAsync(string toolId)
+    {
+        try
+        {
+            var result = await _profileRepository.DeactivateAllProfilesAsync(toolId);
+            if (result)
+            {
+                _logger.LogInformation("已取消工具 {ToolId} 的所有方案激活状态", toolId);
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "取消工具 {ToolId} 方案激活状态失败", toolId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 删除指定配置方案
+    /// </summary>
+    public async Task<bool> DeleteProfileAsync(string toolId, int profileId)
+    {
+        try
+        {
+            var result = await _profileRepository.DeleteProfileAsync(profileId);
+            if (result)
+            {
+                _logger.LogInformation("成功删除工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "删除工具 {ToolId} 的配置方案 {ProfileId} 失败", toolId, profileId);
+            return false;
         }
     }
 }
