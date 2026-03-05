@@ -1,4 +1,5 @@
-using System.Text.Json;
+﻿using System.Text.Json;
+using FeishuNetSdk.CallbackEvents;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using Microsoft.Extensions.Logging;
 using WebCodeCli.Domain.Domain.Service;
@@ -47,11 +48,13 @@ public class FeishuCardActionService
     /// <param name="actionJson">action.value JSON字符串</param>
     /// <param name="formValue">form_value（execute_command时使用）</param>
     /// <param name="chatId">聊天ID（用于执行命令时创建会话）</param>
+    /// <param name="inputValues">输入框值缓存</param>
     /// <returns>回调响应对象（包含toast和card）</returns>
-    public async Task HandleCardActionAsync(
+    public async Task<CardActionTriggerResponseDto> HandleCardActionAsync(
         string actionJson,
         Dictionary<string, object>? formValue = null,
-        string? chatId = null)
+        string? chatId = null,
+        string? inputValues = null)
     {
         try
         {
@@ -62,7 +65,7 @@ public class FeishuCardActionService
             if (action == null)
             {
                 _logger.LogWarning("🔥 [FeishuHelp] 无法解析 action: {ActionJson}", actionJson);
-                return;
+                return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法解析动作", "error");
             }
 
             _logger.LogInformation("🔥 [FeishuHelp] 卡片回调: Action={Action}, CommandId={CommandId}",
@@ -78,120 +81,127 @@ public class FeishuCardActionService
             switch (action.Action)
             {
                 case "refresh_commands":
-                    await HandleRefreshCommandsAsync(chatId);
-                    break;
+                    return await HandleRefreshCommandsAsync(chatId);
                 case "select_command":
-                    await HandleSelectCommandAsync(action.CommandId, chatId);
-                    break;
+                    return await HandleSelectCommandAsync(action.CommandId, chatId);
                 case "back_to_list":
-                    await HandleBackToListAsync(chatId);
-                    break;
+                    return await HandleBackToListAsync(chatId);
                 case "execute_command":
-                    await HandleExecuteCommandAsync(formValueElement, chatId);
-                    break;
+                    return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, inputValues);
+                default:
+                    return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未知动作", "error");
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ [FeishuHelp] 处理卡片回调失败");
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 处理失败: {ex.Message}", "error");
         }
     }
 
     /// <summary>
-    /// 处理刷新命令
+    /// 处理刷新命令 - 直接在回调响应中返回新卡片
     /// </summary>
-    private async Task HandleRefreshCommandsAsync(string? chatId)
+    private async Task<CardActionTriggerResponseDto> HandleRefreshCommandsAsync(string? chatId)
     {
-        if (string.IsNullOrEmpty(chatId))
-        {
-            _logger.LogWarning("❌ [FeishuHelp] 没有 chatId，无法刷新命令列表");
-            return;
-        }
-
         await _commandService.RefreshCommandsAsync();
         var categories = await _commandService.GetCategorizedCommandsAsync();
-        var cardJson = _cardBuilder.BuildCommandListCard(categories);
-        await _cardKit.SendRawCardAsync(chatId, cardJson);
-        _logger.LogInformation("✅ [FeishuHelp] 命令列表已更新");
+        var card = _cardBuilder.BuildCommandListCardV2(categories, showRefreshButton: false);
+        _logger.LogInformation("✅ [FeishuHelp] 返回命令列表卡片（回调响应）");
+        return _cardBuilder.BuildCardActionResponseV2(card, "🔄 命令列表已更新", "info");
     }
 
     /// <summary>
-    /// 处理选择命令
+    /// 处理选择命令 - 直接在回调响应中返回执行卡片（卡片2）
     /// </summary>
-    private async Task HandleSelectCommandAsync(string? commandId, string? chatId)
+    private async Task<CardActionTriggerResponseDto> HandleSelectCommandAsync(string? commandId, string? chatId)
     {
         if (string.IsNullOrEmpty(chatId))
         {
             _logger.LogWarning("❌ [FeishuHelp] 没有 chatId，无法显示执行卡片");
-            return;
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少 chatId", "error");
         }
 
         if (string.IsNullOrEmpty(commandId))
         {
             var categories = await _commandService.GetCategorizedCommandsAsync();
-            var cardJson = _cardBuilder.BuildCommandListCard(categories);
-            await _cardKit.SendRawCardAsync(chatId, cardJson);
-            return;
+            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            return _cardBuilder.BuildCardActionResponseV2(card, "📋 显示命令列表", "info");
         }
 
         var command = await _commandService.GetCommandAsync(commandId);
         if (command == null)
         {
             var categories = await _commandService.GetCategorizedCommandsAsync();
-            var cardJson = _cardBuilder.BuildCommandListCard(categories);
-            await _cardKit.SendRawCardAsync(chatId, cardJson);
+            var card = _cardBuilder.BuildCommandListCardV2(categories);
             _logger.LogWarning("❌ [FeishuHelp] 命令不存在");
-            return;
+            return _cardBuilder.BuildCardActionResponseV2(card, "❌ 命令不存在", "warning");
         }
 
-        var executeCardJson = _cardBuilder.BuildExecuteCard(command);
-        await _cardKit.SendRawCardAsync(chatId, executeCardJson);
-        _logger.LogInformation("📋 [FeishuHelp] 显示执行卡片: {CommandName}", command.Name);
+        var executeCard = _cardBuilder.BuildExecuteCardV2(command);
+        _logger.LogInformation("📋 [FeishuHelp] 返回执行卡片（卡片2）: {CommandName}", command.Name);
+        return _cardBuilder.BuildCardActionResponseV2(executeCard, "", "info");
     }
 
     /// <summary>
-    /// 处理返回列表
+    /// 处理返回列表 - 直接在回调响应中返回命令列表卡片
     /// </summary>
-    private async Task HandleBackToListAsync(string? chatId)
+    private async Task<CardActionTriggerResponseDto> HandleBackToListAsync(string? chatId)
     {
         if (string.IsNullOrEmpty(chatId))
         {
             _logger.LogWarning("❌ [FeishuHelp] 没有 chatId，无法返回命令列表");
-            return;
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少 chatId", "error");
         }
 
         var categories = await _commandService.GetCategorizedCommandsAsync();
-        var cardJson = _cardBuilder.BuildCommandListCard(categories);
-        await _cardKit.SendRawCardAsync(chatId, cardJson);
-        _logger.LogInformation("📋 [FeishuHelp] 返回命令列表");
+        var card = _cardBuilder.BuildCommandListCardV2(categories);
+        _logger.LogInformation("📋 [FeishuHelp] 返回命令列表卡片（回调响应）");
+        return _cardBuilder.BuildCardActionResponseV2(card, "", "info");
     }
 
     /// <summary>
     /// 处理执行命令
     /// </summary>
-    private async Task<object?> HandleExecuteCommandAsync(JsonElement? formValue, string? chatId)
+    private async Task<CardActionTriggerResponseDto> HandleExecuteCommandAsync(JsonElement? formValue, string? commandFromAction, string? chatId, string? inputValues = null)
     {
-        // 从 form_value 获取命令输入
-        if (formValue == null || string.IsNullOrEmpty(chatId))
+        if (string.IsNullOrEmpty(chatId))
         {
-            return _cardBuilder.BuildToastOnlyResponse("❌ 缺少必要参数", "error");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少必要参数", "error");
         }
 
-        // 解析命令输入
-        var commandInput = formValue.Value.TryGetProperty("command_input", out var inputEl)
-            ? inputEl.GetString()
-            : null;
+        // 优先从 form_value 获取命令输入
+        string? commandInput = null;
+        if (formValue != null)
+        {
+            commandInput = formValue.Value.TryGetProperty("command_input", out var inputEl)
+                ? inputEl.GetString()
+                : null;
+        }
+
+        // 从输入值缓存中获取（优先级最高）
+        if (string.IsNullOrEmpty(commandInput) && inputValues != null)
+        {
+            commandInput = inputValues;
+            _logger.LogInformation("🔥 [FeishuHelp] 从缓存获取命令输入: {Command}", commandInput);
+        }
+
+        // 如果都没有，从 action 中获取
+        if (string.IsNullOrEmpty(commandInput))
+        {
+            commandInput = commandFromAction;
+        }
 
         if (string.IsNullOrEmpty(commandInput))
         {
             _logger.LogWarning("⚠️ [FeishuHelp] 请输入命令");
-            return _cardBuilder.BuildToastOnlyResponse("⚠️ 请输入命令", "warning");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 请输入命令", "warning");
         }
 
         _logger.LogInformation("🚀 [FeishuHelp] 执行命令: {Command}", commandInput);
 
         // 立即返回 toast 响应
-        var toastResponse = _cardBuilder.BuildToastOnlyResponse("🚀 开始执行命令...", "info");
+        var toastResponse = _cardBuilder.BuildCardActionToastOnlyResponse("🚀 开始执行命令...", "info");
 
         // 在后台执行命令（不等待）
         _ = Task.Run(async () =>

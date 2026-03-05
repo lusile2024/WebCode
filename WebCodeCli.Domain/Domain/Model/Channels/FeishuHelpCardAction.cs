@@ -20,4 +20,10 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("command_id")]
     public string? CommandId { get; set; }
+
+    /// <summary>
+    /// 命令内容（execute_command时使用）
+    /// </summary>
+    [JsonPropertyName("command")]
+    public string? Command { get; set; }
 }

@@ -80,6 +80,9 @@ namespace WebCodeCli.Domain.Common.Extensions
                     client.Timeout = TimeSpan.FromSeconds(30);
                 });
 
+            // 显式注册卡片动作事件处理器（让 FeishuNetSdk 能够发现它）
+            services.AddSingleton<FeishuCardActionHandler>();
+
             // 注册消息处理器（Singleton，需要在整个应用生命周期内保持实例）
             services.AddSingleton<FeishuMessageHandler>();
 
@@ -97,14 +100,6 @@ namespace WebCodeCli.Domain.Common.Extensions
             services.AddSingleton<FeishuCommandService>();
             services.AddSingleton<FeishuHelpCardBuilder>();
             services.AddSingleton<FeishuCardActionService>();
-
-            // 显式注册卡片动作事件处理器（让 FeishuNetSdk 能够发现它）
-            services.AddSingleton<FeishuCardActionHandler>();
-
-            // 确保事件处理器类型被加载（触发静态构造函数）- 在 AddFeishuNetSdk 之前
-            Console.WriteLine("🔥🔥🔥 [Startup] 准备加载 FeishuCardActionHandler...");
-            var handlerType = typeof(FeishuCardActionHandler);
-            Console.WriteLine($"🔥🔥🔥 [Startup] FeishuCardActionHandler 已加载: {handlerType.FullName}");
 
             // 配置飞书 WebSocket 客户端（仅当启用时）
             if (options.Enabled)

@@ -1,0 +1,1238 @@
+- generic [ref=e3]:
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - link "lark" [ref=e11] [cursor=pointer]:
+        - /url: https://open.feishu.cn/?lang=zh-CN
+        - img "lark" [ref=e12]
+      - menu [ref=e13]:
+        - menuitem "客户案例" [ref=e14] [cursor=pointer]:
+          - link "客户案例" [ref=e16]:
+            - /url: https://open.feishu.cn/solutions?lang=zh-CN
+        - menuitem "应用中心" [ref=e17] [cursor=pointer]:
+          - link "应用中心" [ref=e19]:
+            - /url: https://app.feishu.cn/?lang=zh-CN
+        - menuitem "开发文档" [ref=e20] [cursor=pointer]:
+          - link "开发文档" [ref=e22]:
+            - /url: /document
+        - menuitem "智能助手 AI 开发" [ref=e24] [cursor=pointer]:
+          - link "智能助手 AI 开发" [ref=e26]:
+            - /url: https://open.feishu.cn/app/ai/playground?from=nav&lang=zh-CN
+            - generic [ref=e27]:
+              - generic [ref=e28]: 智能助手
+              - generic [ref=e30]:
+                - img [ref=e32]
+                - generic [ref=e34]: AI 开发
+    - generic [ref=e35]:
+      - generic [ref=e40]:
+        - img [ref=e43]
+        - textbox [ref=e46]:
+          - /placeholder: 你可以输入文档关键词、开发问题、Log ID、错误码
+        - img [ref=e49]
+      - menu [ref=e51]:
+        - menuitem "开发者后台" [ref=e52] [cursor=pointer]:
+          - link "开发者后台" [ref=e54]:
+            - /url: https://open.feishu.cn/app?lang=zh-CN
+      - generic [ref=e56]:
+        - img [ref=e59] [cursor=pointer]
+        - button "登录" [ref=e61] [cursor=pointer]
+  - generic [ref=e63]:
+    - generic [ref=e64]:
+      - list [ref=e66]:
+        - listitem [ref=e67]:
+          - link "文档首页" [ref=e68] [cursor=pointer]:
+            - /url: /document/home/index
+        - listitem [ref=e69]:
+          - link "开发指南" [ref=e70] [cursor=pointer]:
+            - /url: /document/client-docs/intro
+        - listitem [ref=e71]:
+          - link "开发教程" [ref=e72] [cursor=pointer]:
+            - /url: /document/course
+        - listitem [ref=e73]:
+          - link "服务端 API" [ref=e74] [cursor=pointer]:
+            - /url: /document/ukTMukTMukTM/ukDNz4SO0MjL5QzM/AI-assistant-code-generation-guide
+        - listitem [ref=e75]:
+          - link "客户端 API" [ref=e76] [cursor=pointer]:
+            - /url: /document/client-docs/h5/
+        - listitem [ref=e77]:
+          - link "MCP" [ref=e78] [cursor=pointer]:
+            - /url: /document/uAjLw4CM/ukTMukTMukTM/mcp_integration/mcp_introduction
+      - generic [ref=e79]:
+        - button "API 调试台" [ref=e80] [cursor=pointer]:
+          - img [ref=e83]
+          - text: API 调试台
+        - link "卡片搭建工具" [ref=e85] [cursor=pointer]:
+          - /url: /cardkit?from=open_docs_header
+          - img [ref=e88]
+          - text: 卡片搭建工具
+        - button "平台动态" [ref=e90] [cursor=pointer]:
+          - img [ref=e93]
+          - text: 平台动态
+          - img [ref=e97]
+    - generic [ref=e99]:
+      - generic [ref=e100]:
+        - img [ref=e102]
+        - generic [ref=e105]:
+          - generic [ref=e108]:
+            - img [ref=e111]
+            - textbox [ref=e114]:
+              - /placeholder: 搜索目录
+          - generic [ref=e121]:
+            - generic [ref=e123] [cursor=pointer]:
+              - button [ref=e124]:
+                - img [ref=e126]
+              - generic [ref=e129]: 平台简介
+            - generic [ref=e131] [cursor=pointer]:
+              - button [ref=e132]:
+                - img [ref=e134]
+              - generic [ref=e137]: 开发流程
+            - generic [ref=e139] [cursor=pointer]:
+              - button [ref=e140]:
+                - img [ref=e142]
+              - generic [ref=e145]: 设计应用
+            - generic [ref=e147] [cursor=pointer]:
+              - button [ref=e148]:
+                - img [ref=e150]
+              - generic [ref=e153]: 开发机器人
+            - generic [ref=e155] [cursor=pointer]:
+              - button [ref=e156]:
+                - img [ref=e158]
+              - generic [ref=e161]: 开发网页应用
+            - generic [ref=e163] [cursor=pointer]:
+              - button [ref=e164]:
+                - img [ref=e166]
+              - generic [ref=e169]: 开发小程序（不推荐）
+            - generic [ref=e171] [cursor=pointer]:
+              - button [ref=e172]:
+                - img [ref=e174]
+              - generic [ref=e177]: 开发云文档小组件
+            - generic [ref=e179] [cursor=pointer]:
+              - button [ref=e180]:
+                - img [ref=e182]
+              - generic [ref=e185]: 开发多维表格插件
+            - generic [ref=e187] [cursor=pointer]:
+              - button [ref=e188]:
+                - img [ref=e190]
+              - generic [ref=e193]: 开发工作台小组件
+            - generic [ref=e195] [cursor=pointer]:
+              - button [ref=e196]:
+                - img [ref=e198]
+              - generic [ref=e201]: 开发链接预览
+            - generic [ref=e203] [cursor=pointer]:
+              - button [ref=e204]:
+                - img [ref=e206]
+              - generic [ref=e209]: 飞书卡片
+            - link "飞书卡片概述" [ref=e211] [cursor=pointer]:
+              - /url: /document/feishu-cards/feishu-card-overview
+              - generic [ref=e214]: 飞书卡片概述
+            - generic [ref=e216] [cursor=pointer]:
+              - button [ref=e217]:
+                - img [ref=e219]
+              - generic [ref=e222]: 快速入门
+            - generic [ref=e224] [cursor=pointer]:
+              - button [ref=e225]:
+                - img [ref=e227]
+              - generic [ref=e230]: 搭建工具搭建卡片
+            - generic [ref=e232] [cursor=pointer]:
+              - button [ref=e233]:
+                - img [ref=e235]
+              - generic [ref=e238]: 卡片 JSON 构建卡片
+            - link "卡片 JSON 2.0 版本更新说明" [ref=e240] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-json-v2-breaking-changes-release-notes
+              - generic [ref=e243]: 卡片 JSON 2.0 版本更新说明
+            - link "卡片 JSON 2.0 结构" [ref=e245] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-json-v2-structure
+              - generic [ref=e248]: 卡片 JSON 2.0 结构
+            - generic [ref=e250] [cursor=pointer]:
+              - button [ref=e251]:
+                - img [ref=e253]
+              - generic [ref=e256]: 卡片 JSON 2.0 版本组件
+            - link "卡片 JSON 1.0 结构" [ref=e258] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-json-structure
+              - generic [ref=e261]: 卡片 JSON 1.0 结构
+            - generic [ref=e263] [cursor=pointer]:
+              - button [ref=e264]:
+                - img [ref=e266]
+              - generic [ref=e269]: 卡片 JSON 1.0 版本组件
+            - link "卡片 JSON 1.0 版本组件概述" [ref=e271] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/component-overview
+              - generic [ref=e274]: 卡片 JSON 1.0 版本组件概述
+            - generic [ref=e276] [cursor=pointer]:
+              - button [ref=e277]:
+                - img [ref=e279]
+              - generic [ref=e282]: 容器
+            - generic [ref=e284] [cursor=pointer]:
+              - button [ref=e285]:
+                - img [ref=e287]
+              - generic [ref=e290]: 展示
+            - generic [ref=e292] [cursor=pointer]:
+              - button [ref=e293]:
+                - img [ref=e295]
+              - generic [ref=e298]: 交互
+            - link "输入框" [ref=e300] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/input
+              - generic [ref=e303]: 输入框
+            - link "按钮" [ref=e305] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/button
+              - generic [ref=e308]: 按钮
+            - link "折叠按钮组" [ref=e310] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/overflow
+              - generic [ref=e313]: 折叠按钮组
+            - link "下拉选择-单选" [ref=e315] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/single-select-dropdown-menu
+              - generic [ref=e318]: 下拉选择-单选
+            - link "下拉选择-多选" [ref=e320] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/multi-select-dropdown-menu
+              - generic [ref=e323]: 下拉选择-多选
+            - link "人员选择-单选" [ref=e325] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/single-select-user-picker
+              - generic [ref=e328]: 人员选择-单选
+            - link "人员选择-多选" [ref=e330] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/multi-select-user-picker
+              - generic [ref=e333]: 人员选择-多选
+            - link "日期选择器" [ref=e335] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/date-picker
+              - generic [ref=e338]: 日期选择器
+            - link "时间选择器" [ref=e340] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/time-selector
+              - generic [ref=e343]: 时间选择器
+            - link "日期时间选择器" [ref=e345] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/date-time-picker
+              - generic [ref=e348]: 日期时间选择器
+            - link "多图选择" [ref=e350] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/image-picker
+              - generic [ref=e353]: 多图选择
+            - link "勾选器" [ref=e355] [cursor=pointer]:
+              - /url: /document/feishu-cards/card-components/interactive-components/checker
+              - generic [ref=e358]: 勾选器
+            - link "配置卡片交互" [ref=e360] [cursor=pointer]:
+              - /url: /document/feishu-cards/configuring-card-interactions
+              - generic [ref=e363]: 配置卡片交互
+            - link "配置卡片多语言" [ref=e365] [cursor=pointer]:
+              - /url: /document/feishu-cards/configure-multi-language-content
+              - generic [ref=e368]: 配置卡片多语言
+            - link "发送卡片" [ref=e370] [cursor=pointer]:
+              - /url: /document/feishu-cards/send-feishu-card
+              - generic [ref=e373]: 发送卡片
+            - link "处理卡片回调" [ref=e375] [cursor=pointer]:
+              - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/handle-card-callbacks
+              - generic [ref=e378]: 处理卡片回调
+            - link "更新卡片" [ref=e380] [cursor=pointer]:
+              - /url: /document/feishu-cards/update-feishu-card
+              - generic [ref=e383]: 更新卡片
+            - link "常见问题" [ref=e385] [cursor=pointer]:
+              - /url: /document/common-capabilities/message-card/message-card
+              - generic [ref=e388]: 常见问题
+            - generic [ref=e390] [cursor=pointer]:
+              - button [ref=e391]:
+                - img [ref=e393]
+              - generic [ref=e396]: 资源
+            - generic [ref=e398] [cursor=pointer]:
+              - button [ref=e399]:
+                - img [ref=e401]
+              - generic [ref=e404]: 网页组件
+            - generic [ref=e406] [cursor=pointer]:
+              - button [ref=e407]:
+                - img [ref=e409]
+              - generic [ref=e412]: 原生集成
+            - generic [ref=e414] [cursor=pointer]:
+              - button [ref=e415]:
+                - img [ref=e417]
+              - generic [ref=e420]: 应用登录与用户授权
+            - generic [ref=e422] [cursor=pointer]:
+              - button [ref=e423]:
+                - img [ref=e425]
+              - generic [ref=e428]: AppLink 协议
+            - generic [ref=e430] [cursor=pointer]:
+              - button [ref=e431]:
+                - img [ref=e433]
+              - generic [ref=e436]: 开发者工具
+            - generic [ref=e438] [cursor=pointer]:
+              - button [ref=e439]:
+                - img [ref=e441]
+              - generic [ref=e444]: 常见问题
+            - generic [ref=e446] [cursor=pointer]:
+              - button [ref=e447]:
+                - img [ref=e449]
+              - generic [ref=e452]: 管理规范
+            - generic [ref=e454] [cursor=pointer]:
+              - button [ref=e455]:
+                - img [ref=e457]
+              - generic [ref=e460]: 平台公告
+            - generic [ref=e462] [cursor=pointer]:
+              - button [ref=e463]:
+                - img [ref=e465]
+              - generic [ref=e468]: 历史版本（不推荐）
+      - generic [ref=e474]:
+        - generic [ref=e475]:
+          - link "开发指南" [ref=e476] [cursor=pointer]:
+            - /url: /document/client-docs/intro
+          - link "飞书卡片" [ref=e477] [cursor=pointer]:
+            - /url: /document/feishu-cards/feishu-card-overview
+          - link "卡片 JSON 构建卡片" [ref=e478] [cursor=pointer]:
+            - /url: /document/feishu-cards/card-json-v2-breaking-changes-release-notes
+          - link "卡片 JSON 1.0 版本组件" [ref=e479] [cursor=pointer]:
+            - /url: /document/feishu-cards/card-components/component-overview
+          - link "交互" [ref=e480] [cursor=pointer]:
+            - /url: /document/feishu-cards/card-components/interactive-components/input
+          - generic [ref=e481]: 按钮
+        - generic [ref=e482]:
+          - heading "按钮" [level=1] [ref=e483]
+          - button "复制页面" [ref=e484] [cursor=pointer]:
+            - img [ref=e487]
+            - text: 复制页面
+        - generic [ref=e491]: 最后更新于 2025-01-02
+        - generic [ref=e492]:
+          - generic [ref=e493]: 本文内容
+          - generic [ref=e494]:
+            - link "注意事项" [ref=e496] [cursor=pointer]:
+              - /url: "#355ec8c0"
+            - link "嵌套规则" [ref=e498] [cursor=pointer]:
+              - /url: "#3982afeb"
+            - generic [ref=e499] [cursor=pointer]:
+              - link "组件属性" [ref=e500]:
+                - /url: "#f9cce13c"
+              - link "JSON 结构" [ref=e502]:
+                - /url: "#51c332ce"
+              - link "字段说明" [ref=e504]:
+                - /url: "#39ee4e65"
+              - link "回调结构" [ref=e506]:
+                - /url: "#21782ccf"
+            - link "示例代码" [ref=e508] [cursor=pointer]:
+              - /url: "#bc6a8146"
+        - generic [ref=e512]:
+          - paragraph [ref=e513]: 按钮组件是一种交互组件，支持多种样式和尺寸，并支持添加图标作为前缀图标。本文档介绍按钮组件的 JSON 结构和相关属性。
+          - paragraph [ref=e514]:
+            - text: 本文档介绍按钮组件的 JSON 1.0 结构，要查看新版 JSON 2.0 结构，参考
+            - link "按钮" [ref=e515] [cursor=pointer]:
+              - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/interactive-components/button
+            - text: 。
+          - paragraph [ref=e516]
+          - heading "注意事项" [level=2] [ref=e520]
+          - list [ref=e521]:
+            - listitem [ref=e522]:
+              - text: •
+              - paragraph [ref=e523]:
+                - text: 在
+                - link "卡片 JSON 1.0 结构" [ref=e524] [cursor=pointer]:
+                  - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-structure
+                - text: 中，若按钮组件直接位于卡片根节点，而非嵌套在其它组件中，你需将其 JSON 数据配置在
+                - link "交互模块" [ref=e525] [cursor=pointer]:
+                  - /url: /document/ukTMukTMukTM/uYzM3QjL2MzN04iNzcDN/component-list/common-components-and-elements
+                - text: （
+                - code [ref=e526]: "\"tag\": \"action\""
+                - text: ）的
+                - code [ref=e527]: actions
+                - text: 字段中使用。
+            - listitem [ref=e528]:
+              - text: •
+              - paragraph [ref=e529]:
+                - link "卡片 JSON 2.0 结构" [ref=e530] [cursor=pointer]:
+                  - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-structure
+                - text: 已不支持
+                - link "交互模块" [ref=e531] [cursor=pointer]:
+                  - /url: /document/ukTMukTMukTM/uYzM3QjL2MzN04iNzcDN/component-list/common-components-and-elements
+                - text: （
+                - code [ref=e532]: "\"tag\": \"action\""
+                - text: ）相关属性。你可直接将按钮放置于
+                - code [ref=e533]: elements
+                - text: 中，并配置合适的
+                - link "组件间距 (vertical_spacing 和 horizontal_spacing)" [ref=e534] [cursor=pointer]:
+                  - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes#a967672
+                - text: 使用。
+          - heading "嵌套规则" [level=2] [ref=e535]
+          - paragraph [ref=e536]: 按钮组件支持嵌套在分栏、表单容器、折叠面板、循环容器中使用。
+          - heading "组件属性" [level=2] [ref=e537]
+          - heading "JSON 结构" [level=3] [ref=e538]
+          - paragraph [ref=e539]: 以下为一个按钮的卡片 JSON 数据：
+          - generic [ref=e540]:
+            - img [ref=e542] [cursor=pointer]
+            - code [ref=e546]:
+              - generic [ref=e547]:
+                - generic [ref=e548]: "1 {"
+                - generic [ref=e549]: "2 \"tag\": \"button\", // 组件的标签。按钮组件的固定值为 button。"
+                - generic [ref=e550]: "3 \"type\": \"primary\", // 按钮的类型。默认为 default。"
+                - generic [ref=e551]: "4 \"size\": \"small\", // 按钮的尺寸。默认值 medium。"
+                - generic [ref=e552]: "5 \"width\": \"default\", // 按钮的宽度。默认为 default。"
+                - generic [ref=e553]: "6 \"text\": {"
+                - generic [ref=e554]: 7 // 按钮上的文本。
+                - generic [ref=e555]: "8 \"tag\": \"plain_text\","
+                - generic [ref=e556]: "9 \"content\": \"确定\""
+                - generic [ref=e557]: "10 },"
+                - generic [ref=e558]: "11 \"icon\": {"
+                - generic [ref=e559]: 12 // 前缀图标。
+                - generic [ref=e560]: "13 \"tag\": \"standard_icon\", // 图标类型。"
+                - generic [ref=e561]: "14 \"token\": \"chat-forbidden_outlined\", // 图标的 token。仅在 tag 为 standard_icon 时生效。"
+                - generic [ref=e562]: "15 \"color\": \"orange\", // 图标颜色。仅在 tag 为 standard_icon 时生效。"
+                - generic [ref=e563]: "16 \"img_key\": \"img_v2_38811724\" // 图片的 key。仅在 tag 为 custom_icon 时生效。"
+                - generic [ref=e564]: "17 },"
+                - generic [ref=e565]: "18 \"hover_tips\": {}, // 用户在 PC 端将光标悬浮在按钮上方时的文案提醒。默认为空。"
+                - generic [ref=e566]:
+                  - text: "19 \"disabled\":"
+                  - generic [ref=e567]: "false"
+                  - text: ", // 是否禁用该按钮。默认值 false。"
+                - generic [ref=e568]: "20 \"disabled_tips\": {}, // 禁用按钮后，用户在 PC 端将光标悬浮在按钮上方时的文案提醒。此字段生效后，hover_tips 不再生效。"
+                - generic [ref=e569]: "21 \"confirm\": {"
+                - generic [ref=e570]: 22 // 二次确认弹窗配置
+                - generic [ref=e571]: "23 \"title\": {"
+                - generic [ref=e572]: "24 \"tag\": \"plain_text\","
+                - generic [ref=e573]: "25 \"content\": \"title\""
+                - generic [ref=e574]: "26 },"
+                - generic [ref=e575]: "27 \"text\": {"
+                - generic [ref=e576]: "28 \"tag\": \"plain_text\","
+                - generic [ref=e577]: "29 \"content\": \"content\""
+                - generic [ref=e578]: "30 }"
+                - generic [ref=e579]: "31 },"
+                - generic [ref=e580]: "32 \"behaviors\": ["
+                - generic [ref=e581]: "33 {"
+                - generic [ref=e582]: "34 \"type\": \"open_url\", // 声明交互类型是打开链接的跳转交互"
+                - generic [ref=e583]: "35 \"default_url\": \"https://www.baidu.com\", // 兜底跳转地址"
+                - generic [ref=e584]: "36 \"android_url\": \"https://developer.android.com/\", // 安卓端跳转地址"
+                - generic [ref=e585]: "37 \"ios_url\": \"lark://msgcard/unsupported_action\", // iOS 端跳转地址。"
+                - generic [ref=e586]: "38 \"pc_url\": \"https://www.windows.com\" // 桌面端跳转地址"
+                - generic [ref=e587]: "39 },"
+                - generic [ref=e588]: "40 {"
+                - generic [ref=e589]: "41 \"type\": \"callback\", // 声明交互类型是回传数据到服务端的回传交互。"
+                - generic [ref=e590]: "42 \"value\": {"
+                - generic [ref=e591]: 43 // 回传交互数据。支持 string 或 object 数据类型。
+                - generic [ref=e592]: "44 \"key\": \"value\""
+                - generic [ref=e593]: "45 }"
+                - generic [ref=e594]: "46 },"
+                - generic [ref=e595]: "47 {"
+                - generic [ref=e596]: "48 \"type\": \"form_action\", // 声明交互类型为表单事件。"
+                - generic [ref=e597]: "49 \"behavior\": \"submit\" // 声明表单事件类型。默认为 submit。"
+                - generic [ref=e598]: "50 }"
+                - generic [ref=e599]: 51 ],
+                - generic [ref=e600]: 52 // 历史属性
+                - generic [ref=e601]: "53 \"url\": \"https://open.feishu.cn\","
+                - generic [ref=e602]: "54 \"multi_url\": {"
+                - generic [ref=e603]: "55 \"android_url\": \"https://open.feishu.cn\","
+                - generic [ref=e604]: "56 \"ios_url\": \"https://open.feishu.cn\","
+                - generic [ref=e605]: "57 \"pc_url\": \"https://open.feishu.cn\""
+                - generic [ref=e606]: "58 },"
+                - generic [ref=e607]: "59 \"value\": {"
+                - generic [ref=e608]: "60 \"key_1\": \"value_1\""
+                - generic [ref=e609]: "61 }"
+                - generic [ref=e610]: "62 }"
+          - heading "字段说明" [level=3] [ref=e611]
+          - paragraph [ref=e612]: 按钮组件各字段说明如下表所示：
+          - table [ref=e614]:
+            - rowgroup [ref=e615]:
+              - row "字段名称 是否必填 类型 默认值 说明" [ref=e616]:
+                - columnheader "字段名称" [ref=e617]
+                - columnheader "是否必填" [ref=e618]
+                - columnheader "类型" [ref=e619]
+                - columnheader "默认值" [ref=e620]
+                - columnheader "说明" [ref=e621]
+            - rowgroup [ref=e622]:
+              - row "tag 是 String / 组件的标签。按钮组件的固定值为 button。" [ref=e623]:
+                - cell "tag" [ref=e624]:
+                  - paragraph [ref=e625]: tag
+                - cell "是" [ref=e626]:
+                  - paragraph [ref=e627]: 是
+                - cell "String" [ref=e628]:
+                  - paragraph [ref=e629]: String
+                - cell / [ref=e630]:
+                  - paragraph [ref=e631]: /
+                - cell "组件的标签。按钮组件的固定值为 button。" [ref=e632]:
+                  - paragraph [ref=e633]:
+                    - text: 组件的标签。按钮组件的固定值为
+                    - code [ref=e634]: button
+                    - text: 。
+              - row "type 否 String default 按钮的类型。可选值： • default：黑色字体按钮，有边框 • primary：蓝色字体按钮，有边框 • danger：红色字体按钮，有边框 • text：黑色字体按钮，无边框 • primary_text：蓝色字体按钮，无边框 • danger_text：红色字体按钮，无边框 • primary_filled：蓝底白字按钮 • danger_filled：红底白字按钮 • laser：镭射按钮" [ref=e635]:
+                - cell "type" [ref=e636]:
+                  - paragraph [ref=e637]: type
+                - cell "否" [ref=e638]:
+                  - paragraph [ref=e639]: 否
+                - cell "String" [ref=e640]:
+                  - paragraph [ref=e641]: String
+                - cell "default" [ref=e642]:
+                  - paragraph [ref=e643]: default
+                - cell "按钮的类型。可选值： • default：黑色字体按钮，有边框 • primary：蓝色字体按钮，有边框 • danger：红色字体按钮，有边框 • text：黑色字体按钮，无边框 • primary_text：蓝色字体按钮，无边框 • danger_text：红色字体按钮，无边框 • primary_filled：蓝底白字按钮 • danger_filled：红底白字按钮 • laser：镭射按钮" [ref=e644]:
+                  - paragraph [ref=e645]: 按钮的类型。可选值：
+                  - list [ref=e646]:
+                    - listitem [ref=e647]: • default：黑色字体按钮，有边框
+                    - listitem [ref=e648]: • primary：蓝色字体按钮，有边框
+                    - listitem [ref=e649]: • danger：红色字体按钮，有边框
+                    - listitem [ref=e650]: • text：黑色字体按钮，无边框
+                    - listitem [ref=e651]: • primary_text：蓝色字体按钮，无边框
+                    - listitem [ref=e652]: • danger_text：红色字体按钮，无边框
+                    - listitem [ref=e653]: • primary_filled：蓝底白字按钮
+                    - listitem [ref=e654]: • danger_filled：红底白字按钮
+                    - listitem [ref=e655]: • laser：镭射按钮
+              - row "size 否 String medium 按钮的尺寸。可选值： • tiny：超小尺寸，PC 端为 24 px；移动端为 28 px • small：小尺寸，PC 端为 28 px；移动端为 28 px • medium：中尺寸，PC 端为 32 px；移动端为 36 px • large：大尺寸，PC 端为 40 px；移动端为 48 px" [ref=e656]:
+                - cell "size" [ref=e657]:
+                  - paragraph [ref=e658]: size
+                - cell "否" [ref=e659]:
+                  - paragraph [ref=e660]: 否
+                - cell "String" [ref=e661]:
+                  - paragraph [ref=e662]: String
+                - cell "medium" [ref=e663]:
+                  - paragraph [ref=e664]: medium
+                - cell "按钮的尺寸。可选值： • tiny：超小尺寸，PC 端为 24 px；移动端为 28 px • small：小尺寸，PC 端为 28 px；移动端为 28 px • medium：中尺寸，PC 端为 32 px；移动端为 36 px • large：大尺寸，PC 端为 40 px；移动端为 48 px" [ref=e665]:
+                  - paragraph [ref=e666]: 按钮的尺寸。可选值：
+                  - list [ref=e667]:
+                    - listitem [ref=e668]: • tiny：超小尺寸，PC 端为 24 px；移动端为 28 px
+                    - listitem [ref=e669]: • small：小尺寸，PC 端为 28 px；移动端为 28 px
+                    - listitem [ref=e670]: • medium：中尺寸，PC 端为 32 px；移动端为 36 px
+                    - listitem [ref=e671]: • large：大尺寸，PC 端为 40 px；移动端为 48 px
+              - row "width 否 String default 按钮的宽度。支持以下枚举值： • default：默认宽度 • fill：卡片最大支持宽度 • [100,∞)px：自定义宽度，如 120px。超出卡片宽度时将按最大支持宽度展示" [ref=e672]:
+                - cell "width" [ref=e673]:
+                  - paragraph [ref=e674]: width
+                - cell "否" [ref=e675]:
+                  - paragraph [ref=e676]: 否
+                - cell "String" [ref=e677]:
+                  - paragraph [ref=e678]: String
+                - cell "default" [ref=e679]:
+                  - paragraph [ref=e680]: default
+                - cell "按钮的宽度。支持以下枚举值： • default：默认宽度 • fill：卡片最大支持宽度 • [100,∞)px：自定义宽度，如 120px。超出卡片宽度时将按最大支持宽度展示" [ref=e681]:
+                  - paragraph [ref=e682]: 按钮的宽度。支持以下枚举值：
+                  - list [ref=e683]:
+                    - listitem [ref=e684]: • default：默认宽度
+                    - listitem [ref=e685]: • fill：卡片最大支持宽度
+                    - listitem [ref=e686]:
+                      - text: • [100,∞)px：自定义宽度，如
+                      - code [ref=e687]: 120px
+                      - text: 。超出卡片宽度时将按最大支持宽度展示
+              - row "text 否 Struct 空 按钮上的文本。" [ref=e688]:
+                - cell "text" [ref=e689]:
+                  - paragraph [ref=e690]: text
+                - cell "否" [ref=e691]:
+                  - paragraph [ref=e692]: 否
+                - cell "Struct" [ref=e693]:
+                  - paragraph [ref=e694]: Struct
+                - cell "空" [ref=e695]:
+                  - paragraph [ref=e696]: 空
+                - cell "按钮上的文本。" [ref=e697]:
+                  - paragraph [ref=e698]: 按钮上的文本。
+              - row "└ tag 是 String plain_text 文本类型的标签。固定值为 plain_text。" [ref=e699]:
+                - cell "└ tag" [ref=e700]:
+                  - paragraph [ref=e701]: └ tag
+                - cell "是" [ref=e702]:
+                  - paragraph [ref=e703]: 是
+                - cell "String" [ref=e704]:
+                  - paragraph [ref=e705]: String
+                - cell "plain_text" [ref=e706]:
+                  - paragraph [ref=e707]: plain_text
+                - cell "文本类型的标签。固定值为 plain_text。" [ref=e708]:
+                  - paragraph [ref=e709]:
+                    - text: 文本类型的标签。固定值为
+                    - code [ref=e710]: plain_text
+                    - text: 。
+              - row "└ content 是 String / 文本的内容，最多支持 100 个字符。" [ref=e711]:
+                - cell "└ content" [ref=e712]:
+                  - paragraph [ref=e713]: └ content
+                - cell "是" [ref=e714]:
+                  - paragraph [ref=e715]: 是
+                - cell "String" [ref=e716]:
+                  - paragraph [ref=e717]: String
+                - cell / [ref=e718]:
+                  - paragraph [ref=e719]: /
+                - cell "文本的内容，最多支持 100 个字符。" [ref=e720]:
+                  - paragraph [ref=e721]: 文本的内容，最多支持 100 个字符。
+              - row "icon 否 Object / 添加图标作为文本前缀图标。支持自定义或使用图标库中的图标。" [ref=e722]:
+                - cell "icon" [ref=e723]:
+                  - paragraph [ref=e724]: icon
+                - cell "否" [ref=e725]:
+                  - paragraph [ref=e726]: 否
+                - cell "Object" [ref=e727]:
+                  - paragraph [ref=e728]: Object
+                - cell / [ref=e729]:
+                  - paragraph [ref=e730]: /
+                - cell "添加图标作为文本前缀图标。支持自定义或使用图标库中的图标。" [ref=e731]:
+                  - paragraph [ref=e732]: 添加图标作为文本前缀图标。支持自定义或使用图标库中的图标。
+              - row "└ tag 否 String / 图标类型的标签。可取值： • standard_icon：使用图标库中的图标。 • custom_icon：使用用自定义图片作为图标。" [ref=e733]:
+                - cell "└ tag" [ref=e734]:
+                  - paragraph [ref=e735]: └ tag
+                - cell "否" [ref=e736]:
+                  - paragraph [ref=e737]: 否
+                - cell "String" [ref=e738]:
+                  - paragraph [ref=e739]: String
+                - cell / [ref=e740]:
+                  - paragraph [ref=e741]: /
+                - cell "图标类型的标签。可取值： • standard_icon：使用图标库中的图标。 • custom_icon：使用用自定义图片作为图标。" [ref=e742]:
+                  - paragraph [ref=e743]: 图标类型的标签。可取值：
+                  - list [ref=e744]:
+                    - listitem [ref=e745]:
+                      - text: •
+                      - code [ref=e746]: standard_icon
+                      - text: ：使用图标库中的图标。
+                    - listitem [ref=e747]:
+                      - text: •
+                      - code [ref=e748]: custom_icon
+                      - text: ：使用用自定义图片作为图标。
+              - row "└ token 否 String / 图标库中图标的 token。当 tag 为 standard_icon 时生效。枚举值参见图标库。" [ref=e749]:
+                - cell "└ token" [ref=e750]:
+                  - paragraph [ref=e751]: └ token
+                - cell "否" [ref=e752]:
+                  - paragraph [ref=e753]: 否
+                - cell "String" [ref=e754]:
+                  - paragraph [ref=e755]: String
+                - cell / [ref=e756]:
+                  - paragraph [ref=e757]: /
+                - cell "图标库中图标的 token。当 tag 为 standard_icon 时生效。枚举值参见图标库。" [ref=e758]:
+                  - paragraph [ref=e759]:
+                    - text: 图标库中图标的 token。当
+                    - code [ref=e760]: tag
+                    - text: 为
+                    - code [ref=e761]: standard_icon
+                    - text: 时生效。枚举值参见
+                    - link "图标库" [ref=e762] [cursor=pointer]:
+                      - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/enumerations-for-icons
+                    - text: 。
+              - row "└ color 否 String / 图标的颜色。支持设置线性和面性图标（即 token 末尾为 outlined 或 filled 的图标）的颜色。当 tag 为 standard_icon 时生效。枚举值参见颜色枚举值。" [ref=e763]:
+                - cell "└ color" [ref=e764]:
+                  - paragraph [ref=e765]: └ color
+                - cell "否" [ref=e766]:
+                  - paragraph [ref=e767]: 否
+                - cell "String" [ref=e768]:
+                  - paragraph [ref=e769]: String
+                - cell / [ref=e770]:
+                  - paragraph [ref=e771]: /
+                - cell "图标的颜色。支持设置线性和面性图标（即 token 末尾为 outlined 或 filled 的图标）的颜色。当 tag 为 standard_icon 时生效。枚举值参见颜色枚举值。" [ref=e772]:
+                  - paragraph [ref=e773]:
+                    - text: 图标的颜色。支持设置线性和面性图标（即 token 末尾为
+                    - code [ref=e774]: outlined
+                    - text: 或
+                    - code [ref=e775]: filled
+                    - text: 的图标）的颜色。当
+                    - code [ref=e776]: tag
+                    - text: 为
+                    - code [ref=e777]: standard_icon
+                    - text: 时生效。枚举值参见
+                    - link "颜色枚举值" [ref=e778] [cursor=pointer]:
+                      - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/enumerations-for-fields-related-to-color
+                    - text: 。
+              - row "└ img_key 否 String / 自定义前缀图标的图片 key。当 tag 为 custom_icon 时生效。 图标 key 的获取方式：调用上传图片接口，上传用于发送消息的图片，并在返回值中获取图片的 image_key。" [ref=e779]:
+                - cell "└ img_key" [ref=e780]:
+                  - paragraph [ref=e781]: └ img_key
+                - cell "否" [ref=e782]:
+                  - paragraph [ref=e783]: 否
+                - cell "String" [ref=e784]:
+                  - paragraph [ref=e785]: String
+                - cell / [ref=e786]:
+                  - paragraph [ref=e787]: /
+                - cell "自定义前缀图标的图片 key。当 tag 为 custom_icon 时生效。 图标 key 的获取方式：调用上传图片接口，上传用于发送消息的图片，并在返回值中获取图片的 image_key。" [ref=e788]:
+                  - paragraph [ref=e789]:
+                    - text: 自定义前缀图标的图片 key。当
+                    - code [ref=e790]: tag
+                    - text: 为
+                    - code [ref=e791]: custom_icon
+                    - text: 时生效。
+                  - paragraph [ref=e792]:
+                    - text: 图标 key 的获取方式：调用
+                    - link "上传图片" [ref=e793] [cursor=pointer]:
+                      - /url: /document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/image/create
+                    - text: 接口，上传用于发送消息的图片，并在返回值中获取图片的 image_key。
+              - row "hover_tips 否 Object 空 用户在 PC 端将光标悬浮在交互容器上方时的文案提醒。默认为空。" [ref=e794]:
+                - cell "hover_tips" [ref=e795]:
+                  - paragraph [ref=e796]: hover_tips
+                - cell "否" [ref=e797]:
+                  - paragraph [ref=e798]: 否
+                - cell "Object" [ref=e799]:
+                  - paragraph [ref=e800]: Object
+                - cell "空" [ref=e801]:
+                  - paragraph [ref=e802]: 空
+                - cell "用户在 PC 端将光标悬浮在交互容器上方时的文案提醒。默认为空。" [ref=e803]:
+                  - paragraph [ref=e804]: 用户在 PC 端将光标悬浮在交互容器上方时的文案提醒。默认为空。
+              - row "└ tag 是 String plain_text 文本的标签。固定取值为 plain_text。" [ref=e805]:
+                - cell "└ tag" [ref=e806]:
+                  - paragraph [ref=e807]: └ tag
+                - cell "是" [ref=e808]:
+                  - paragraph [ref=e809]: 是
+                - cell "String" [ref=e810]:
+                  - paragraph [ref=e811]: String
+                - cell "plain_text" [ref=e812]:
+                  - paragraph [ref=e813]: plain_text
+                - cell "文本的标签。固定取值为 plain_text。" [ref=e814]:
+                  - paragraph [ref=e815]:
+                    - text: 文本的标签。固定取值为
+                    - code [ref=e816]: plain_text
+                    - text: 。
+              - row "└ content 是 String 空 文本的内容。" [ref=e817]:
+                - cell "└ content" [ref=e818]:
+                  - paragraph [ref=e819]: └ content
+                - cell "是" [ref=e820]:
+                  - paragraph [ref=e821]: 是
+                - cell "String" [ref=e822]:
+                  - paragraph [ref=e823]: String
+                - cell "空" [ref=e824]:
+                  - paragraph [ref=e825]: 空
+                - cell "文本的内容。" [ref=e826]:
+                  - paragraph [ref=e827]: 文本的内容。
+              - row "disabled 否 Boolean false 是否禁按钮。可选值： • true：禁用按钮 • false：按钮组件保持可用状态" [ref=e828]:
+                - cell "disabled" [ref=e829]:
+                  - paragraph [ref=e830]: disabled
+                - cell "否" [ref=e831]:
+                  - paragraph [ref=e832]: 否
+                - cell "Boolean" [ref=e833]:
+                  - paragraph [ref=e834]: Boolean
+                - cell "false" [ref=e835]:
+                  - paragraph [ref=e836]: "false"
+                - cell "是否禁按钮。可选值： • true：禁用按钮 • false：按钮组件保持可用状态" [ref=e837]:
+                  - paragraph [ref=e838]: 是否禁按钮。可选值：
+                  - list [ref=e839]:
+                    - listitem [ref=e840]: • true：禁用按钮
+                    - listitem [ref=e841]: • false：按钮组件保持可用状态
+              - row "disabled_tips 否 Object 空 禁用按钮后，用户触发交互时的弹窗文案提醒。默认为空，即不弹窗。" [ref=e842]:
+                - cell "disabled_tips" [ref=e843]:
+                  - paragraph [ref=e844]: disabled_tips
+                - cell "否" [ref=e845]:
+                  - paragraph [ref=e846]: 否
+                - cell "Object" [ref=e847]:
+                  - paragraph [ref=e848]: Object
+                - cell "空" [ref=e849]:
+                  - paragraph [ref=e850]: 空
+                - cell "禁用按钮后，用户触发交互时的弹窗文案提醒。默认为空，即不弹窗。" [ref=e851]:
+                  - paragraph [ref=e852]: 禁用按钮后，用户触发交互时的弹窗文案提醒。默认为空，即不弹窗。
+              - row "└ tag 是 String plain_text 弹窗标题文本的标签。固定取值为 plain_text。" [ref=e853]:
+                - cell "└ tag" [ref=e854]:
+                  - paragraph [ref=e855]: └ tag
+                - cell "是" [ref=e856]:
+                  - paragraph [ref=e857]: 是
+                - cell "String" [ref=e858]:
+                  - paragraph [ref=e859]: String
+                - cell "plain_text" [ref=e860]:
+                  - paragraph [ref=e861]: plain_text
+                - cell "弹窗标题文本的标签。固定取值为 plain_text。" [ref=e862]:
+                  - paragraph [ref=e863]:
+                    - text: 弹窗标题文本的标签。固定取值为
+                    - code [ref=e864]: plain_text
+                    - text: 。
+              - row "└ content 是 String 空 弹窗标题的内容。" [ref=e865]:
+                - cell "└ content" [ref=e866]:
+                  - paragraph [ref=e867]: └ content
+                - cell "是" [ref=e868]:
+                  - paragraph [ref=e869]: 是
+                - cell "String" [ref=e870]:
+                  - paragraph [ref=e871]: String
+                - cell "空" [ref=e872]:
+                  - paragraph [ref=e873]: 空
+                - cell "弹窗标题的内容。" [ref=e874]:
+                  - paragraph [ref=e875]: 弹窗标题的内容。
+              - row "confirm 否 Struct 默认不生效此属性。 二次确认弹窗配置。指在用户提交时弹出二次确认弹窗提示；只有用户点击确认后，才提交输入的内容。该字段默认提供了确认和取消按钮，你只需要配置弹窗的标题与内容即可。 注意：confirm 字段仅在用户点击包含提交属性的按钮时才会触发二次确认弹窗。" [ref=e876]:
+                - cell "confirm" [ref=e877]:
+                  - paragraph [ref=e878]: confirm
+                - cell "否" [ref=e879]:
+                  - paragraph [ref=e880]: 否
+                - cell "Struct" [ref=e881]:
+                  - paragraph [ref=e882]: Struct
+                - cell "默认不生效此属性。" [ref=e883]:
+                  - paragraph [ref=e884]: 默认不生效此属性。
+                - cell "二次确认弹窗配置。指在用户提交时弹出二次确认弹窗提示；只有用户点击确认后，才提交输入的内容。该字段默认提供了确认和取消按钮，你只需要配置弹窗的标题与内容即可。 注意：confirm 字段仅在用户点击包含提交属性的按钮时才会触发二次确认弹窗。" [ref=e885]:
+                  - paragraph [ref=e886]: 二次确认弹窗配置。指在用户提交时弹出二次确认弹窗提示；只有用户点击确认后，才提交输入的内容。该字段默认提供了确认和取消按钮，你只需要配置弹窗的标题与内容即可。
+                  - paragraph [ref=e887]:
+                    - strong [ref=e888]: 注意
+                    - text: ：confirm 字段仅在用户点击包含提交属性的按钮时才会触发二次确认弹窗。
+              - row "└ title 是 Struct / 二次确认弹窗标题。 注意：要配置二次弹窗，title 字段必填。否则，历史版本的飞书客户端可能会出现点击按钮无反应的问题。" [ref=e889]:
+                - cell "└ title" [ref=e890]:
+                  - paragraph [ref=e891]: └ title
+                - cell "是" [ref=e892]:
+                  - paragraph [ref=e893]: 是
+                - cell "Struct" [ref=e894]:
+                  - paragraph [ref=e895]: Struct
+                - cell / [ref=e896]:
+                  - paragraph [ref=e897]: /
+                - cell "二次确认弹窗标题。 注意：要配置二次弹窗，title 字段必填。否则，历史版本的飞书客户端可能会出现点击按钮无反应的问题。" [ref=e898]:
+                  - paragraph [ref=e899]: 二次确认弹窗标题。
+                  - paragraph [ref=e900]:
+                    - strong [ref=e901]: 注意
+                    - text: ：要配置二次弹窗，title 字段必填。否则，历史版本的飞书客户端可能会出现点击按钮无反应的问题。
+              - row "└ └ tag 是 String plain_text 二次确认弹窗标题文本的标签。固定取值为 plain_text。" [ref=e902]:
+                - cell "└ └ tag" [ref=e903]:
+                  - paragraph [ref=e904]: └ └ tag
+                - cell "是" [ref=e905]:
+                  - paragraph [ref=e906]: 是
+                - cell "String" [ref=e907]:
+                  - paragraph [ref=e908]: String
+                - cell "plain_text" [ref=e909]:
+                  - paragraph [ref=e910]: plain_text
+                - cell "二次确认弹窗标题文本的标签。固定取值为 plain_text。" [ref=e911]:
+                  - paragraph [ref=e912]:
+                    - text: 二次确认弹窗标题文本的标签。固定取值为
+                    - code [ref=e913]: plain_text
+                    - text: 。
+              - row "└ └ content 是 String / 二次确认弹窗标题的内容。" [ref=e914]:
+                - cell "└ └ content" [ref=e915]:
+                  - paragraph [ref=e916]: └ └ content
+                - cell "是" [ref=e917]:
+                  - paragraph [ref=e918]: 是
+                - cell "String" [ref=e919]:
+                  - paragraph [ref=e920]: String
+                - cell / [ref=e921]:
+                  - paragraph [ref=e922]: /
+                - cell "二次确认弹窗标题的内容。" [ref=e923]:
+                  - paragraph [ref=e924]: 二次确认弹窗标题的内容。
+              - row "└ text 是 Struct / 二次确认弹窗文本。" [ref=e925]:
+                - cell "└ text" [ref=e926]:
+                  - paragraph [ref=e927]: └ text
+                - cell "是" [ref=e928]:
+                  - paragraph [ref=e929]: 是
+                - cell "Struct" [ref=e930]:
+                  - paragraph [ref=e931]: Struct
+                - cell / [ref=e932]:
+                  - paragraph [ref=e933]: /
+                - cell "二次确认弹窗文本。" [ref=e934]:
+                  - paragraph [ref=e935]: 二次确认弹窗文本。
+              - row "└ └ tag 是 String plain_text 二次确认弹窗文本的标签。固定取值为 plain_text。" [ref=e936]:
+                - cell "└ └ tag" [ref=e937]:
+                  - paragraph [ref=e938]: └ └ tag
+                - cell "是" [ref=e939]:
+                  - paragraph [ref=e940]: 是
+                - cell "String" [ref=e941]:
+                  - paragraph [ref=e942]: String
+                - cell "plain_text" [ref=e943]:
+                  - paragraph [ref=e944]: plain_text
+                - cell "二次确认弹窗文本的标签。固定取值为 plain_text。" [ref=e945]:
+                  - paragraph [ref=e946]:
+                    - text: 二次确认弹窗文本的标签。固定取值为
+                    - code [ref=e947]: plain_text
+                    - text: 。
+              - row "└ └ content 是 String / 二次确认弹窗文本的具体内容。" [ref=e948]:
+                - cell "└ └ content" [ref=e949]:
+                  - paragraph [ref=e950]: └ └ content
+                - cell "是" [ref=e951]:
+                  - paragraph [ref=e952]: 是
+                - cell "String" [ref=e953]:
+                  - paragraph [ref=e954]: String
+                - cell / [ref=e955]:
+                  - paragraph [ref=e956]: /
+                - cell "二次确认弹窗文本的具体内容。" [ref=e957]:
+                  - paragraph [ref=e958]: 二次确认弹窗文本的具体内容。
+              - row "behaviors 是 Struct / 配置交互类型和具体交互行为。支持同时生效跳转链接和回传交互。详情参考配置卡片交互。" [ref=e959]:
+                - cell "behaviors" [ref=e960]:
+                  - paragraph [ref=e961]: behaviors
+                - cell "是" [ref=e962]:
+                  - paragraph [ref=e963]: 是
+                - cell "Struct" [ref=e964]:
+                  - paragraph [ref=e965]: Struct
+                - cell / [ref=e966]:
+                  - paragraph [ref=e967]: /
+                - cell "配置交互类型和具体交互行为。支持同时生效跳转链接和回传交互。详情参考配置卡片交互。" [ref=e968]:
+                  - paragraph [ref=e969]:
+                    - text: 配置交互类型和具体交互行为。支持同时生效跳转链接和回传交互。详情参考
+                    - link "配置卡片交互" [ref=e970] [cursor=pointer]:
+                      - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/configuring-card-interactions
+                    - text: 。
+          - paragraph [ref=e971]: 以下为支持交互的历史属性。
+          - table [ref=e973]:
+            - rowgroup [ref=e974]:
+              - row "字段名称 是否必填 类型 默认值 说明" [ref=e975]:
+                - columnheader "字段名称" [ref=e976]
+                - columnheader "是否必填" [ref=e977]
+                - columnheader "类型" [ref=e978]
+                - columnheader "默认值" [ref=e979]
+                - columnheader "说明" [ref=e980]
+            - rowgroup [ref=e981]:
+              - row "url 否 String / 点击按钮后的跳转链接。该字段与 multi_url 字段不可同时设置。" [ref=e982]:
+                - cell "url" [ref=e983]:
+                  - paragraph [ref=e984]: url
+                - cell "否" [ref=e985]:
+                  - paragraph [ref=e986]: 否
+                - cell "String" [ref=e987]:
+                  - paragraph [ref=e988]: String
+                - cell / [ref=e989]:
+                  - paragraph [ref=e990]: /
+                - cell "点击按钮后的跳转链接。该字段与 multi_url 字段不可同时设置。" [ref=e991]:
+                  - paragraph [ref=e992]:
+                    - text: 点击按钮后的跳转链接。该字段与
+                    - code [ref=e993]: multi_url
+                    - text: 字段不可同时设置。
+              - row "multi_url 否 Struct / 基于 url 元素配置多端跳转链接，详情参见旧版文档url 元素。该字段与 url 字段不可同时设置。" [ref=e994]:
+                - cell "multi_url" [ref=e995]:
+                  - paragraph [ref=e996]: multi_url
+                - cell "否" [ref=e997]:
+                  - paragraph [ref=e998]: 否
+                - cell "Struct" [ref=e999]:
+                  - paragraph [ref=e1000]: Struct
+                - cell / [ref=e1001]:
+                  - paragraph [ref=e1002]: /
+                - cell "基于 url 元素配置多端跳转链接，详情参见旧版文档url 元素。该字段与 url 字段不可同时设置。" [ref=e1003]:
+                  - paragraph [ref=e1004]:
+                    - text: 基于 url 元素配置多端跳转链接，详情参见旧版文档
+                    - link "url 元素" [ref=e1005] [cursor=pointer]:
+                      - /url: /document/ukTMukTMukTM/uYzM3QjL2MzN04iNzcDN/component-list/common-components-and-elements#09a320b3
+                    - text: 。该字段与
+                    - code [ref=e1006]: url
+                    - text: 字段不可同时设置。
+              - 'row "value 否 JSON / 该字段用于配置回传交互。当用户点击交互组件后，会将 value 的值返回给接收回调数据的服务器。后续你可以通过服务器接收的 value 值进行业务处理。 该字段值仅支持 key-value 形式的 JSON 结构，且 key 为 String 类型。示例值： 1 \"value\":{ 2 \"key-1\":Object-1, 3 \"key-2\":Object-2, 4 \"key-3\":Object-3, 5 ······ 6 }" [ref=e1007]':
+                - cell "value" [ref=e1008]:
+                  - paragraph [ref=e1009]: value
+                - cell "否" [ref=e1010]:
+                  - paragraph [ref=e1011]: 否
+                - cell "JSON" [ref=e1012]:
+                  - paragraph [ref=e1013]: JSON
+                - cell / [ref=e1014]:
+                  - paragraph [ref=e1015]: /
+                - 'cell "该字段用于配置回传交互。当用户点击交互组件后，会将 value 的值返回给接收回调数据的服务器。后续你可以通过服务器接收的 value 值进行业务处理。 该字段值仅支持 key-value 形式的 JSON 结构，且 key 为 String 类型。示例值： 1 \"value\":{ 2 \"key-1\":Object-1, 3 \"key-2\":Object-2, 4 \"key-3\":Object-3, 5 ······ 6 }" [ref=e1016]':
+                  - paragraph [ref=e1017]:
+                    - text: 该字段用于配置回传交互。当用户点击交互组件后，会将
+                    - code [ref=e1018]: value
+                    - text: 的值返回给接收回调数据的服务器。后续你可以通过服务器接收的
+                    - code [ref=e1019]: value
+                    - text: 值进行业务处理。
+                  - paragraph [ref=e1020]: 该字段值仅支持 key-value 形式的 JSON 结构，且 key 为 String 类型。示例值：
+                  - generic [ref=e1021]:
+                    - img [ref=e1023] [cursor=pointer]
+                    - code [ref=e1027]:
+                      - generic [ref=e1028]:
+                        - generic [ref=e1029]: "1 \"value\":{"
+                        - generic [ref=e1030]: 2 "key-1":Object-1,
+                        - generic [ref=e1031]: 3 "key-2":Object-2,
+                        - generic [ref=e1032]: 4 "key-3":Object-3,
+                        - generic [ref=e1033]: 5 ······
+                        - generic [ref=e1034]: "6 }"
+              - row "complex_interaction 否 Boolean false 是否同时生效上述历史字段配置的跳转链接交互和回传交互。默认仅生效跳转链接交互。" [ref=e1035]:
+                - cell "complex_interaction" [ref=e1036]:
+                  - paragraph [ref=e1037]: complex_interaction
+                - cell "否" [ref=e1038]:
+                  - paragraph [ref=e1039]: 否
+                - cell "Boolean" [ref=e1040]:
+                  - paragraph [ref=e1041]: Boolean
+                - cell "false" [ref=e1042]:
+                  - paragraph [ref=e1043]: "false"
+                - cell "是否同时生效上述历史字段配置的跳转链接交互和回传交互。默认仅生效跳转链接交互。" [ref=e1044]:
+                  - paragraph [ref=e1045]: 是否同时生效上述历史字段配置的跳转链接交互和回传交互。默认仅生效跳转链接交互。
+          - paragraph [ref=e1046]:
+            - text: 内嵌在表单容器中的按钮组件，新增
+            - code [ref=e1047]: name
+            - text: 、
+            - code [ref=e1048]: required
+            - text: 、和
+            - code [ref=e1049]: action_type
+            - text: 属性。详细说明如下表所示。
+          - table [ref=e1051]:
+            - rowgroup [ref=e1052]:
+              - row "属性名称 是否必填 类型 默认值 说明" [ref=e1053]:
+                - columnheader "属性名称" [ref=e1054]
+                - columnheader "是否必填" [ref=e1055]
+                - columnheader "类型" [ref=e1056]
+                - columnheader "默认值" [ref=e1057]
+                - columnheader "说明" [ref=e1058]
+            - rowgroup [ref=e1059]:
+              - row "name 是 String 空 表单容器内组件的唯一标识。用于识别用户提交的数据属于哪个组件。 注意：该字段必填且需在卡片全局内唯一。" [ref=e1060]:
+                - cell "name" [ref=e1061]:
+                  - paragraph [ref=e1062]: name
+                - cell "是" [ref=e1063]:
+                  - paragraph [ref=e1064]: 是
+                - cell "String" [ref=e1065]:
+                  - paragraph [ref=e1066]: String
+                - cell "空" [ref=e1067]:
+                  - paragraph [ref=e1068]: 空
+                - cell "表单容器内组件的唯一标识。用于识别用户提交的数据属于哪个组件。 注意：该字段必填且需在卡片全局内唯一。" [ref=e1069]:
+                  - paragraph [ref=e1070]: 表单容器内组件的唯一标识。用于识别用户提交的数据属于哪个组件。
+                  - paragraph [ref=e1071]:
+                    - strong [ref=e1072]: 注意
+                    - text: ：该字段必填且需在卡片全局内唯一。
+              - row "required 否 Boolean false 组件的内容是否必填。当组件内嵌在表单容器中时，该属性生效。可取值： • true：必填。当用户点击表单容器的“提交”时，未填写该组件，则前端提示“有必填项未填写”，不会向开发者的服务端发起回传请求。 • false：选填。当用户点击表单容器的“提交”时，未填写该组件，仍提交表单容器中的数据。" [ref=e1073]:
+                - cell "required" [ref=e1074]:
+                  - paragraph [ref=e1075]: required
+                - cell "否" [ref=e1076]:
+                  - paragraph [ref=e1077]: 否
+                - cell "Boolean" [ref=e1078]:
+                  - paragraph [ref=e1079]: Boolean
+                - cell "false" [ref=e1080]:
+                  - paragraph [ref=e1081]: "false"
+                - cell "组件的内容是否必填。当组件内嵌在表单容器中时，该属性生效。可取值： • true：必填。当用户点击表单容器的“提交”时，未填写该组件，则前端提示“有必填项未填写”，不会向开发者的服务端发起回传请求。 • false：选填。当用户点击表单容器的“提交”时，未填写该组件，仍提交表单容器中的数据。" [ref=e1082]:
+                  - paragraph [ref=e1083]: 组件的内容是否必填。当组件内嵌在表单容器中时，该属性生效。可取值：
+                  - list [ref=e1084]:
+                    - listitem [ref=e1085]:
+                      - text: •
+                      - paragraph [ref=e1086]:
+                        - strong [ref=e1087]: "true"
+                        - text: ：必填。当用户点击表单容器的“提交”时，未填写该组件，则前端提示“有必填项未填写”，不会向开发者的服务端发起回传请求。
+                    - listitem [ref=e1088]:
+                      - text: •
+                      - paragraph [ref=e1089]:
+                        - strong [ref=e1090]: "false"
+                        - text: ：选填。当用户点击表单容器的“提交”时，未填写该组件，仍提交表单容器中的数据。
+              - row "action_type 是 String 空 内嵌在表单容器中的按钮的交互类型。枚举值包括： • link：当前按钮仅支持链接跳转 • request：当前按钮仅支持回传交互 • multi：当前按钮同时支持链接跳转和回传交互 • form_submit：将当前按钮与提交事件绑定。用户点击后，将触发表单容器的提交事件，异步提交所有已填写的表单项内容 • form_reset：将当前按钮与取消提交事件绑定。用户点击后，将触发表单容器的取消提交事件，重置所有表单组件的输入值为初始值" [ref=e1091]:
+                - cell "action_type" [ref=e1092]:
+                  - paragraph [ref=e1093]: action_type
+                - cell "是" [ref=e1094]:
+                  - paragraph [ref=e1095]: 是
+                - cell "String" [ref=e1096]:
+                  - paragraph [ref=e1097]: String
+                - cell "空" [ref=e1098]:
+                  - paragraph [ref=e1099]: 空
+                - cell "内嵌在表单容器中的按钮的交互类型。枚举值包括： • link：当前按钮仅支持链接跳转 • request：当前按钮仅支持回传交互 • multi：当前按钮同时支持链接跳转和回传交互 • form_submit：将当前按钮与提交事件绑定。用户点击后，将触发表单容器的提交事件，异步提交所有已填写的表单项内容 • form_reset：将当前按钮与取消提交事件绑定。用户点击后，将触发表单容器的取消提交事件，重置所有表单组件的输入值为初始值" [ref=e1100]:
+                  - paragraph [ref=e1101]: 内嵌在表单容器中的按钮的交互类型。枚举值包括：
+                  - list [ref=e1102]:
+                    - listitem [ref=e1103]:
+                      - text: •
+                      - code [ref=e1104]: link
+                      - text: ：当前按钮仅支持链接跳转
+                    - listitem [ref=e1105]:
+                      - text: •
+                      - code [ref=e1106]: request
+                      - text: ：当前按钮仅支持回传交互
+                    - listitem [ref=e1107]:
+                      - text: •
+                      - code [ref=e1108]: multi
+                      - text: ：当前按钮同时支持链接跳转和回传交互
+                    - listitem [ref=e1109]:
+                      - text: •
+                      - code [ref=e1110]: form_submit
+                      - text: ：将当前按钮与提交事件绑定。用户点击后，将触发表单容器的提交事件，异步提交所有已填写的表单项内容
+                    - listitem [ref=e1111]:
+                      - text: •
+                      - code [ref=e1112]: form_reset
+                      - text: ：将当前按钮与取消提交事件绑定。用户点击后，将触发表单容器的取消提交事件，重置所有表单组件的输入值为初始值
+          - heading "回调结构" [level=3] [ref=e1113]
+          - paragraph [ref=e1114]:
+            - text: 为按钮组件成功
+            - link "配置卡片交互" [ref=e1115] [cursor=pointer]:
+              - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/configuring-card-interactions
+            - text: 后，用户基于按钮组件进行交互时，你在开发者后台配置的请求地址将会收到回调数据。
+          - list [ref=e1116]:
+            - listitem [ref=e1117]:
+              - text: • 如果你添加的是新版卡片回传交互回调(
+              - code [ref=e1118]: card.action.trigger
+              - text: )，可参考
+              - link "卡片回传交互" [ref=e1119] [cursor=pointer]:
+                - /url: /document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-callback-communication
+              - text: 了解回调结构。
+            - listitem [ref=e1120]:
+              - text: • 如果你添加的是旧版卡片回传交互回调(
+              - code [ref=e1121]: card.action.trigger_v1
+              - text: )，可参考
+              - link "消息卡片回传交互（旧）" [ref=e1122] [cursor=pointer]:
+                - /url: /document/ukTMukTMukTM/uYzM3QjL2MzN04iNzcDN/configuring-card-callbacks/card-callback-structure
+              - text: 了解回调结构。
+          - heading "示例代码" [level=2] [ref=e1123]
+          - paragraph [ref=e1124]: 以下的 JSON 示例代码可实现如下图所示的按钮效果。
+          - paragraph [ref=e1125]
+          - generic [ref=e1129]:
+            - img [ref=e1131] [cursor=pointer]
+            - code [ref=e1135]:
+              - generic [ref=e1136]:
+                - generic [ref=e1137]: "1 {"
+                - generic [ref=e1138]: "2 \"header\": {"
+                - generic [ref=e1139]: "3 \"template\": \"blue\","
+                - generic [ref=e1140]: "4 \"title\": {"
+                - generic [ref=e1141]: "5 \"content\": \"Buttons\","
+                - generic [ref=e1142]: "6 \"tag\": \"plain_text\""
+                - generic [ref=e1143]: "7 }"
+                - generic [ref=e1144]: "8 },"
+                - generic [ref=e1145]: "9 \"elements\": ["
+                - generic [ref=e1146]: "10 {"
+                - generic [ref=e1147]: "11 \"tag\": \"column_set\","
+                - generic [ref=e1148]: "12 \"flex_mode\": \"flow\","
+                - generic [ref=e1149]: "13 \"background_style\": \"default\","
+                - generic [ref=e1150]: "14 \"columns\": ["
+                - generic [ref=e1151]: "15 {"
+                - generic [ref=e1152]: "16 \"tag\": \"column\","
+                - generic [ref=e1153]: "17 \"width\": \"auto\","
+                - generic [ref=e1154]: "18 \"weight\": 1,"
+                - generic [ref=e1155]: "19 \"vertical_align\": \"top\","
+                - generic [ref=e1156]: "20 \"elements\": ["
+                - generic [ref=e1157]: "21 {"
+                - generic [ref=e1158]: "22 \"tag\": \"button\","
+                - generic [ref=e1159]: "23 \"text\": {"
+                - generic [ref=e1160]: "24 \"tag\": \"plain_text\","
+                - generic [ref=e1161]: "25 \"content\": \"镭射按钮\""
+                - generic [ref=e1162]: "26 },"
+                - generic [ref=e1163]: "27 \"behaviors\": ["
+                - generic [ref=e1164]: "28 {"
+                - generic [ref=e1165]: "29 \"type\": \"open_url\","
+                - generic [ref=e1166]: "30 \"default_url\": \"https://open.feishu.cn/document\","
+                - generic [ref=e1167]: "31 \"android_url\": \"https://developer.android.com/\","
+                - generic [ref=e1168]: "32 \"ios_url\": \"lark://msgcard/unsupported_action\","
+                - generic [ref=e1169]: "33 \"pc_url\": \"https://www.windows.com\""
+                - generic [ref=e1170]: "34 }"
+                - generic [ref=e1171]: 35 ],
+                - generic [ref=e1172]: "36 \"type\": \"laser\","
+                - generic [ref=e1173]: "37 \"hover_tips\": {"
+                - generic [ref=e1174]: "38 \"tag\": \"plain_text\","
+                - generic [ref=e1175]: "39 \"content\": \"hover提示\""
+                - generic [ref=e1176]: "40 },"
+                - generic [ref=e1177]: "41 \"value\": {"
+                - generic [ref=e1178]: "42 \"key\": \"value\""
+                - generic [ref=e1179]: "43 }"
+                - generic [ref=e1180]: "44 }"
+                - generic [ref=e1181]: 45 ]
+                - generic [ref=e1182]: "46 },"
+                - generic [ref=e1183]: "47 {"
+                - generic [ref=e1184]: "48 \"tag\": \"column\","
+                - generic [ref=e1185]: "49 \"width\": \"auto\","
+                - generic [ref=e1186]: "50 \"weight\": 1,"
+                - generic [ref=e1187]: "51 \"vertical_align\": \"top\","
+                - generic [ref=e1188]: "52 \"elements\": ["
+                - generic [ref=e1189]: "53 {"
+                - generic [ref=e1190]: "54 \"tag\": \"button\","
+                - generic [ref=e1191]: "55 \"type\": \"laser\","
+                - generic [ref=e1192]: "56 \"text\": {"
+                - generic [ref=e1193]: "57 \"tag\": \"plain_text\","
+                - generic [ref=e1194]: "58 \"content\": \"镭射禁用按钮\""
+                - generic [ref=e1195]: "59 },"
+                - generic [ref=e1196]:
+                  - text: "60 \"disabled\":"
+                  - generic [ref=e1197]: "true"
+                  - text: ","
+                - generic [ref=e1198]: "61 \"disabled_tips\": {"
+                - generic [ref=e1199]: "62 \"tag\": \"plain_text\","
+                - generic [ref=e1200]: "63 \"content\": \"禁用 hover 提示\""
+                - generic [ref=e1201]: "64 },"
+                - generic [ref=e1202]: "65 \"behaviors\": ["
+                - generic [ref=e1203]: "66 {"
+                - generic [ref=e1204]: "67 \"type\": \"open_url\","
+                - generic [ref=e1205]: "68 \"default_url\": \"https://open.feishu.cn/document\","
+                - generic [ref=e1206]: "69 \"android_url\": \"https://developer.android.com/\","
+                - generic [ref=e1207]: "70 \"ios_url\": \"lark://msgcard/unsupported_action\","
+                - generic [ref=e1208]: "71 \"pc_url\": \"https://www.windows.com\""
+                - generic [ref=e1209]: "72 }"
+                - generic [ref=e1210]: 73 ]
+                - generic [ref=e1211]: "74 }"
+                - generic [ref=e1212]: 75 ]
+                - generic [ref=e1213]: "76 }"
+                - generic [ref=e1214]: 77 ]
+                - generic [ref=e1215]: "78 },"
+                - generic [ref=e1216]: "79 {"
+                - generic [ref=e1217]: "80 \"tag\": \"column_set\","
+                - generic [ref=e1218]: "81 \"flex_mode\": \"flow\","
+                - generic [ref=e1219]: "82 \"background_style\": \"default\","
+                - generic [ref=e1220]: "83 \"columns\": ["
+                - generic [ref=e1221]: "84 {"
+                - generic [ref=e1222]: "85 \"tag\": \"column\","
+                - generic [ref=e1223]: "86 \"width\": \"auto\","
+                - generic [ref=e1224]: "87 \"weight\": 1,"
+                - generic [ref=e1225]: "88 \"vertical_align\": \"top\","
+                - generic [ref=e1226]: "89 \"elements\": ["
+                - generic [ref=e1227]: "90 {"
+                - generic [ref=e1228]: "91 \"tag\": \"button\","
+                - generic [ref=e1229]: "92 \"text\": {"
+                - generic [ref=e1230]: "93 \"tag\": \"plain_text\","
+                - generic [ref=e1231]: "94 \"content\": \"primary\""
+                - generic [ref=e1232]: "95 },"
+                - generic [ref=e1233]: "96 \"url\": \"https://open.feishu.cn/document\","
+                - generic [ref=e1234]: "97 \"type\": \"primary\","
+                - generic [ref=e1235]: "98 \"hover_tips\": {"
+                - generic [ref=e1236]: "99 \"tag\": \"plain_text\","
+                - generic [ref=e1237]: "100 \"content\": \"我是 primary button\""
+                - generic [ref=e1238]: "101 },"
+                - generic [ref=e1239]: "102 \"value\": {"
+                - generic [ref=e1240]: "103 \"key\": \"value\""
+                - generic [ref=e1241]: "104 }"
+                - generic [ref=e1242]: "105 }"
+                - generic [ref=e1243]: 106 ]
+                - generic [ref=e1244]: "107 },"
+                - generic [ref=e1245]: "108 {"
+                - generic [ref=e1246]: "109 \"tag\": \"column\","
+                - generic [ref=e1247]: "110 \"width\": \"auto\","
+                - generic [ref=e1248]: "111 \"weight\": 1,"
+                - generic [ref=e1249]: "112 \"vertical_align\": \"top\","
+                - generic [ref=e1250]: "113 \"elements\": ["
+                - generic [ref=e1251]: "114 {"
+                - generic [ref=e1252]: "115 \"tag\": \"button\","
+                - generic [ref=e1253]: "116 \"type\": \"default\","
+                - generic [ref=e1254]: "117 \"text\": {"
+                - generic [ref=e1255]: "118 \"tag\": \"plain_text\","
+                - generic [ref=e1256]: "119 \"content\": \"default\""
+                - generic [ref=e1257]: "120 },"
+                - generic [ref=e1258]: "121 \"hover_tips\": {"
+                - generic [ref=e1259]: "122 \"tag\": \"plain_text\","
+                - generic [ref=e1260]: "123 \"content\": \"我是 default 按钮\""
+                - generic [ref=e1261]: "124 },"
+                - generic [ref=e1262]: "125 \"behaviors\": ["
+                - generic [ref=e1263]: "126 {"
+                - generic [ref=e1264]: "127 \"type\": \"open_url\","
+                - generic [ref=e1265]: "128 \"default_url\": \"https://open.feishu.cn/document\","
+                - generic [ref=e1266]: "129 \"android_url\": \"https://developer.android.com/\","
+                - generic [ref=e1267]: "130 \"ios_url\": \"lark://msgcard/unsupported_action\","
+                - generic [ref=e1268]: "131 \"pc_url\": \"https://www.windows.com\""
+                - generic [ref=e1269]: "132 }"
+                - generic [ref=e1270]: 133 ]
+                - generic [ref=e1271]: "134 }"
+                - generic [ref=e1272]: 135 ]
+                - generic [ref=e1273]: "136 },"
+                - generic [ref=e1274]: "137 {"
+                - generic [ref=e1275]: "138 \"tag\": \"column\","
+                - generic [ref=e1276]: "139 \"width\": \"auto\","
+                - generic [ref=e1277]: "140 \"weight\": 1,"
+                - generic [ref=e1278]: "141 \"vertical_align\": \"top\","
+                - generic [ref=e1279]: "142 \"elements\": ["
+                - generic [ref=e1280]: "143 {"
+                - generic [ref=e1281]: "144 \"tag\": \"button\","
+                - generic [ref=e1282]: "145 \"type\": \"danger\","
+                - generic [ref=e1283]: "146 \"text\": {"
+                - generic [ref=e1284]: "147 \"tag\": \"plain_text\","
+                - generic [ref=e1285]: "148 \"content\": \"我是 danger 按钮\""
+                - generic [ref=e1286]: "149 },"
+                - generic [ref=e1287]: "150 \"hover_tips\": {"
+                - generic [ref=e1288]: "151 \"tag\": \"plain_text\","
+                - generic [ref=e1289]: "152 \"content\": \"我是 danger 按钮\""
+                - generic [ref=e1290]: "153 },"
+                - generic [ref=e1291]: "154 \"behaviors\": ["
+                - generic [ref=e1292]: "155 {"
+                - generic [ref=e1293]: "156 \"type\": \"open_url\","
+                - generic [ref=e1294]: "157 \"default_url\": \"https://open.feishu.cn/document\","
+                - generic [ref=e1295]: "158 \"android_url\": \"https://developer.android.com/\","
+                - generic [ref=e1296]: "159 \"ios_url\": \"lark://msgcard/unsupported_action\","
+                - generic [ref=e1297]: "160 \"pc_url\": \"https://www.windows.com\""
+                - generic [ref=e1298]: "161 }"
+                - generic [ref=e1299]: 162 ]
+                - generic [ref=e1300]: "163 }"
+                - generic [ref=e1301]: 164 ]
+                - generic [ref=e1302]: "165 },"
+                - generic [ref=e1303]: "166 {"
+                - generic [ref=e1304]: "167 \"tag\": \"column\","
+                - generic [ref=e1305]: "168 \"width\": \"auto\","
+                - generic [ref=e1306]: "169 \"weight\": 1,"
+                - generic [ref=e1307]: "170 \"vertical_align\": \"top\","
+                - generic [ref=e1308]: "171 \"elements\": ["
+                - generic [ref=e1309]: "172 {"
+                - generic [ref=e1310]: "173 \"tag\": \"button\","
+                - generic [ref=e1311]: "174 \"type\": \"danger\","
+                - generic [ref=e1312]: "175 \"text\": {"
+                - generic [ref=e1313]: "176 \"tag\": \"plain_text\","
+                - generic [ref=e1314]: "177 \"content\": \"我是 disabled 按钮\""
+                - generic [ref=e1315]: "178 },"
+                - generic [ref=e1316]:
+                  - text: "179 \"disabled\":"
+                  - generic [ref=e1317]: "true"
+                  - text: ","
+                - generic [ref=e1318]: "180 \"disabled_tips\": {"
+                - generic [ref=e1319]: "181 \"tag\": \"plain_text\","
+                - generic [ref=e1320]: "182 \"content\": \"我是 disabled 按钮，我被禁用了\""
+                - generic [ref=e1321]: "183 },"
+                - generic [ref=e1322]: "184 \"behaviors\": ["
+                - generic [ref=e1323]: "185 {"
+                - generic [ref=e1324]: "186 \"type\": \"open_url\","
+                - generic [ref=e1325]: "187 \"default_url\": \"https://open.feishu.cn/document\","
+                - generic [ref=e1326]: "188 \"android_url\": \"https://developer.android.com/\","
+                - generic [ref=e1327]: "189 \"ios_url\": \"lark://msgcard/unsupported_action\","
+                - generic [ref=e1328]: "190 \"pc_url\": \"https://www.windows.com\""
+                - generic [ref=e1329]: "191 }"
+                - generic [ref=e1330]: 192 ]
+                - generic [ref=e1331]: "193 }"
+                - generic [ref=e1332]: 194 ]
+                - generic [ref=e1333]: "195 }"
+                - generic [ref=e1334]: 196 ]
+                - generic [ref=e1335]: "197 }"
+                - generic [ref=e1336]: 198 ]
+                - generic [ref=e1337]: "199 }"
+        - generic [ref=e1339]:
+          - generic [ref=e1340]: 遇到问题需要帮助？问问
+          - generic [ref=e1341] [cursor=pointer]:
+            - img [ref=e1343]
+            - generic [ref=e1347]: 开放平台智能助手
+        - generic [ref=e1348]:
+          - link "上一篇：输入框" [ref=e1349] [cursor=pointer]:
+            - /url: /document/feishu-cards/card-components/interactive-components/input
+            - img [ref=e1350]
+            - generic [ref=e1352]: 上一篇：输入框
+          - link "下一篇：折叠按钮组" [ref=e1353] [cursor=pointer]:
+            - /url: /document/feishu-cards/card-components/interactive-components/overflow
+            - generic [ref=e1354]: 下一篇：折叠按钮组
+            - img [ref=e1355]
+  - generic:
+    - generic:
+      - generic:
+        - img
+      - text: 技术支持
+    - generic:
+      - generic:
+        - img
+      - text: 收起
+  - generic [ref=e1359] [cursor=pointer]:
+    - img [ref=e1361]
+    - text: 展开

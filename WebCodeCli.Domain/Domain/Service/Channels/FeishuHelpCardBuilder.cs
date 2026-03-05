@@ -1,4 +1,7 @@
 using System.Text.Json;
+using FeishuNetSdk.CallbackEvents;
+using FeishuNetSdk.Extensions;
+using FeishuNetSdk.Im.Dtos;
 using WebCodeCli.Domain.Domain.Model.Channels;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
@@ -9,8 +12,210 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 /// </summary>
 public class FeishuHelpCardBuilder
 {
+    // ========== 新的实现：使用 ElementsCardV2Dto 和 SetCard 扩展方法 ==========
+
     /// <summary>
-    /// 构建命令选择卡片（卡片1）
+    /// 构建命令选择卡片（卡片1）- 使用 ElementsCardV2Dto
+    /// </summary>
+    public ElementsCardV2Dto BuildCommandListCardV2(List<FeishuCommandCategory> categories, bool showRefreshButton = true)
+    {
+        var elements = new List<object>();
+
+        // 更新按钮 - 使用 column_set + button 而非 action 标签
+        if (showRefreshButton)
+        {
+            elements.Add(new
+            {
+                tag = "column_set",
+                flex_mode = "none",
+                background_style = "default",
+                columns = new[]
+                {
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new[]
+                        {
+                            new
+                            {
+                                tag = "button",
+                                text = new { tag = "plain_text", content = "🔄 更新命令列表" },
+                                type = "default",
+                                value = JsonSerializer.Serialize(new { action = "refresh_commands" })
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 每个分组一个 overflow
+        foreach (var category in categories)
+        {
+            if (category.Commands.Count == 0)
+                continue;
+
+            var options = category.Commands.Select(cmd => new
+            {
+                text = new { tag = "plain_text", content = cmd.Name },
+                value = JsonSerializer.Serialize(new { action = "select_command", command_id = cmd.Id })
+            }).ToArray();
+
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "lark_md", content = $"**{category.Name}**" },
+                extra = new
+                {
+                    tag = "overflow",
+                    options = options
+                }
+            });
+        }
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = "🤖 Claude Code CLI 命令帮助" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    /// <summary>
+    /// 构建执行卡片（卡片2）- 使用 ElementsCardV2Dto
+    /// </summary>
+    public ElementsCardV2Dto BuildExecuteCardV2(FeishuCommand command)
+    {
+        var elements = new List<object>
+        {
+            new DivElement().SetText(new LarkMdElement($"**📝 命令说明：**\n{command.Description}")),
+            new DivElement().SetText(new LarkMdElement($"**💡 用法示例：**\n`{command.Usage}`")),
+            new HrElement(),
+            // 命令输入框
+            new
+            {
+                tag = "input",
+                input_type = "text",
+                name = "command_input",
+                label = new { tag = "plain_text", content = "点编辑后enter发送" },
+                placeholder = new { tag = "plain_text", content = "编辑命令..." },
+                default_value = command.Name.StartsWith("/") ? command.Name : $"claude {command.Name}",
+                behaviors = new[]
+                {
+                    new{
+                        type = "callback",
+                        value = new {
+                            // 回传交互数据。支持 object 数据类型。开放平台 SDK 仅支持 object 类型的回传交互数据。
+                            action = "execute_command" // 自定义的请求回调交互参数。
+                        }
+                    }
+                }
+            },
+            new ColumnSetElement
+            {
+                FlexMode = "none",
+                BackgroundStyle = "default",
+                Columns = new[]
+                {
+                    new ColumnElement
+                    {
+                        Width = "weighted",
+                        Weight = 1,
+                        VerticalAlign = "top",
+                        Elements = new Element[]
+                        {
+                            new FormButtonElement(
+                                Name: "cancel_btn",
+                                Text: new PlainTextElement("❌ 返回"),
+                                Type: "default",
+                                ActionType: "request")
+                            {
+                                Behaviors = new Behaviors[]
+                                {
+                                    new CallbackBehaviors(new { action = "back_to_list" })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "purple",
+                Title = new HeaderTitleElement { Content = $"⚙️ 执行命令：{command.Name}" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    /// <summary>
+    /// 构建SDK类型的卡片响应（用于回调）- 使用 SetCard 扩展方法
+    /// </summary>
+    public CardActionTriggerResponseDto BuildCardActionResponseV2(ElementsCardV2Dto card, string toastMessage, string toastType = "info")
+    {
+        var response = new CardActionTriggerResponseDto();
+
+        if (!string.IsNullOrEmpty(toastMessage))
+        {
+            response.Toast = new CardActionTriggerResponseDto.ToastSuffix
+            {
+                Content = toastMessage,
+                Type = toastType switch
+                {
+                    "success" => CardActionTriggerResponseDto.ToastSuffix.ToastType.Success,
+                    "error" => CardActionTriggerResponseDto.ToastSuffix.ToastType.Error,
+                    "warning" => CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning,
+                    _ => CardActionTriggerResponseDto.ToastSuffix.ToastType.Info
+                }
+            };
+        }
+
+        if (card != null)
+        {
+            response.SetCard(card);
+        }
+
+        return response;
+    }
+
+    /// <summary>
+    /// 构建SDK类型的仅Toast响应（用于回调）
+    /// </summary>
+    public CardActionTriggerResponseDto BuildCardActionToastOnlyResponse(string toastMessage, string toastType = "info")
+    {
+        return BuildCardActionResponseV2(null!, toastMessage, toastType);
+    }
+
+    // ========== 原来的实现（用于初始发送卡片） ==========
+
+    /// <summary>
+    /// 构建命令选择卡片（卡片1）- 用于初始发送
     /// </summary>
     /// <param name="categories">命令分组列表</param>
     /// <param name="showRefreshButton">是否显示刷新按钮</param>
@@ -77,7 +282,7 @@ public class FeishuHelpCardBuilder
         var card = new
         {
             schema = "2.0",
-            config = new { enable_forward = true },
+            config = new { enable_forward = true, update_multi = true },
             header = new
             {
                 template = "blue",
@@ -94,92 +299,100 @@ public class FeishuHelpCardBuilder
     /// </summary>
     /// <param name="command">选中的命令</param>
     /// <returns>飞书卡片JSON</returns>
-    public string BuildExecuteCard(FeishuCommand command)
-    {
-        var elements = new List<object>
-        {
-            new
-            {
-                tag = "div",
-                text = new { tag = "lark_md", content = $"**📝 命令说明：**\n{command.Description}" }
-            },
-            new
-            {
-                tag = "div",
-                text = new { tag = "lark_md", content = $"**💡 用法示例：**\n`{command.Usage}`" }
-            },
-            new
-            {
-                tag = "hr"
-            },
-            new
-            {
-                tag = "input",
-                name = "command_input",
-                placeholder = "编辑命令...",
-                default_value = command.Name.StartsWith("/") ? command.Name : $"claude {command.Name}"
-            },
-            new
-            {
-                tag = "column_set",
-                flex_mode = "none",
-                background_style = "default",
-                columns = new[]
-                {
-                    new
-                    {
-                        tag = "column",
-                        width = "weighted",
-                        weight = 1,
-                        vertical_align = "top",
-                        elements = new[]
-                        {
-                            new
-                            {
-                                tag = "button",
-                                text = new { tag = "plain_text", content = "❌ 取消" },
-                                type = "default",
-                                action_type = "request",
-                                value = JsonSerializer.Serialize(new { action = "back_to_list" })
-                            }
-                        }
-                    },
-                    new
-                    {
-                        tag = "column",
-                        width = "weighted",
-                        weight = 1,
-                        vertical_align = "top",
-                        elements = new[]
-                        {
-                            new
-                            {
-                                tag = "button",
-                                text = new { tag = "plain_text", content = "✅ 执行命令" },
-                                type = "primary",
-                                action_type = "form_submit",
-                                value = JsonSerializer.Serialize(new { action = "execute_command" })
-                            }
-                        }
-                    }
-                }
-            }
-        };
+    // public string BuildExecuteCard(FeishuCommand command)
+    // {
+    //     var formElements = new List<object>
+    //     {
+    //         new
+    //         {
+    //             tag = "div",
+    //             text = new { tag = "lark_md", content = $"**📝 命令说明：**\n{command.Description}" }
+    //         },
+    //         new
+    //         {
+    //             tag = "div",
+    //             text = new { tag = "lark_md", content = $"**💡 用法示例：**\n`{command.Usage}`" }
+    //         },
+    //         new { tag = "hr" },
+    //         // 使用匿名对象创建输入框（因为需要 placeholder 和 default_value 属性）
+    //         new
+    //         {
+    //             tag = "input",
+    //             name = "command_input",
+    //             placeholder = "编辑命令...",
+    //             default_value = command.Name.StartsWith("/") ? command.Name : $"claude {command.Name}"
+    //         },
+    //         new
+    //         {
+    //             tag = "column_set",
+    //             flex_mode = "none",
+    //             background_style = "default",
+    //             columns = new[]
+    //             {
+    //                 new
+    //                 {
+    //                     tag = "column",
+    //                     width = "weighted",
+    //                     weight = 1,
+    //                     vertical_align = "top",
+    //                     elements = new[]
+    //                     {
+    //                         // 使用 SDK 的表单按钮
+    //                         new FormButtonElement(
+    //                             Name: "cancel_button",
+    //                             Text: new PlainTextElement("❌ 取消"),
+    //                             Type: "default",
+    //                             ActionType: "request",
+    //                             Behaviors: new Behaviors[]
+    //                             {
+    //                                 new CallbackBehaviors(
+    //                                     Value: JsonSerializer.Serialize(new { action = "back_to_list" })
+    //                                 )
+    //                             }
+    //                         )
+    //                     }
+    //                 },
+    //                 new
+    //                 {
+    //                     tag = "column",
+    //                     width = "weighted",
+    //                     weight = 1,
+    //                     vertical_align = "top",
+    //                     elements = new[]
+    //                     {
+    //                         // 使用 SDK 的表单按钮
+    //                         new FormButtonElement(
+    //                             Name: "execute_button",
+    //                             Text: new PlainTextElement("✅ 执行命令"),
+    //                             Type: "primary",
+    //                             ActionType: "form_submit"
+    //                         )
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     };
 
-        var card = new
-        {
-            schema = "2.0",
-            config = new { enable_forward = true },
-            header = new
-            {
-                template = "purple",
-                title = new { tag = "plain_text", content = $"⚙️ 执行命令：{command.Name}" }
-            },
-            body = new { elements = elements }
-        };
+    //     // 使用 SDK 的 FormContainerElement
+    //     var formContainer = new FormContainerElement(
+    //         Name: "execute_command_form",
+    //         Elements: formElements.ToArray()
+    //     );
 
-        return JsonSerializer.Serialize(card);
-    }
+    //     var card = new
+    //     {
+    //         schema = "2.0",
+    //         config = new { enable_forward = true, update_multi = true },
+    //         header = new
+    //         {
+    //             template = "purple",
+    //             title = new { tag = "plain_text", content = $"⚙️ 执行命令：{command.Name}" }
+    //         },
+    //         body = new { elements = new object[] { formContainer } }
+    //     };
+
+    //     return JsonSerializer.Serialize(card);
+    // }
 
     /// <summary>
     /// 构建过滤后的搜索卡片
@@ -314,4 +527,5 @@ public class FeishuHelpCardBuilder
             }
         };
     }
+
 }
