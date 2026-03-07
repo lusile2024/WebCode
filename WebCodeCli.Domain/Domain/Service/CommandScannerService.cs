@@ -180,7 +180,75 @@ public class CommandScannerService : IDisposable
 
     private void StartFileSystemWatchers()
     {
-        // 后续实现
+        foreach (var directory in _scanDirectories.Where(Directory.Exists))
+        {
+            try
+            {
+                var watcher = new FileSystemWatcher(directory)
+                {
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size,
+                    Filter = "*.md",
+                    IncludeSubdirectories = true,
+                    EnableRaisingEvents = true
+                };
+
+                watcher.Created += OnFileChanged;
+                watcher.Changed += OnFileChanged;
+                watcher.Deleted += OnFileChanged;
+                watcher.Renamed += OnFileRenamed;
+
+                _watchers.Add(watcher);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"启动目录监听失败 {directory}: {ex.Message}");
+            }
+        }
+    }
+
+    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    {
+        try
+        {
+            // 防抖处理：延迟500ms处理，避免频繁修改导致多次扫描
+            Task.Delay(500).Wait();
+
+            if (File.Exists(e.FullPath))
+            {
+                // 文件新增或修改，重新解析
+                var commandInfo = ParseMarkdownDocument(e.FullPath);
+                if (commandInfo != null)
+                {
+                    _commandCache.AddOrUpdate(commandInfo.Name, commandInfo, (k, v) => commandInfo);
+                }
+            }
+            else
+            {
+                // 文件删除，从缓存移除
+                var toRemove = _commandCache.Where(c => c.Value.SourcePath.Equals(e.FullPath, StringComparison.OrdinalIgnoreCase)).ToList();
+                foreach (var item in toRemove)
+                {
+                    _commandCache.TryRemove(item.Key, out _);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"处理文件变更失败 {e.FullPath}: {ex.Message}");
+        }
+    }
+
+    private void OnFileRenamed(object sender, RenamedEventArgs e)
+    {
+        // 先删除旧文件
+        var toRemove = _commandCache.Where(c => c.Value.SourcePath.Equals(e.OldFullPath, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var item in toRemove)
+        {
+            _commandCache.TryRemove(item.Key, out _);
+        }
+
+        // 再处理新文件
+        OnFileChanged(sender, new FileSystemEventArgs(WatcherChangeTypes.Changed, Path.GetDirectoryName(e.FullPath)!, Path.GetFileName(e.FullPath)));
     }
 
     public void Dispose()
