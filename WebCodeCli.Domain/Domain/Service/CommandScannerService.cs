@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Text.RegularExpressions;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Domain.Model;
 using Microsoft.Extensions.DependencyInjection;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace WebCodeCli.Domain.Domain.Service;
 
@@ -84,8 +87,95 @@ public class CommandScannerService : IDisposable
 
     private CommandInfo? ParseMarkdownDocument(string filePath)
     {
-        // 后续实现，先返回null
-        return null;
+        var content = File.ReadAllText(filePath);
+        var commandInfo = new CommandInfo
+        {
+            SourcePath = filePath,
+            LastUpdated = File.GetLastWriteTime(filePath),
+            Category = GetCategoryFromPath(filePath)
+        };
+
+        // 匹配YAML Front Matter
+        var yamlMatch = Regex.Match(content, @"^---\s*\n(.*?)\n---\s*\n", RegexOptions.Singleline);
+        if (yamlMatch.Success)
+        {
+            try
+            {
+                var yamlContent = yamlMatch.Groups[1].Value;
+                var deserializer = new DeserializerBuilder()
+                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .IgnoreUnmatchedProperties()
+                    .Build();
+
+                var frontMatter = deserializer.Deserialize<SkillYamlFrontMatter>(yamlContent);
+                commandInfo.Name = frontMatter.Name;
+                commandInfo.Description = frontMatter.Description;
+                commandInfo.Usage = frontMatter.Usage;
+
+                // 移除YAML部分，继续解析正文
+                content = content.Substring(yamlMatch.Length);
+            }
+            catch
+            {
+                // YAML解析失败，继续用正文提取
+            }
+        }
+
+        // 如果没有从YAML获取到名称，从文件名提取
+        if (string.IsNullOrWhiteSpace(commandInfo.Name))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(filePath);
+            commandInfo.Name = $"/{fileName.ToLowerInvariant().Replace(" ", "-")}";
+        }
+
+        // 如果没有从YAML获取到描述，提取正文第一段
+        if (string.IsNullOrWhiteSpace(commandInfo.Description))
+        {
+            var paragraphs = Regex.Split(content, @"\n\s*\n", RegexOptions.Multiline)
+                .Where(p => !string.IsNullOrWhiteSpace(p) && !p.StartsWith("#"))
+                .ToList();
+
+            if (paragraphs.Any())
+            {
+                commandInfo.Description = paragraphs.First().Trim().Replace("\n", " ");
+            }
+        }
+
+        // 提取使用示例：查找所有bash/shell代码块
+        if (string.IsNullOrWhiteSpace(commandInfo.Usage))
+        {
+            var codeBlockMatches = Regex.Matches(content, @"```(bash|shell)\s*\n(.*?)\n```", RegexOptions.Singleline);
+            var usages = new List<string>();
+            foreach (Match match in codeBlockMatches)
+            {
+                usages.Add(match.Groups[2].Value.Trim());
+            }
+            commandInfo.Usage = string.Join("\n", usages.Take(3)); // 最多取3个示例
+        }
+
+        // 验证必填字段
+        if (string.IsNullOrWhiteSpace(commandInfo.Name) || string.IsNullOrWhiteSpace(commandInfo.Description))
+        {
+            return null;
+        }
+
+        return commandInfo;
+    }
+
+    private string GetCategoryFromPath(string filePath)
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var globalSkillsPath = Path.Combine(userProfile, ".claude", "skills").ToLowerInvariant();
+        var globalPluginsPath = Path.Combine(userProfile, ".claude", "plugins").ToLowerInvariant();
+        var projectSkillsPath = Path.Combine(AppContext.BaseDirectory, ".claude", "skills").ToLowerInvariant();
+
+        var lowerPath = filePath.ToLowerInvariant();
+
+        if (lowerPath.StartsWith(globalSkillsPath)) return "全局技能";
+        if (lowerPath.StartsWith(globalPluginsPath)) return "插件命令";
+        if (lowerPath.StartsWith(projectSkillsPath)) return "项目技能";
+
+        return "其他命令";
     }
 
     private void StartFileSystemWatchers()
