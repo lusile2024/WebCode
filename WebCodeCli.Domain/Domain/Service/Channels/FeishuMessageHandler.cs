@@ -301,6 +301,11 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
         try
         {
+            // 自动刷新命令列表，确保获取最新的技能和插件
+            _logger.LogInformation("🔥 [FeishuHelp] 开始刷新命令列表...");
+            await _commandService.RefreshCommandsAsync();
+            _logger.LogInformation("✅ [FeishuHelp] 命令列表刷新完成");
+
             List<FeishuCommandCategory> categories;
             string cardJson;
 
