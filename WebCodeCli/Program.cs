@@ -144,6 +144,14 @@ builder.Logging.AddSerilog(Log.Logger);
 
 var app = builder.Build();
 
+// 初始化命令扫描服务
+using (var scope = app.Services.CreateScope())
+{
+    var commandScanner = scope.ServiceProvider.GetRequiredService<CommandScannerService>();
+    commandScanner.Initialize();
+    Log.Information("✅ CommandScannerService 初始化完成，命令扫描和监听已启动");
+}
+
 // 启用响应压缩（必须在其他中间件之前）
 app.UseResponseCompression();
 
