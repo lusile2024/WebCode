@@ -373,3 +373,4 @@ FodyWeavers.xsd
 webcodecli-workspaces
 /webcodecli-logs
 .kiro
+.worktrees/
