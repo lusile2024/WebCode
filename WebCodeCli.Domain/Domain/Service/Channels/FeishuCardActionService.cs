@@ -508,7 +508,11 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，切换失败", "error");
         }
 
-        var success = _feishuChannel.SwitchCurrentSession(chatKey, sessionId);
+        // 统一使用chatId作为key（去掉AppId前缀，和普通消息保持一致）
+        var chatKeyParts = chatKey.Split(':');
+        var actualChatKey = chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
+
+        var success = _feishuChannel.SwitchCurrentSession(actualChatKey, sessionId);
         if (success)
         {
             var workspacePath = _cliExecutor.GetSessionWorkspacePath(sessionId);
@@ -530,7 +534,11 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，关闭失败", "error");
         }
 
-        var success = _feishuChannel.CloseSession(chatKey, sessionId);
+        // 统一使用chatId作为key（去掉AppId前缀，和普通消息保持一致）
+        var chatKeyParts = chatKey.Split(':');
+        var actualChatKey = chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
+
+        var success = _feishuChannel.CloseSession(actualChatKey, sessionId);
         if (success)
         {
             return _cardBuilder.BuildCardActionToastOnlyResponse(
@@ -551,13 +559,10 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，创建失败", "error");
         }
 
-        // 解析chatId从chatKey（格式：feishu:{AppId}:{ChatId}）
-        var chatIdParts = chatKey.Split(':');
-        if (chatIdParts.Length < 3)
-        {
-            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ chatKey格式错误", "error");
-        }
-        var actualChatId = chatIdParts[2];
+        // 统一使用chatId作为key（去掉AppId前缀，和普通消息保持一致）
+        var chatKeyParts = chatKey.Split(':');
+        var actualChatKey = chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
+        var actualChatId = actualChatKey; // 现在chatKey就是chatId
 
         // 创建模拟消息对象用于创建新会话
         var mockMessage = new FeishuIncomingMessage
@@ -565,18 +570,14 @@ public class FeishuCardActionService
             ChatId = actualChatId,
             SenderName = "用户"
         };
+        _logger.LogInformation("🔍 [新建会话] 卡片回调ChatId={ChatId}, 实际使用ChatId={ActualChatId}", chatId, actualChatId);
 
-        // 创建新会话（使用私有方法，需要反射或者公开方法）
-        // 先切换到主程序集，调用私有方法
-        var method = typeof(FeishuChannelService).GetMethod("CreateNewSession",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        if (method == null)
-        {
-            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法创建会话", "error");
-        }
-
-        var newSessionId = (string)method.Invoke(_feishuChannel, new object[] { mockMessage, null! })!;
+        // 创建新会话（使用公开方法）
+        var newSessionId = _feishuChannel.CreateNewSession(mockMessage, null);
         var workspacePath = _cliExecutor.GetSessionWorkspacePath(newSessionId);
+
+        // 设置新会话为当前会话（使用统一的chatKey）
+        _feishuChannel.SwitchCurrentSession(actualChatKey, newSessionId);
 
         return _cardBuilder.BuildCardActionToastOnlyResponse(
             $"✅ 已创建新会话 {newSessionId[..8]}...\n📂 工作目录: {workspacePath}\n已自动切换到新会话",
@@ -598,14 +599,8 @@ public class FeishuCardActionService
             // 获取appId（需要从FeishuOptions获取，这里我们先构造chatKey）
             // 先获取FeishuOptions，通过_serviceProvider或者直接从_feishuChannel获取？
             // 我们可以通过反射获取_feishuChannel的_options字段
-            var optionsField = typeof(FeishuChannelService).GetField("_options",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (optionsField == null)
-            {
-                return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法获取配置信息", "error");
-            }
-            var options = (Common.Options.FeishuOptions)optionsField.GetValue(_feishuChannel)!;
-            var chatKey = $"feishu:{options.AppId}:{chatId}";
+            // 直接使用chatId作为key（和普通消息保持一致，不需要AppId前缀）
+            var chatKey = chatId.ToLowerInvariant();
 
             var sessions = _feishuChannel.GetChatSessions(chatKey);
             var currentSessionId = _feishuChannel.GetCurrentSession(chatKey);
@@ -673,7 +668,7 @@ public class FeishuCardActionService
                 elements.Add(new
                 {
                     tag = "div",
-                    text = new { tag = "plain_text", content = "暂无会话，发送任意消息将自动创建新会话。" }
+                    text = new { tag = "plain_text", content = "暂无会话，请点击下方「新建会话」按钮创建会话。" }
                 });
             }
 

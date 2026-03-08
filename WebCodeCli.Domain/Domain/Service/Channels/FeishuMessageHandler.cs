@@ -98,14 +98,12 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         _logger.LogInformation("🔥 [Feishu] 消息详情: ChatId={ChatId}, ChatType={ChatType}, MessageType={MessageType}, Content={Content}",
             message.ChatId, message.ChatType, message.MessageType, message.Content);
 
-        // 去重检查 - 使用 MessageId 而非 EventId
-        if (_processedMessages.ContainsKey(message.MessageId))
+        // 去重检查 - 使用 MessageId 而非 EventId，原子操作避免并发重复处理
+        if (!_processedMessages.TryAdd(message.MessageId, DateTime.UtcNow))
         {
             _logger.LogDebug("Duplicate message ignored: {MessageId}", message.MessageId);
             return;
         }
-
-        _processedMessages.TryAdd(message.MessageId, DateTime.UtcNow);
 
         // 清理过期的消息记录（超过 15 分钟的记录）
         CleanupOldMessages();
@@ -372,7 +370,8 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     {
         try
         {
-            var chatKey = $"feishu:{_options.AppId}:{chatId}";
+            // 直接使用chatId作为key（统一规则，去掉AppId前缀）
+            var chatKey = chatId.ToLowerInvariant();
             var sessions = _feishuChannel.GetChatSessions(chatKey);
             var currentSessionId = _feishuChannel.GetCurrentSession(chatKey);
 
@@ -454,7 +453,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 elements.Add(new
                 {
                     tag = "div",
-                    text = new { tag = "plain_text", content = "暂无会话，发送任意消息将自动创建新会话。" }
+                    text = new { tag = "plain_text", content = "暂无会话，请点击下方「新建会话」按钮创建会话。" }
                 });
             }
 

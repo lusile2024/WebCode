@@ -34,7 +34,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     // 默认使用的 CLI 工具 ID（可配置）
     private const string DefaultToolId = "claude-code";
 
-    // 飞书聊天会话到应用会话的多会话映射
+    // 飞书聊天会话到应用会话的多会话映射（内存缓存，数据库持久化）
     /// <summary>
     /// 聊天ID到会话ID列表的映射
     /// </summary>
@@ -197,6 +197,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
     }
 
+
     /// <summary>
     /// 停止服务
     /// </summary>
@@ -222,8 +223,18 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 message.ChatId,
                 message.Content);
 
-            // 获取或创建当前会话
-            var sessionId = GetOrCreateCurrentSession(message);
+            string sessionId;
+            try
+            {
+                // 获取当前会话（无会话时抛出异常）
+                sessionId = GetCurrentSession(message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // 没有会话时提示用户
+                await ReplyMessageAsync(message.MessageId, $"⚠️ {ex.Message}");
+                return;
+            }
 
             // 添加用户消息到会话
             _chatSessionService.AddMessage(sessionId, new ChatMessage
@@ -266,15 +277,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 获取或创建当前会话
-    /// 如果聊天没有活动会话，则创建一个新会话
+    /// 获取当前会话
+    /// 如果聊天没有活动会话，则抛出异常提示用户手动创建
     /// </summary>
     /// <param name="message">飞书 incoming 消息</param>
     /// <returns>会话ID</returns>
-    private string GetOrCreateCurrentSession(FeishuIncomingMessage message)
+    /// <exception cref="InvalidOperationException">如果没有当前会话则抛出</exception>
+    private string GetCurrentSession(FeishuIncomingMessage message)
     {
-        // 使用飞书聊天 ID 作为映射键
-        var chatKey = $"feishu:{_options.AppId}:{message.ChatId}";
+        // 直接使用飞书聊天ID作为映射键（统一小写避免大小写敏感问题，去掉AppId前缀减少冲突）
+        var chatKey = message.ChatId.ToLowerInvariant();
+
+        _logger.LogInformation("🔍 [会话匹配] 消息ChatId={ChatId}, 生成ChatKey={ChatKey}, 当前所有会话键: {Keys}",
+            message.ChatId, chatKey, string.Join(", ", _chatCurrentSession.Keys));
 
         // 如果已有当前会话，返回并更新活动时间
         if (_chatCurrentSession.TryGetValue(chatKey, out var currentSessionId))
@@ -284,8 +299,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             return currentSessionId;
         }
 
-        // 没有当前会话，创建新会话
-        return CreateNewSession(message);
+        // 没有当前会话，抛出异常提示用户手动创建
+        throw new InvalidOperationException("当前没有可用会话，请先发送 /feishusessions 命令创建或选择会话。");
     }
 
     /// <summary>
@@ -294,9 +309,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <param name="message">飞书 incoming 消息</param>
     /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
     /// <returns>新会话ID</returns>
-    private string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null)
+    public string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null)
     {
-        var chatKey = $"feishu:{_options.AppId}:{message.ChatId}";
+        // 直接使用飞书聊天ID作为映射键（统一小写避免大小写敏感问题）
+        var chatKey = message.ChatId.ToLowerInvariant();
 
         // 创建新会话 ID（使用 GUID）
         var newSessionId = Guid.NewGuid().ToString();

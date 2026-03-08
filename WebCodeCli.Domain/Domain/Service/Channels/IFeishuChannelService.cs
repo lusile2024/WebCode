@@ -82,4 +82,12 @@ public interface IFeishuChannelService
     /// <param name="sessionId">要关闭的会话ID</param>
     /// <returns>是否关闭成功</returns>
     bool CloseSession(string chatKey, string sessionId);
+
+    /// <summary>
+    /// 创建新会话
+    /// </summary>
+    /// <param name="message">飞书 incoming 消息</param>
+    /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
+    /// <returns>新会话ID</returns>
+    string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null);
 }
