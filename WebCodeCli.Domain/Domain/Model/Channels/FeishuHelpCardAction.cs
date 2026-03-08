@@ -26,4 +26,16 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("command")]
     public string? Command { get; set; }
+
+    /// <summary>
+    /// 会话ID（会话管理时使用）
+    /// </summary>
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; set; }
+
+    /// <summary>
+    /// 聊天Key（会话管理时使用，格式：feishu:{AppId}:{ChatId}）
+    /// </summary>
+    [JsonPropertyName("chat_key")]
+    public string? ChatKey { get; set; }
 }

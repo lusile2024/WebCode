@@ -21,7 +21,7 @@ public class FeishuHelpCardBuilder
     {
         var elements = new List<object>();
 
-        // 更新按钮 - 使用 column_set + button 而非 action 标签
+        // 顶部操作按钮组
         if (showRefreshButton)
         {
             elements.Add(new
@@ -45,6 +45,23 @@ public class FeishuHelpCardBuilder
                                 text = new { tag = "plain_text", content = "🔄 更新命令列表" },
                                 type = "default",
                                 value = JsonSerializer.Serialize(new { action = "refresh_commands" })
+                            }
+                        }
+                    },
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new[]
+                        {
+                            new
+                            {
+                                tag = "button",
+                                text = new { tag = "plain_text", content = "📋 会话管理" },
+                                type = "primary",
+                                value = JsonSerializer.Serialize(new { action = "open_session_manager" })
                             }
                         }
                     }
@@ -224,7 +241,7 @@ public class FeishuHelpCardBuilder
     {
         var elements = new List<object>();
 
-        // 更新按钮 - 使用 column_set + button 而非 action 标签
+        // 顶部操作按钮组
         if (showRefreshButton)
         {
             elements.Add(new
@@ -248,6 +265,23 @@ public class FeishuHelpCardBuilder
                                 text = new { tag = "plain_text", content = "🔄 更新命令列表" },
                                 type = "default",
                                 value = JsonSerializer.Serialize(new { action = "refresh_commands" })
+                            }
+                        }
+                    },
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new[]
+                        {
+                            new
+                            {
+                                tag = "button",
+                                text = new { tag = "plain_text", content = "📋 会话管理" },
+                                type = "primary",
+                                value = JsonSerializer.Serialize(new { action = "open_session_manager" })
                             }
                         }
                     }

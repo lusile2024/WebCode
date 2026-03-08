@@ -45,4 +45,41 @@ public interface IFeishuChannelService
     /// </summary>
     /// <param name="message">收到的消息</param>
     Task HandleIncomingMessageAsync(FeishuIncomingMessage message);
+
+    /// <summary>
+    /// 获取聊天的当前活跃会话ID
+    /// </summary>
+    /// <param name="chatKey">聊天键（格式：feishu:{AppId}:{ChatId}）</param>
+    /// <returns>当前会话ID，如果不存在则返回null</returns>
+    string? GetCurrentSession(string chatKey);
+
+    /// <summary>
+    /// 获取会话的最后活跃时间
+    /// </summary>
+    /// <param name="sessionId">会话ID</param>
+    /// <returns>最后活跃时间，如果会话不存在则返回null</returns>
+    DateTime? GetSessionLastActiveTime(string sessionId);
+
+    /// <summary>
+    /// 获取聊天的所有会话ID列表
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <returns>会话ID列表</returns>
+    List<string> GetChatSessions(string chatKey);
+
+    /// <summary>
+    /// 切换聊天的当前活跃会话
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <param name="sessionId">要切换到的会话ID</param>
+    /// <returns>是否切换成功</returns>
+    bool SwitchCurrentSession(string chatKey, string sessionId);
+
+    /// <summary>
+    /// 关闭指定会话
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <param name="sessionId">要关闭的会话ID</param>
+    /// <returns>是否关闭成功</returns>
+    bool CloseSession(string chatKey, string sessionId);
 }

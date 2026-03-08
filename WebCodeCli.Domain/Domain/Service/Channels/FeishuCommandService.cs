@@ -56,12 +56,16 @@ public class FeishuCommandService
     }
 
     /// <summary>
-    /// 按分组组织命令
+    /// 按分组组织命令（仅保留需要的分组）
     /// </summary>
     public async Task<List<FeishuCommandCategory>> GetCategorizedCommandsAsync()
     {
+        // 只保留需要的分组
+        var allowedCategories = new[] { "core_session", "skills_project", "skills_global", "plugins" };
+
         var commands = await GetCommandsAsync();
         return commands
+            .Where(c => allowedCategories.Contains(c.Category))
             .GroupBy(c => c.Category)
             .Select(g => new FeishuCommandCategory
             {
@@ -69,7 +73,8 @@ public class FeishuCommandService
                 Name = GetCategoryName(g.Key),
                 Commands = g.ToList()
             })
-            .OrderBy(c => c.Id)
+            // 按指定顺序排序
+            .OrderBy(c => Array.IndexOf(allowedCategories, c.Id))
             .ToList();
     }
 
@@ -83,12 +88,16 @@ public class FeishuCommandService
             return await GetCategorizedCommandsAsync();
         }
 
+        // 只保留需要的分组
+        var allowedCategories = new[] { "core_session", "skills_project", "skills_global", "plugins" };
+
         var commands = await GetCommandsAsync();
         var lowerKeyword = keyword.ToLowerInvariant();
         var filtered = commands.Where(c =>
-            c.Name.ToLowerInvariant().Contains(lowerKeyword) ||
+            allowedCategories.Contains(c.Category) &&
+            (c.Name.ToLowerInvariant().Contains(lowerKeyword) ||
             c.Description.ToLowerInvariant().Contains(lowerKeyword) ||
-            c.Id.ToLowerInvariant().Contains(lowerKeyword))
+            c.Id.ToLowerInvariant().Contains(lowerKeyword)))
             .ToList();
 
         return filtered
@@ -99,7 +108,8 @@ public class FeishuCommandService
                 Name = GetCategoryName(g.Key),
                 Commands = g.ToList()
             })
-            .OrderBy(c => c.Id)
+            // 按指定顺序排序
+            .OrderBy(c => Array.IndexOf(allowedCategories, c.Id))
             .ToList();
     }
 
@@ -143,37 +153,11 @@ public class FeishuCommandService
     {
         return new List<FeishuCommand>
         {
-            // 调试和输出
-            new() { Id = "debug", Name = "-d, --debug", Description = "启用调试模式", Usage = "claude --debug", Category = "core_debug" },
-            new() { Id = "verbose", Name = "--verbose", Description = "详细模式", Usage = "claude --verbose", Category = "core_debug" },
-            new() { Id = "print", Name = "-p, --print", Description = "打印响应并退出", Usage = "claude --print \"你的提示\"", Category = "core_debug" },
-            new() { Id = "output_format", Name = "--output-format", Description = "输出格式：text, json, stream-json", Usage = "claude --print --output-format json", Category = "core_debug" },
-
-            // 权限和安全
-            new() { Id = "skip_permissions", Name = "--dangerously-skip-permissions", Description = "绕过所有权限检查", Usage = "claude --dangerously-skip-permissions", Category = "core_permission" },
-            new() { Id = "permission_mode", Name = "--permission-mode", Description = "权限模式：acceptEdits, bypassPermissions, default, plan", Usage = "claude --permission-mode plan", Category = "core_permission" },
-
             // 会话管理
-            new() { Id = "continue", Name = "-c, --continue", Description = "继续最近的对话", Usage = "claude --continue", Category = "core_session" },
-            new() { Id = "resume", Name = "-r, --resume", Description = "恢复指定对话", Usage = "claude --resume <session-id>", Category = "core_session" },
-            new() { Id = "fork_session", Name = "--fork-session", Description = "恢复时创建新会话", Usage = "claude --resume --fork-session", Category = "core_session" },
-
-            // 模型选择
-            new() { Id = "model", Name = "--model", Description = "选择模型：sonnet, opus, haiku", Usage = "claude --model sonnet", Category = "core_model" },
-            new() { Id = "fallback_model", Name = "--fallback-model", Description = "模型过载时的回退模型", Usage = "claude --fallback-model haiku", Category = "core_model" },
-
-            // 其他选项
-            new() { Id = "system_prompt", Name = "--system-prompt", Description = "自定义系统提示", Usage = "claude --system-prompt \"你是一个程序员\"", Category = "core_other" },
-            new() { Id = "add_dir", Name = "--add-dir", Description = "添加可访问目录", Usage = "claude --add-dir /path/to/project", Category = "core_other" },
-            new() { Id = "version", Name = "-v, --version", Description = "输出版本号", Usage = "claude --version", Category = "core_other" },
-            new() { Id = "help", Name = "-h, --help", Description = "显示帮助", Usage = "claude --help", Category = "core_other" },
-
-            // 管理命令
-            new() { Id = "cmd_mcp", Name = "mcp", Description = "配置和管理 MCP 服务器", Usage = "claude mcp", Category = "core_commands" },
-            new() { Id = "cmd_plugin", Name = "plugin", Description = "管理 Claude Code 插件", Usage = "claude plugin", Category = "core_commands" },
-            new() { Id = "cmd_doctor", Name = "doctor", Description = "检查 Claude Code 健康状况", Usage = "claude doctor", Category = "core_commands" },
-            new() { Id = "cmd_update", Name = "update", Description = "检查更新并安装", Usage = "claude update", Category = "core_commands" },
-            new() { Id = "cmd_install", Name = "install", Description = "安装 Claude Code", Usage = "claude install stable", Category = "core_commands" },
+            new() { Id = "feishusessions", Name = "/feishusessions", Description = "飞书会话管理", Usage = "发送 /feishusessions 打开会话管理卡片，支持切换、关闭、新建会话", Category = "core_session" },
+            new() { Id = "init", Name = "/init", Description = "初始化当前会话工作环境", Usage = "发送 /init 自动检测并初始化项目环境，安装依赖", Category = "core_session" },
+            new() { Id = "clear", Name = "/clear", Description = "清空当前会话上下文", Usage = "发送 /clear 清空当前会话的聊天历史和上下文记忆，不关闭会话", Category = "core_session" },
+            new() { Id = "compact", Name = "/compact", Description = "压缩会话历史", Usage = "发送 /compact 压缩当前会话历史记录，减少内存占用", Category = "core_session" }
         };
     }
 
@@ -297,12 +281,7 @@ public class FeishuCommandService
     {
         return categoryId switch
         {
-            "core_debug" => "📋 调试和输出",
-            "core_permission" => "🔐 权限和安全",
-            "core_session" => "💬 会话管理",
-            "core_model" => "🧠 模型选择",
-            "core_other" => "⚙️ 其他选项",
-            "core_commands" => "📦 管理命令",
+            "core_session" => "📋 会话管理",
             "skills_project" => "📁 项目技能",
             "skills_global" => "🌐 全局技能",
             "plugins" => "🔌 插件",

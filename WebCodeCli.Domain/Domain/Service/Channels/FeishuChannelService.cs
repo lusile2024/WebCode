@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
@@ -16,6 +18,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 /// 负责处理飞书消息发送、接收和流式回复
 /// 与 CliExecutorService 集成实现 AI 助手功能
 /// </summary>
+[ServiceDescription(typeof(IFeishuChannelService), ServiceLifetime.Singleton)]
 public class FeishuChannelService : BackgroundService, IFeishuChannelService
 {
     private readonly FeishuOptions _options;
@@ -31,13 +34,116 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     // 默认使用的 CLI 工具 ID（可配置）
     private const string DefaultToolId = "claude-code";
 
-    // 飞书聊天会话到应用会话的映射
-    private readonly Dictionary<string, string> _sessionMappings = new();
+    // 飞书聊天会话到应用会话的多会话映射
+    /// <summary>
+    /// 聊天ID到会话ID列表的映射
+    /// </summary>
+    private readonly ConcurrentDictionary<string, List<string>> _chatSessionList = new();
+
+    /// <summary>
+    /// 聊天ID到当前活动会话ID的映射
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _chatCurrentSession = new();
+
+    /// <summary>
+    /// 会话ID到最后活动时间的映射
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTime> _sessionLastActiveTime = new();
 
     /// <summary>
     /// 服务是否运行中
     /// </summary>
     public bool IsRunning => _isRunning;
+
+    /// <summary>
+    /// 获取聊天的当前活跃会话ID
+    /// </summary>
+    /// <param name="chatKey">聊天键（格式：feishu:{AppId}:{ChatId}）</param>
+    /// <returns>当前会话ID，如果不存在则返回null</returns>
+    public string? GetCurrentSession(string chatKey)
+    {
+        if (_chatCurrentSession.TryGetValue(chatKey, out var sessionId))
+        {
+            return sessionId;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 获取会话的最后活跃时间
+    /// </summary>
+    /// <param name="sessionId">会话ID</param>
+    /// <returns>最后活跃时间，如果会话不存在则返回null</returns>
+    public DateTime? GetSessionLastActiveTime(string sessionId)
+    {
+        if (_sessionLastActiveTime.TryGetValue(sessionId, out var lastActive))
+        {
+            return lastActive;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 获取聊天的所有会话ID列表
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <returns>会话ID列表</returns>
+    public List<string> GetChatSessions(string chatKey)
+    {
+        if (_chatSessionList.TryGetValue(chatKey, out var sessions))
+        {
+            return sessions.ToList();
+        }
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// 切换聊天的当前活跃会话
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <param name="sessionId">要切换到的会话ID</param>
+    /// <returns>是否切换成功</returns>
+    public bool SwitchCurrentSession(string chatKey, string sessionId)
+    {
+        if (_chatSessionList.TryGetValue(chatKey, out var sessions) && sessions.Contains(sessionId))
+        {
+            _chatCurrentSession[chatKey] = sessionId;
+            _sessionLastActiveTime[sessionId] = DateTime.UtcNow;
+            _logger.LogInformation("Switched chat {ChatKey} to session {SessionId}", chatKey, sessionId);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 关闭指定会话
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <param name="sessionId">要关闭的会话ID</param>
+    /// <returns>是否关闭成功</returns>
+    public bool CloseSession(string chatKey, string sessionId)
+    {
+        // 从会话列表移除
+        if (_chatSessionList.TryGetValue(chatKey, out var sessions))
+        {
+            sessions.Remove(sessionId);
+        }
+
+        // 如果关闭的是当前会话，清空当前会话
+        if (_chatCurrentSession.TryGetValue(chatKey, out var current) && current == sessionId)
+        {
+            _chatCurrentSession.Remove(chatKey, out _);
+        }
+
+        // 移除活跃时间记录
+        _sessionLastActiveTime.Remove(sessionId, out _);
+
+        // 清理工作目录
+        _cliExecutor.CleanupSessionWorkspace(sessionId);
+
+        _logger.LogInformation("Closed session {SessionId} for chat {ChatKey}", sessionId, chatKey);
+        return true;
+    }
 
     public FeishuChannelService(
         IOptions<FeishuOptions> options,
@@ -116,15 +222,15 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 message.ChatId,
                 message.Content);
 
-            // 获取或创建会话
-            var sessionId = GetOrCreateSession(message);
+            // 获取或创建当前会话
+            var sessionId = GetOrCreateCurrentSession(message);
 
             // 添加用户消息到会话
             _chatSessionService.AddMessage(sessionId, new ChatMessage
             {
                 Role = "user",
                 Content = message.Content,
-                CreatedAt = DateTime.Now
+                CreatedAt = DateTime.UtcNow
             });
 
             // 创建流式回复，立即显示"思考中"状态
@@ -160,22 +266,56 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 获取或创建会话
+    /// 获取或创建当前会话
+    /// 如果聊天没有活动会话，则创建一个新会话
     /// </summary>
-    private string GetOrCreateSession(FeishuIncomingMessage message)
+    /// <param name="message">飞书 incoming 消息</param>
+    /// <returns>会话ID</returns>
+    private string GetOrCreateCurrentSession(FeishuIncomingMessage message)
     {
         // 使用飞书聊天 ID 作为映射键
         var chatKey = $"feishu:{_options.AppId}:{message.ChatId}";
 
-        if (_sessionMappings.TryGetValue(chatKey, out var existingSessionId))
+        // 如果已有当前会话，返回并更新活动时间
+        if (_chatCurrentSession.TryGetValue(chatKey, out var currentSessionId))
         {
-            _logger.LogDebug("Using existing session: {SessionId} for chat: {ChatId}", existingSessionId, message.ChatId);
-            return existingSessionId;
+            _logger.LogDebug("Using current session: {SessionId} for chat: {ChatId}", currentSessionId, message.ChatId);
+            _sessionLastActiveTime[currentSessionId] = DateTime.UtcNow;
+            return currentSessionId;
         }
+
+        // 没有当前会话，创建新会话
+        return CreateNewSession(message);
+    }
+
+    /// <summary>
+    /// 创建新会话
+    /// </summary>
+    /// <param name="message">飞书 incoming 消息</param>
+    /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
+    /// <returns>新会话ID</returns>
+    private string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null)
+    {
+        var chatKey = $"feishu:{_options.AppId}:{message.ChatId}";
 
         // 创建新会话 ID（使用 GUID）
         var newSessionId = Guid.NewGuid().ToString();
-        _sessionMappings[chatKey] = newSessionId;
+
+        // 初始化聊天会话列表（如果不存在）
+        if (!_chatSessionList.TryGetValue(chatKey, out var sessionList))
+        {
+            sessionList = new List<string>();
+            _chatSessionList[chatKey] = sessionList;
+        }
+
+        // 添加新会话到列表
+        sessionList.Add(newSessionId);
+
+        // 设置为当前活动会话
+        _chatCurrentSession[chatKey] = newSessionId;
+
+        // 更新会话最后活动时间
+        _sessionLastActiveTime[newSessionId] = DateTime.UtcNow;
 
         _logger.LogInformation(
             "Created new session: {SessionId} for chat: {ChatId} (user: {UserName})",
@@ -185,6 +325,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         return newSessionId;
     }
+
 
     /// <summary>
     /// 执行 CLI 工具并流式更新卡片
@@ -294,8 +435,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 Content = finalOutput,
                 CliToolId = DefaultToolId,
                 IsCompleted = true,
-                CreatedAt = DateTime.Now
+                CreatedAt = DateTime.UtcNow
             });
+
+            // 更新会话最后活动时间
+            _sessionLastActiveTime[sessionId] = DateTime.UtcNow;
 
             _logger.LogInformation(
                 "CLI execution completed for message: {MessageId}, session: {SessionId}",
