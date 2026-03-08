@@ -130,7 +130,7 @@ public class FeishuHelpCardBuilder
                 name = "command_input",
                 label = new { tag = "plain_text", content = "点编辑后enter发送" },
                 placeholder = new { tag = "plain_text", content = "编辑命令..." },
-                default_value = command.Name.StartsWith("/") ? command.Name : $"claude {command.Name}",
+                default_value = command.Name,
                 behaviors = new[]
                 {
                     new{

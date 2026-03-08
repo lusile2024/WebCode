@@ -104,6 +104,14 @@ builder.Services.AddServicesFromAssemblies("WebCodeCli", "WebCodeCli.Domain");
 
 飞书渠道服务等继承自 `BackgroundService`，在应用启动时自动运行。
 
+### 命令自动扫描模式
+
+飞书命令服务会自动扫描全局技能、项目技能和插件目录下的Markdown文档，自动生成可用命令列表：
+- 扫描目录：`skills/`（全局）、`.claude/skills/`（项目）、`plugins/`（插件）
+- 支持的文档格式：`SKILL.md`、`COMMAND.md`、`*.command.md`、`README.md`
+- 自动解析YAML Front Matter和Markdown内容，提取命令名称、描述、用法等信息
+- 支持 `/feishuhelp` 命令手动刷新命令列表
+
 ## 关键文件
 
 | 文件路径 | 说明 |
@@ -113,6 +121,8 @@ builder.Services.AddServicesFromAssemblies("WebCodeCli", "WebCodeCli.Domain");
 | `WebCodeCli/Pages/CodeAssistant.razor.cs` | 桌面端主界面逻辑（2000+ 行）|
 | `WebCodeCli.Domain/Domain/Service/CliExecutorService.cs` | CLI 工具执行服务（核心引擎）|
 | `WebCodeCli.Domain/Domain/Service/Channels/FeishuChannelService.cs` | 飞书渠道服务 |
+| `WebCodeCli.Domain/Domain/Service/Channels/FeishuCommandService.cs` | 飞书命令管理服务（自动扫描技能/插件命令）|
+| `WebCodeCli.Domain/Domain/Service/Channels/FeishuHelpCardBuilder.cs` | 飞书帮助卡片构建服务 |
 
 ## 开发约定
 
@@ -121,52 +131,27 @@ builder.Services.AddServicesFromAssemblies("WebCodeCli", "WebCodeCli.Domain");
 - 配置通过 `IOptions&lt;T&gt;` 模式访问
 - 每个会话有独立的临时工作目录
 
+### 飞书命令开发约定
+
+创建新命令只需在对应目录下添加Markdown文档即可，无需修改代码：
+1. 全局技能：`skills/{技能名}/SKILL.md`
+2. 项目技能：`.claude/skills/{技能名}/SKILL.md`
+3. 插件命令：`plugins/{插件名}/COMMAND.md`
+
+文档格式要求：
+```markdown
 ---
+name: "/命令名"
+description: "命令功能描述"
+usage: "/命令名 [参数]"
+official: true
+---
+# 命令名称
 
-## 飞书卡片开发参考文档
+命令详细说明...
 
-### 核心规范
-| 文档名称 | 链接 |
-|---------|------|
-| 卡片JSON 2.0版本更新说明 | [卡片JSON-v2变更说明.md](./docs/feishu/cards/卡片JSON-v2变更说明.md) |
-| 卡片JSON 2.0结构 | https://open.feishu.cn/document/feishu-cards/card-json-v2-structure |
-| 卡片JSON 2.0版本组件概述 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/component-json-v2-overview |
-
-### 容器组件
-| 组件名称 | 链接 |
-|---------|------|
-| 分栏 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/column-set |
-| 表单容器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/form-container |
-| 交互容器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/interactive-container |
-| 折叠面板 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/collapsible-panel |
-
-### 展示组件
-| 组件名称 | 链接 |
-|---------|------|
-| 标题 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/title |
-| 普通文本 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/plain-text |
-| 富文本（Markdown） | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/rich-text |
-| 图片 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/image |
-| 多图混排 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/multi-image-laylout |
-| 人员 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/user-profile |
-| 人员列表 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/user-list |
-| 图表 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/chart |
-| 表格 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/table |
-| 音频 | https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/content-components/audio |
-| 分割线 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/divider |
-
-### 交互组件
-| 组件名称 | 链接 |
-|---------|------|
-| 输入框 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/input |
-| 按钮 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button |
-| 折叠按钮组 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/overflow |
-| 下拉选择-单选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/single-select-dropdown-menu |
-| 下拉选择-多选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/multi-select-dropdown-menu |
-| 人员选择-单选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/single-select-user-picker |
-| 人员选择-多选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/multi-select-user-picker |
-| 日期选择器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/date-picker |
-| 时间选择器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/time-selector |
-| 日期时间选择器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/date-time-picker |
-| 多图选择 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/image-picker |
-| 勾选器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/checker |
+## 示例
+```bash
+/命令名 参数
+```
+```
