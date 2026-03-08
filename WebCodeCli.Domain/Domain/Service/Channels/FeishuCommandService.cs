@@ -1,6 +1,9 @@
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using Microsoft.Extensions.Logging;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -14,10 +17,15 @@ public class FeishuCommandService
     private static List<FeishuCommand>? _cachedCommands;
     private static readonly object _lock = new();
     private readonly ILogger<FeishuCommandService> _logger;
+    private readonly IDeserializer _yamlDeserializer;
 
     public FeishuCommandService(ILogger<FeishuCommandService> logger)
     {
         _logger = logger;
+        _yamlDeserializer = new DeserializerBuilder()
+            .WithNamingConvention(CamelCaseNamingConvention.Instance)
+            .IgnoreUnmatchedProperties()
+            .Build();
     }
 
     /// <summary>
@@ -126,19 +134,49 @@ public class FeishuCommandService
 
         var commands = new List<FeishuCommand>();
 
-        // 1. 加载核心命令
-        commands.AddRange(LoadCoreCommands());
-
-        // 2. 加载插件命令
         try
         {
-            var pluginCommands = await LoadPluginCommandsAsync();
-            commands.AddRange(pluginCommands);
+            // 1. 加载核心内置命令
+            commands.AddRange(LoadCoreCommands());
+            _logger.LogInformation("📥 [FeishuHelp] 加载核心内置命令 {Count} 个", commands.Count);
+
+            // 2. 扫描全局技能
+            var globalSkillsDir = FeishuPluginPathHelper.GetSkillsDirectory();
+            if (Directory.Exists(globalSkillsDir))
+            {
+                var globalCommands = await ScanSkillsDirectoryAsync(globalSkillsDir, "skills_global");
+                commands.AddRange(globalCommands);
+                _logger.LogInformation("📥 [FeishuHelp] 加载全局技能命令 {Count} 个", globalCommands.Count);
+            }
+
+            // 3. 扫描项目技能
+            var projectSkillsDir = FeishuPluginPathHelper.GetProjectSkillsDirectory();
+            if (Directory.Exists(projectSkillsDir))
+            {
+                var projectCommands = await ScanSkillsDirectoryAsync(projectSkillsDir, "skills_project");
+                commands.AddRange(projectCommands);
+                _logger.LogInformation("📥 [FeishuHelp] 加载项目技能命令 {Count} 个", projectCommands.Count);
+            }
+
+            // 4. 扫描插件
+            var pluginsDir = FeishuPluginPathHelper.GetPluginsDirectory();
+            if (Directory.Exists(pluginsDir))
+            {
+                var pluginCommands = await ScanPluginsDirectoryAsync(pluginsDir);
+                commands.AddRange(pluginCommands);
+                _logger.LogInformation("📥 [FeishuHelp] 加载插件命令 {Count} 个", pluginCommands.Count);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "⚠️ [FeishuHelp] 加载插件命令失败");
+            _logger.LogError(ex, "⚠️ [FeishuHelp] 加载命令失败");
         }
+
+        // 去重
+        commands = commands
+            .GroupBy(c => c.Id)
+            .Select(g => g.First())
+            .ToList();
 
         lock (_lock)
         {
@@ -162,40 +200,6 @@ public class FeishuCommandService
     }
 
     /// <summary>
-    /// 加载插件命令
-    /// </summary>
-    private async Task<List<FeishuCommand>> LoadPluginCommandsAsync()
-    {
-        var commands = new List<FeishuCommand>();
-
-        // 1. 扫描项目技能
-        var projectSkillsDir = FeishuPluginPathHelper.GetProjectSkillsDirectory();
-        if (Directory.Exists(projectSkillsDir))
-        {
-            var projectCommands = await ScanSkillsDirectoryAsync(projectSkillsDir, "skills_project");
-            commands.AddRange(projectCommands);
-        }
-
-        // 2. 扫描全局技能
-        var globalSkillsDir = FeishuPluginPathHelper.GetSkillsDirectory();
-        if (Directory.Exists(globalSkillsDir))
-        {
-            var globalCommands = await ScanSkillsDirectoryAsync(globalSkillsDir, "skills_global");
-            commands.AddRange(globalCommands);
-        }
-
-        // 3. 扫描插件
-        var pluginsDir = FeishuPluginPathHelper.GetPluginsDirectory();
-        if (Directory.Exists(pluginsDir))
-        {
-            var pluginCommands = await ScanPluginsDirectoryAsync(pluginsDir);
-            commands.AddRange(pluginCommands);
-        }
-
-        return commands;
-    }
-
-    /// <summary>
     /// 扫描技能目录
     /// </summary>
     private async Task<List<FeishuCommand>> ScanSkillsDirectoryAsync(string dir, string category)
@@ -210,23 +214,30 @@ public class FeishuCommandService
             var subdirs = Directory.GetDirectories(dir);
             foreach (var subdir in subdirs)
             {
-                var skillMdPath = Path.Combine(subdir, "SKILL.md");
-                if (File.Exists(skillMdPath))
-                {
-                    var skillName = Path.GetFileName(subdir);
-                    var content = await File.ReadAllTextAsync(skillMdPath);
-                    var description = ExtractFirstLine(content);
+                // 查找所有可能的命令文档
+                var mdFiles = Directory.GetFiles(subdir, "*.md", SearchOption.TopDirectoryOnly)
+                    .Where(f => Path.GetFileName(f).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase) ||
+                               Path.GetFileName(f).Equals("COMMAND.md", StringComparison.OrdinalIgnoreCase) ||
+                               Path.GetFileName(f).Equals("README.md", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(f => Path.GetFileName(f) == "SKILL.md" ? 3 :
+                                           Path.GetFileName(f) == "COMMAND.md" ? 2 : 1)
+                    .ToList();
 
-                    commands.Add(new FeishuPluginCommand
+                foreach (var mdFile in mdFiles)
+                {
+                    try
                     {
-                        Id = $"skill_{category}_{skillName}",
-                        Name = $"/{skillName}",
-                        Description = description,
-                        Usage = $"使用 /{skillName} 调用此技能",
-                        Category = category,
-                        SkillPath = subdir,
-                        IsOfficial = category == "skills_project" && subdir.Contains("claude")
-                    });
+                        var command = await ParseCommandMarkdownAsync(mdFile, category, subdir);
+                        if (command != null)
+                        {
+                            commands.Add(command);
+                            break; // 每个技能目录只取优先级最高的一个文档
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "⚠️ [FeishuHelp] 解析技能文档失败: {File}", mdFile);
+                    }
                 }
             }
         }
@@ -241,29 +252,36 @@ public class FeishuCommandService
     /// <summary>
     /// 扫描插件目录
     /// </summary>
-    private Task<List<FeishuCommand>> ScanPluginsDirectoryAsync(string dir)
+    private async Task<List<FeishuCommand>> ScanPluginsDirectoryAsync(string dir)
     {
         var commands = new List<FeishuCommand>();
 
         if (!Directory.Exists(dir))
-            return Task.FromResult(commands);
+            return commands;
 
         try
         {
-            var subdirs = Directory.GetDirectories(dir);
-            foreach (var subdir in subdirs)
+            // 扫描所有插件目录下的MD文档
+            var mdFiles = Directory.GetFiles(dir, "*.md", SearchOption.AllDirectories)
+                .Where(f => Path.GetFileName(f).Equals("COMMAND.md", StringComparison.OrdinalIgnoreCase) ||
+                           Path.GetFileName(f).Equals("README.md", StringComparison.OrdinalIgnoreCase) ||
+                           Path.GetFileName(f).EndsWith(".command.md", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var mdFile in mdFiles)
             {
-                var pluginName = Path.GetFileName(subdir);
-                commands.Add(new FeishuPluginCommand
+                try
                 {
-                    Id = $"plugin_{pluginName}",
-                    Name = pluginName,
-                    Description = $"插件: {pluginName}",
-                    Usage = $"使用 {pluginName} 插件",
-                    Category = "plugins",
-                    SkillPath = subdir,
-                    IsOfficial = false
-                });
+                    var command = await ParseCommandMarkdownAsync(mdFile, "plugins", Path.GetDirectoryName(mdFile)!);
+                    if (command != null)
+                    {
+                        commands.Add(command);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "⚠️ [FeishuHelp] 解析插件文档失败: {File}", mdFile);
+                }
             }
         }
         catch (Exception ex)
@@ -271,7 +289,135 @@ public class FeishuCommandService
             _logger.LogError(ex, "⚠️ [FeishuHelp] 扫描插件目录失败: {Dir}", dir);
         }
 
-        return Task.FromResult(commands);
+        return commands;
+    }
+
+    /// <summary>
+    /// 解析Markdown命令文档
+    /// </summary>
+    private async Task<FeishuPluginCommand?> ParseCommandMarkdownAsync(string filePath, string category, string skillPath)
+    {
+        var content = await File.ReadAllTextAsync(filePath);
+        var fileName = Path.GetFileName(filePath);
+        var skillName = Path.GetFileName(skillPath);
+
+        // 1. 解析Front Matter
+        var frontMatter = ParseFrontMatter(content);
+        var metadata = new Dictionary<string, string>();
+
+        if (!string.IsNullOrEmpty(frontMatter))
+        {
+            try
+            {
+                metadata = _yamlDeserializer.Deserialize<Dictionary<string, string>>(frontMatter) ?? new();
+            }
+            catch
+            {
+                // YAML解析失败，忽略，继续解析正文
+            }
+        }
+
+        // 2. 提取命令基本信息
+        var commandName = metadata.TryGetValue("name", out var name) ? name : $"/{skillName}";
+        if (!commandName.StartsWith("/") && category != "plugins")
+        {
+            commandName = $"/{commandName}";
+        }
+
+        var commandId = $"cmd_{category}_{skillName}_{Path.GetFileNameWithoutExtension(fileName)}".ToLower().Replace(" ", "_");
+        var description = metadata.TryGetValue("description", out var desc) ? desc : ExtractDescription(content);
+        var usage = metadata.TryGetValue("usage", out var use) ? use : ExtractUsage(content);
+        var isOfficial = metadata.TryGetValue("official", out var officialStr) && bool.TryParse(officialStr, out var official) && official;
+
+        // 3. 构建命令对象
+        return new FeishuPluginCommand
+        {
+            Id = commandId,
+            Name = commandName,
+            Description = description,
+            Usage = usage,
+            Category = category,
+            SkillPath = skillPath,
+            IsOfficial = isOfficial
+        };
+    }
+
+    /// <summary>
+    /// 解析Markdown的Front Matter
+    /// </summary>
+    private string? ParseFrontMatter(string content)
+    {
+        var frontMatterRegex = new Regex(@"^---\s*\n([\s\S]*?)\n---\s*\n", RegexOptions.Multiline);
+        var match = frontMatterRegex.Match(content);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>
+    /// 提取命令描述
+    /// </summary>
+    private string ExtractDescription(string content)
+    {
+        // 去掉Front Matter
+        var contentWithoutFrontMatter = Regex.Replace(content, @"^---\s*\n[\s\S]*?\n---\s*\n", "");
+
+        // 查找第一个非标题、非注释的段落
+        var lines = contentWithoutFrontMatter.Split('\n');
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (!string.IsNullOrEmpty(trimmed) &&
+                !trimmed.StartsWith('#') &&
+                !trimmed.StartsWith('>') &&
+                !trimmed.StartsWith('```') &&
+                !trimmed.StartsWith('|') &&
+                !trimmed.StartsWith('-') &&
+                !trimmed.StartsWith('*'))
+            {
+                return trimmed.Length > 150 ? trimmed[..150] + "..." : trimmed;
+            }
+        }
+
+        return "Claude CLI 命令";
+    }
+
+    /// <summary>
+    /// 提取使用示例
+    /// </summary>
+    private string ExtractUsage(string content)
+    {
+        // 查找代码块中的使用示例
+        var codeBlockRegex = new Regex(@"```(?:bash|shell|cli)?\s*\n([\s\S]*?)\n```", RegexOptions.Multiline);
+        var matches = codeBlockRegex.Matches(content);
+
+        foreach (Match match in matches)
+        {
+            var code = match.Groups[1].Value.Trim();
+            if (code.StartsWith("/") || code.StartsWith("claude "))
+            {
+                // 取第一个符合的示例
+                return code.Split('\n').First().Trim();
+            }
+        }
+
+        // 查找"用法"、"示例"、"使用"等章节
+        var usageRegex = new Regex(@"##\s*(?:用法|使用|示例|Example|Usage)\s*\n([\s\S]*?)(?=\n##|\Z)", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+        var usageMatch = usageRegex.Match(content);
+        if (usageMatch.Success)
+        {
+            var usageContent = usageMatch.Groups[1].Value.Trim();
+            var lines = usageContent.Split('\n').Select(l => l.Trim()).Where(l => !string.IsNullOrEmpty(l));
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("/") || line.StartsWith("claude ") || line.StartsWith("`/") || line.StartsWith("`claude "))
+                {
+                    return line.Trim('`', ' ');
+                }
+            }
+        }
+
+        // 没有找到示例，返回默认用法
+        var skillName = Path.GetFileName(Path.GetDirectoryName(content)) ?? "command";
+        return skillName.StartsWith("/") ? skillName : $"/{skillName}";
     }
 
     /// <summary>
@@ -284,25 +430,8 @@ public class FeishuCommandService
             "core_session" => "📋 会话管理",
             "skills_project" => "📁 项目技能",
             "skills_global" => "🌐 全局技能",
-            "plugins" => "🔌 插件",
+            "plugins" => "🔌 插件命令",
             _ => categoryId
         };
-    }
-
-    /// <summary>
-    /// 提取第一行非注释行作为描述
-    /// </summary>
-    private string ExtractFirstLine(string content)
-    {
-        var lines = content.Split('\n');
-        foreach (var line in lines)
-        {
-            var trimmed = line.Trim();
-            if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith('#') && !trimmed.StartsWith('>'))
-            {
-                return trimmed.Length > 100 ? trimmed[..100] + "..." : trimmed;
-            }
-        }
-        return "技能命令";
     }
 }

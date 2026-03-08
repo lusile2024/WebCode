@@ -120,3 +120,53 @@ builder.Services.AddServicesFromAssemblies("WebCodeCli", "WebCodeCli.Domain");
 - 服务通过 `[ServiceDescription]` 属性自动注册
 - 配置通过 `IOptions&lt;T&gt;` 模式访问
 - 每个会话有独立的临时工作目录
+
+---
+
+## 飞书卡片开发参考文档
+
+### 核心规范
+| 文档名称 | 链接 |
+|---------|------|
+| 卡片JSON 2.0版本更新说明 | [卡片JSON-v2变更说明.md](./docs/feishu/cards/卡片JSON-v2变更说明.md) |
+| 卡片JSON 2.0结构 | https://open.feishu.cn/document/feishu-cards/card-json-v2-structure |
+| 卡片JSON 2.0版本组件概述 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/component-json-v2-overview |
+
+### 容器组件
+| 组件名称 | 链接 |
+|---------|------|
+| 分栏 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/column-set |
+| 表单容器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/form-container |
+| 交互容器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/interactive-container |
+| 折叠面板 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/containers/collapsible-panel |
+
+### 展示组件
+| 组件名称 | 链接 |
+|---------|------|
+| 标题 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/title |
+| 普通文本 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/plain-text |
+| 富文本（Markdown） | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/rich-text |
+| 图片 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/image |
+| 多图混排 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/multi-image-laylout |
+| 人员 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/user-profile |
+| 人员列表 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/user-list |
+| 图表 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/chart |
+| 表格 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/table |
+| 音频 | https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/content-components/audio |
+| 分割线 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/content-components/divider |
+
+### 交互组件
+| 组件名称 | 链接 |
+|---------|------|
+| 输入框 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/input |
+| 按钮 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button |
+| 折叠按钮组 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/overflow |
+| 下拉选择-单选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/single-select-dropdown-menu |
+| 下拉选择-多选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/multi-select-dropdown-menu |
+| 人员选择-单选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/single-select-user-picker |
+| 人员选择-多选 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/multi-select-user-picker |
+| 日期选择器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/date-picker |
+| 时间选择器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/time-selector |
+| 日期时间选择器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/date-time-picker |
+| 多图选择 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/image-picker |
+| 勾选器 | https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/checker |

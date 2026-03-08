@@ -319,6 +319,10 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
         try
         {
+            // 每次收到feishuhelp命令都刷新命令列表，获取最新的技能和插件
+            _logger.LogInformation("🔄 [FeishuHelp] 开始刷新命令列表...");
+            await _commandService.RefreshCommandsAsync();
+
             List<FeishuCommandCategory> categories;
             string cardJson;
 
