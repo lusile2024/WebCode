@@ -368,7 +368,7 @@ public class FeishuCommandService
             if (!string.IsNullOrEmpty(trimmed) &&
                 !trimmed.StartsWith('#') &&
                 !trimmed.StartsWith('>') &&
-                !trimmed.StartsWith('```') &&
+                !trimmed.StartsWith("```") &&
                 !trimmed.StartsWith('|') &&
                 !trimmed.StartsWith('-') &&
                 !trimmed.StartsWith('*'))
