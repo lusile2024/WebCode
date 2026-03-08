@@ -119,7 +119,15 @@ public class FeishuCommandService
 
         var commands = new List<FeishuCommand>();
 
-        // 从 CommandScannerService 获取所有命令
+        // 1. 添加内置非交互式命令
+        commands.AddRange(new List<FeishuCommand>
+        {
+            new() { Id = "init", Name = "/init", Description = "初始化项目Claude上下文", Usage = "/init", Category = "core_builtin" },
+            new() { Id = "clear", Name = "/clear", Description = "清除当前会话上下文", Usage = "/clear", Category = "core_builtin" },
+            new() { Id = "compact", Name = "/compact", Description = "压缩当前会话上下文，减少token占用", Usage = "/compact", Category = "core_builtin" }
+        });
+
+        // 2. 从 CommandScannerService 获取所有动态扫描的命令
         var scannerCommands = _commandScannerService.GetAllCommands();
 
         foreach (var cmd in scannerCommands)
@@ -164,6 +172,7 @@ public class FeishuCommandService
     {
         return categoryId switch
         {
+            "core_builtin" => "📦 内置命令",
             "core_debug" => "📋 调试和输出",
             "core_permission" => "🔐 权限和安全",
             "core_session" => "💬 会话管理",
