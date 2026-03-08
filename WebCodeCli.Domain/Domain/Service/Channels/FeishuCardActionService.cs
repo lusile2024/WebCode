@@ -682,29 +682,37 @@ public class FeishuCardActionService
             // 添加底部操作按钮
             elements.Add(new
             {
-                tag = "action",
-                actions = new[]
+                tag = "button",
+                text = new { tag = "plain_text", content = "➕ 新建会话" },
+                type = "primary",
+                behaviors = new[]
                 {
                     new
                     {
-                        tag = "button",
-                        text = new { tag = "plain_text", content = "➕ 新建会话" },
-                        type = "primary",
-                        value = JsonSerializer.Serialize(new
+                        type = "callback",
+                        value = new
                         {
                             action = "create_session",
                             chat_key = chatKey
-                        })
-                    },
+                        }
+                    }
+                }
+            });
+
+            elements.Add(new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "🔙 返回帮助" },
+                type = "default",
+                behaviors = new[]
+                {
                     new
                     {
-                        tag = "button",
-                        text = new { tag = "plain_text", content = "🔙 返回帮助" },
-                        type = "default",
-                        value = JsonSerializer.Serialize(new
+                        type = "callback",
+                        value = new
                         {
                             action = "back_to_list"
-                        })
+                        }
                     }
                 }
             });
