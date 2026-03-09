@@ -35,6 +35,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     // 默认使用的 CLI 工具 ID（可配置）
     private const string DefaultToolId = "claude-code";
 
+    // 事件去重缓存，避免重复处理相同event_id的消息
+    private readonly ConcurrentDictionary<string, DateTime> _processedEventIds = new();
+    // 事件缓存过期时间（10分钟，超过这个时间的event_id会被清理）
+    private const int EventCacheExpirationMinutes = 10;
+
     /// <summary>
     /// 服务是否运行中
     /// </summary>
@@ -141,9 +146,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         _logger.LogInformation("Starting Feishu channel service...");
 
-        // 订阅静态消息事件（解决 SDK 创建不同实例的问题）
-        FeishuMessageHandler.MessageReceived += OnMessageReceivedAsync;
-        _logger.LogInformation("🔥 [Feishu] 已订阅 MessageReceived 静态事件");
+        // 不再订阅静态事件，通过 HandleIncomingMessageAsync 方法处理消息（避免重复处理）
 
         _isRunning = true;
 
@@ -172,7 +175,6 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     {
         _logger.LogInformation("Stopping Feishu channel service...");
         _isRunning = false;
-        FeishuMessageHandler.MessageReceived -= OnMessageReceivedAsync;
         await base.StopAsync(cancellationToken);
         _logger.LogInformation("Feishu channel service stopped");
     }
@@ -239,8 +241,47 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <param name="message">收到的消息</param>
     public async Task HandleIncomingMessageAsync(FeishuIncomingMessage message)
     {
+        // 事件去重检查
+        if (!string.IsNullOrEmpty(message.EventId))
+        {
+            // 清理过期的event_id
+            CleanupExpiredEventIds();
+
+            if (_processedEventIds.TryAdd(message.EventId, DateTime.UtcNow))
+            {
+                _logger.LogDebug("处理新事件: EventId={EventId}", message.EventId);
+            }
+            else
+            {
+                _logger.LogInformation("跳过重复事件: EventId={EventId}", message.EventId);
+                return;
+            }
+        }
+
         _logger.LogInformation("🔥 [FeishuChannel] HandleIncomingMessageAsync 被调用");
         await OnMessageReceivedAsync(message);
+    }
+
+    /// <summary>
+    /// 清理过期的事件ID缓存
+    /// </summary>
+    private void CleanupExpiredEventIds()
+    {
+        var expirationTime = DateTime.UtcNow.AddMinutes(-EventCacheExpirationMinutes);
+        var expiredIds = _processedEventIds
+            .Where(kv => kv.Value < expirationTime)
+            .Select(kv => kv.Key)
+            .ToList();
+
+        foreach (var id in expiredIds)
+        {
+            _processedEventIds.TryRemove(id, out _);
+        }
+
+        if (expiredIds.Count > 0)
+        {
+            _logger.LogDebug("清理了 {Count} 个过期的事件ID", expiredIds.Count);
+        }
     }
 
     /// <summary>

@@ -122,7 +122,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 ? trimmedContent.Substring("/feishuhelp".Length).Trim()
                 : trimmedContent.Substring("feishuhelp".Length).Trim();
             await HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword);
-            return;
+            return; // 系统命令处理完直接返回，不再触发事件
         }
 
         // 检测 feishusessions 命令
@@ -134,7 +134,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         {
             _logger.LogInformation("🔥 [Feishu] 检测到 feishusessions 命令!");
             await HandleSessionsCommandAsync(message.ChatId, message.MessageId);
-            return;
+            return; // 系统命令处理完直接返回，不再触发事件
         }
 
         // 获取发送者信息
@@ -179,22 +179,15 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             message.ChatType, message.ChatId, senderId,
             content.Length > 50 ? $"{content[..50]}..." : content);
 
-        // 触发静态事件（解决 SDK 创建不同实例的问题）
+        // 转发消息给频道服务处理
         try
         {
-            if (MessageReceived != null)
-            {
-                _logger.LogInformation("🔥 [Feishu] 触发 MessageReceived 静态事件");
-                await MessageReceived.Invoke(incomingMessage);
-            }
-            else
-            {
-                _logger.LogWarning("🔥 [Feishu] MessageReceived 静态事件未订阅!");
-            }
+            _logger.LogInformation("🔥 [Feishu] 转发消息给 FeishuChannelService 处理");
+            await _feishuChannel.HandleIncomingMessageAsync(incomingMessage);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "🔥 [Feishu] 触发 MessageReceived 事件失败");
+            _logger.LogError(ex, "🔥 [Feishu] 消息转发处理失败");
         }
     }
 
