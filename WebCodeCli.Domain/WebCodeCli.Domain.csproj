@@ -13,6 +13,7 @@
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="8.1.0" />
     <PackageReference Include="Polly" Version="8.5.2" />
+    <PackageReference Include="SqlSugar" Version="5.1.4.207" />
     <PackageReference Include="SqlSugarCore" Version="5.1.4.189" />
     <PackageReference Include="FeishuNetSdk" Version="4.0.0" />
     <PackageReference Include="FeishuNetSdk.WebSocket" Version="4.0.0" />

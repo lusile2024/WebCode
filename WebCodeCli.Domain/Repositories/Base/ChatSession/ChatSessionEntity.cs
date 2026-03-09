@@ -6,6 +6,7 @@ namespace WebCodeCli.Domain.Repositories.Base.ChatSession;
 /// 聊天会话实体
 /// </summary>
 [SugarTable("ChatSession")]
+[SugarIndex("idx_feishu_chatkey", nameof(FeishuChatKey), OrderByType.Asc)]
 public class ChatSessionEntity
 {
     /// <summary>
@@ -61,4 +62,16 @@ public class ChatSessionEntity
     /// </summary>
     [SugarColumn(Length = 64, IsNullable = true)]
     public string? ProjectId { get; set; }
+
+    /// <summary>
+    /// 飞书聊天唯一标识（小写的ChatId，作为渠道关联键）
+    /// </summary>
+    [SugarColumn(Length = 128, IsNullable = true)]
+    public string? FeishuChatKey { get; set; }
+
+    /// <summary>
+    /// 是否为当前聊天的活跃会话（每个ChatKey只能有一个活跃会话）
+    /// </summary>
+    [SugarColumn(IsNullable = false)]
+    public bool IsFeishuActive { get; set; } = false;
 }
