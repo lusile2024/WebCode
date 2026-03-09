@@ -516,8 +516,70 @@ public class FeishuCardActionService
         if (success)
         {
             var workspacePath = _cliExecutor.GetSessionWorkspacePath(sessionId);
+            var lastActiveTime = _feishuChannel.GetSessionLastActiveTime(sessionId);
+
+            // 后台异步发送会话历史卡片
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    _logger.LogInformation("🔍 [会话历史] 开始获取会话 {SessionId} 历史消息", sessionId);
+
+                    // 获取最近10条消息，按时间正序排列（最早在上，最新在下）
+                    var messages = _chatSessionService.GetMessages(sessionId)
+                        .OrderBy(m => m.CreatedAt)
+                        .TakeLast(10)
+                        .ToList();
+
+                    _logger.LogInformation("🔍 [会话历史] 找到 {Count} 条历史消息", messages.Count);
+
+                    var contentBuilder = new System.Text.StringBuilder();
+                    contentBuilder.AppendLine($"## 📜 会话历史 `{sessionId[..8]}`");
+                    contentBuilder.AppendLine($"⏱️ 最后活跃: {lastActiveTime:yyyy-MM-dd HH:mm}");
+                    contentBuilder.AppendLine($"📂 工作目录: `{workspacePath}`");
+                    contentBuilder.AppendLine();
+                    contentBuilder.AppendLine("---");
+                    contentBuilder.AppendLine();
+
+                    if (messages.Count == 0)
+                    {
+                        contentBuilder.AppendLine("ℹ️ 该会话暂无历史消息");
+                    }
+                    else
+                    {
+                        foreach (var msg in messages)
+                        {
+                            var role = msg.Role == "user" ? "👤 用户" : "🤖 AI助手";
+                            contentBuilder.AppendLine($"### {role} `{msg.CreatedAt:HH:mm}`");
+                            contentBuilder.AppendLine(msg.Content);
+                            contentBuilder.AppendLine();
+                            contentBuilder.AppendLine("---");
+                            contentBuilder.AppendLine();
+                        }
+                    }
+
+                    _logger.LogInformation("🔍 [会话历史] 内容构建完成，长度: {Length}", contentBuilder.Length);
+
+                    // 直接发送Markdown内容，系统会自动包装成卡片
+                    _logger.LogInformation("🔍 [会话历史] 开始发送消息到聊天 {ChatId}", actualChatKey);
+                    var messageId = await _feishuChannel.SendMessageAsync(actualChatKey, contentBuilder.ToString());
+                    _logger.LogInformation("✅ [会话历史] 已发送会话 {SessionId} 历史到聊天 {ChatId}, MessageId={MessageId}", sessionId, actualChatKey, messageId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ [会话历史] 发送会话历史失败，SessionId={SessionId}, ChatId={ChatId}", sessionId, actualChatKey);
+
+                    // 尝试发送错误提示
+                    try
+                    {
+                        await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 历史消息加载失败: {ex.Message}");
+                    }
+                    catch { }
+                }
+            });
+
             return _cardBuilder.BuildCardActionToastOnlyResponse(
-                $"✅ 已切换到会话 {sessionId[..8]}...\n📂 当前工作目录: {workspacePath}",
+                $"✅ 已切换到会话 {sessionId[..8]}...\n📂 当前工作目录: {workspacePath}\n📜 历史消息已发送到聊天窗口",
                 "success");
         }
 
