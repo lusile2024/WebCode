@@ -142,9 +142,9 @@
       "event": "Event ({type})"
     },
     "content": {
-      "threadId": "Thread ID: {id}",
-      "threadCreated": "A new conversation thread has been created.",
-      "turnStarted": "Waiting for response...",
+        "threadId": "Thread ID: {id}",
+        "threadCreated": "A new conversation thread has been created.",
+        "turnStarted": "Waiting for response...",
       "turnCompleted": "This turn has completed.",
       "turnCompletedWithUsage": "This turn has completed. See token usage below."
     },
@@ -343,25 +343,7 @@
     "addButton": "Add Environment Variable",
     "resetButton": "Reset to Default",
     "saving": "Saving...",
-    "save": "Save",
-    "profilesTitle": "Configuration Profiles",
-    "profilesDesc": "Create multiple environment variable profiles to quickly switch between AI configurations",
-    "addProfile": "New Profile",
-    "profileNamePlaceholder": "Profile name, e.g. OpenAI / DeepSeek / Anthropic",
-    "activateProfile": "Activate",
-    "activeProfile": "Active",
-    "editProfile": "Edit",
-    "deleteProfile": "Delete",
-    "deleteProfileConfirm": "Delete this configuration profile?",
-    "deactivateProfile": "Deactivate",
-    "profileSaved": "Profile saved",
-    "profileActivated": "Profile activated",
-    "profileDeactivated": "Switched back to default config",
-    "profileDeleted": "Profile deleted",
-    "editingProfile": "Editing profile: {name}",
-    "editingDefault": "Editing default config",
-    "saveProfile": "Save Profile",
-    "cancelEdit": "Cancel Edit"
+    "save": "Save"
   },
   "contextPreview": {
     "title": "Context Preview",
@@ -818,3 +800,4 @@
     }
   }
 }
+

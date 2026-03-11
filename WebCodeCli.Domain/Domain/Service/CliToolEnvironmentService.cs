@@ -97,11 +97,21 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
             var activeProfile = await _profileRepository.GetActiveProfileAsync(toolId);
             if (activeProfile != null && !string.IsNullOrWhiteSpace(activeProfile.EnvVarsJson))
             {
-                _logger.LogInformation("从激活方案 [{ProfileName}] 加载工具 {ToolId} 的环境变量配置", activeProfile.ProfileName, toolId);
-                var profileVars = JsonSerializer.Deserialize<Dictionary<string, string>>(activeProfile.EnvVarsJson) ?? new();
-                return profileVars
-                    .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                try
+                {
+                    _logger.LogInformation("从激活方案 [{ProfileName}] 加载工具 {ToolId} 的环境变量配置", activeProfile.ProfileName, toolId);
+                    var profileVars = JsonSerializer.Deserialize<Dictionary<string, string>>(activeProfile.EnvVarsJson) ?? new();
+                    return profileVars
+                        .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
+                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                }
+                catch (JsonException jsonEx)
+                {
+                    _logger.LogWarning(jsonEx,
+                        "激活方案 [{ProfileName}] 的环境变量 JSON 无效，忽略该方案并回退到数据库和配置文件。ToolId: {ToolId}",
+                        activeProfile.ProfileName,
+                        toolId);
+                }
             }
 
             // 2. 从数据库默认配置读取
@@ -319,7 +329,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     {
         try
         {
-            var result = await _profileRepository.DeleteProfileAsync(profileId);
+            var result = await _profileRepository.DeleteProfileAsync(toolId, profileId);
             if (result)
             {
                 _logger.LogInformation("成功删除工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);

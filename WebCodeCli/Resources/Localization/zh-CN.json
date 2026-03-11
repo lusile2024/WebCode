@@ -361,6 +361,7 @@
     "editingProfile": "正在编辑方案：{name}",
     "editingDefault": "编辑默认配置",
     "saveProfile": "保存方案",
+    "unnamedProfile": "未命名方案",
     "cancelEdit": "取消编辑"
   },
   "contextPreview": {

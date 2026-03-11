@@ -319,6 +319,24 @@
         await LoadTranslationsAsync();
     }
 
+    private async Task ReloadEditorForCurrentStateAsync()
+    {
+        if (_selectedTool == null)
+        {
+            _envVars = new List<EnvVarItem>();
+            return;
+        }
+
+        if (_profiles.Any(p => p.IsActive))
+        {
+            _envVars = new List<EnvVarItem>();
+            return;
+        }
+
+        var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(_selectedTool.Id);
+        _envVars = envVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
+    }
+
     public async Task ShowAsync(CliToolConfig tool)
     {
         _selectedTool = tool;
@@ -336,18 +354,7 @@
 
             // 加载配置方案列表
             _profiles = await CliToolEnvironmentService.GetProfilesAsync(tool.Id);
-
-            // 若没有激活方案，加载默认配置到编辑区；若有激活方案则编辑区空置
-            var hasActiveProfile = _profiles.Any(p => p.IsActive);
-            if (hasActiveProfile)
-            {
-                _envVars = new List<EnvVarItem>();
-            }
-            else
-            {
-                var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(tool.Id);
-                _envVars = envVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
-            }
+            await ReloadEditorForCurrentStateAsync();
         }
         catch (Exception ex)
         {
@@ -409,6 +416,7 @@
         _isAddingProfile = true;
         _editingProfile = null;
         _newProfileName = string.Empty;
+        _profilePendingDelete = null;
         _envVars = new List<EnvVarItem>();
         StateHasChanged();
     }
@@ -418,6 +426,7 @@
         _editingProfile = profile;
         _isAddingProfile = false;
         _newProfileName = profile.ProfileName;
+        _profilePendingDelete = null;
 
         try
         {
@@ -438,13 +447,13 @@
         StateHasChanged();
     }
 
-    private void CancelProfileEdit()
+    private async Task CancelProfileEdit()
     {
         _editingProfile = null;
         _isAddingProfile = false;
         _newProfileName = string.Empty;
         _profilePendingDelete = null;
-        _envVars = new List<EnvVarItem>();
+        await ReloadEditorForCurrentStateAsync();
         StateHasChanged();
     }
 
@@ -457,6 +466,11 @@
         {
             await CliToolEnvironmentService.ActivateProfileAsync(_selectedTool.Id, profile.Id);
             _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
+            _editingProfile = null;
+            _isAddingProfile = false;
+            _newProfileName = string.Empty;
+            _profilePendingDelete = null;
+            await ReloadEditorForCurrentStateAsync();
             Console.WriteLine($"方案已激活: {profile.ProfileName}");
         }
         catch (Exception ex)
@@ -479,6 +493,11 @@
         {
             await CliToolEnvironmentService.DeactivateProfilesAsync(_selectedTool.Id);
             _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
+            _editingProfile = null;
+            _isAddingProfile = false;
+            _newProfileName = string.Empty;
+            _profilePendingDelete = null;
+            await ReloadEditorForCurrentStateAsync();
             Console.WriteLine("已取消所有方案激活");
         }
         catch (Exception ex)
@@ -516,8 +535,11 @@
             _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
             if (_editingProfile?.Id == profile.Id)
             {
-                CancelProfileEdit();
+                _editingProfile = null;
+                _isAddingProfile = false;
+                _newProfileName = string.Empty;
             }
+            await ReloadEditorForCurrentStateAsync();
             Console.WriteLine($"方案已删除: {profile.ProfileName}");
         }
         catch (Exception ex)
@@ -549,14 +571,14 @@
             {
                 // 保存配置方案（新建和编辑均使用 _newProfileName，支持重命名）
                 var profileName = _newProfileName.Trim();
-                if (string.IsNullOrWhiteSpace(profileName)) profileName = "未命名方案";
+                if (string.IsNullOrWhiteSpace(profileName)) profileName = T("envConfig.unnamedProfile");
 
                 var profileId = _editingProfile?.Id ?? 0;
                 var savedProfile = await CliToolEnvironmentService.SaveProfileAsync(_selectedTool.Id, profileId, profileName, validEnvVars);
                 if (savedProfile != null)
                 {
                     _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
-                    CancelProfileEdit();
+                    await CancelProfileEdit();
                     Console.WriteLine($"方案已保存: {profileName}");
                 }
                 else

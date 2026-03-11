@@ -361,6 +361,7 @@
     "editingProfile": "Editing profile: {name}",
     "editingDefault": "Editing default config",
     "saveProfile": "Save Profile",
+    "unnamedProfile": "Unnamed profile",
     "cancelEdit": "Cancel Edit"
   },
   "contextPreview": {

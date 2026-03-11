@@ -31,5 +31,5 @@ public interface ICliToolEnvProfileRepository : IRepository<CliToolEnvProfile>
     /// <summary>
     /// 删除指定工具的指定方案
     /// </summary>
-    Task<bool> DeleteProfileAsync(int profileId);
+    Task<bool> DeleteProfileAsync(string toolId, int profileId);
 }

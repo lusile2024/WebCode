@@ -59,17 +59,36 @@ public class CliToolEnvProfileRepository : Repository<CliToolEnvProfile>, ICliTo
     {
         try
         {
-            // 取消该工具所有方案的激活状态
             var profiles = await GetListAsync(x => x.ToolId == toolId);
-            foreach (var profile in profiles)
+            if (!profiles.Any())
             {
-                profile.IsActive = profile.Id == profileId;
-                profile.UpdatedAt = DateTime.Now;
+                return false;
             }
-            if (profiles.Any())
+
+            var targetProfile = profiles.FirstOrDefault(p => p.Id == profileId);
+            if (targetProfile == null)
             {
+                return false;
+            }
+
+            await GetDB().Ado.BeginTranAsync();
+            try
+            {
+                foreach (var profile in profiles)
+                {
+                    profile.IsActive = profile.Id == profileId;
+                    profile.UpdatedAt = DateTime.Now;
+                }
+
                 await UpdateRangeAsync(profiles);
+                await GetDB().Ado.CommitTranAsync();
             }
+            catch
+            {
+                await GetDB().Ado.RollbackTranAsync();
+                throw;
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -108,15 +127,15 @@ public class CliToolEnvProfileRepository : Repository<CliToolEnvProfile>, ICliTo
     /// <summary>
     /// 删除指定方案
     /// </summary>
-    public async Task<bool> DeleteProfileAsync(int profileId)
+    public async Task<bool> DeleteProfileAsync(string toolId, int profileId)
     {
         try
         {
-            return await DeleteAsync(x => x.Id == profileId);
+            return await DeleteAsync(x => x.Id == profileId && x.ToolId == toolId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "删除方案 {ProfileId} 失败", profileId);
+            _logger.LogError(ex, "删除工具 {ToolId} 的方案 {ProfileId} 失败", toolId, profileId);
             return false;
         }
     }

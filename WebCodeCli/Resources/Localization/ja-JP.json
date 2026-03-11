@@ -408,6 +408,7 @@
     "editingProfile": "プロファイルを編集中：{name}",
     "editingDefault": "デフォルト設定を編集",
     "saveProfile": "プロファイルを保存",
+    "unnamedProfile": "名称未設定のプロファイル",
     "cancelEdit": "編集をキャンセル"
   },
   "fileSearch": {
