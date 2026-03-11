@@ -535,11 +535,12 @@
             _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
             if (_editingProfile?.Id == profile.Id)
             {
-                _editingProfile = null;
-                _isAddingProfile = false;
-                _newProfileName = string.Empty;
+                await CancelProfileEdit();
             }
-            await ReloadEditorForCurrentStateAsync();
+            else
+            {
+                await ReloadEditorForCurrentStateAsync();
+            }
             Console.WriteLine($"方案已删除: {profile.ProfileName}");
         }
         catch (Exception ex)

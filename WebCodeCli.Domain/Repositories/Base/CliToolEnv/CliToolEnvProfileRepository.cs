@@ -83,7 +83,7 @@ public class CliToolEnvProfileRepository : Repository<CliToolEnvProfile>, ICliTo
                 await UpdateRangeAsync(profiles);
                 await GetDB().Ado.CommitTranAsync();
             }
-            catch
+            catch (Exception)
             {
                 await GetDB().Ado.RollbackTranAsync();
                 throw;
