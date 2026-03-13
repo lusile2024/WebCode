@@ -1,0 +1,333 @@
+@using WebCodeCli.Domain.Domain.Model
+@using WebCodeCli.Models
+@inject HttpClient Http
+@inject IUserContextService UserContextService
+@inject IJSRuntime JSRuntime
+
+@if (Show)
+{
+    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <!-- 头部 -->
+            <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+                <h3 class="text-xl font-bold text-gray-800">目录授权管理</h3>
+                <button @onclick="Close" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- 内容区域 -->
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                <!-- 新增授权表单 -->
+                <div class="p-4 border border-gray-200 rounded-lg">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        新增用户授权
+                    </h4>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">用户名</label>
+                            <input type="text"
+                                   @bind="NewAuthorization.Username"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                   placeholder="输入要授权的用户名" />
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">权限级别</label>
+                            <select @bind="NewAuthorization.Permission"
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="read">只读（仅查看文件）</option>
+                                <option value="write">读写（可编辑文件）</option>
+                                <option value="admin">管理员（可授权其他用户）</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">过期时间（可选）</label>
+                            <input type="datetime-local"
+                                   @bind="NewAuthorization.ExpireTime"
+                                   @bind:format="yyyy-MM-ddTHH:mm"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                            <p class="text-xs text-gray-500 mt-1">留空则永久有效</p>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(FormError))
+                        {
+                            <p class="text-red-500 text-sm">@FormError</p>
+                        }
+
+                        <div class="flex justify-end">
+                            <button @onclick="AddAuthorization"
+                                    disabled="@IsSubmitting"
+                                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2">
+                                @if (IsSubmitting)
+                                {
+                                    <div class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                                    <span>授权中...</span>
+                                }
+                                else
+                                {
+                                    <span>添加授权</span>
+                                }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 已授权用户列表 -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                        已授权用户
+                    </h4>
+
+                    @if (IsLoading)
+                    {
+                        <div class="text-center py-8">
+                            <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-300 border-t-blue-600 mb-4"></div>
+                            <p class="text-gray-500">加载授权列表中...</p>
+                        </div>
+                    }
+                    else if (AuthorizedUsers.Any())
+                    {
+                        <div class="space-y-2">
+                            @foreach (var user in AuthorizedUsers)
+                            {
+                                <div class="p-4 border border-gray-200 rounded-lg flex items-center justify-between">
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                                            <span class="text-blue-600 font-medium">@user.Username[0].ToString().ToUpper()</span>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium text-gray-800">@user.Username</div>
+                                            <div class="text-xs text-gray-500 mt-0.5">
+                                                权限：<span class="px-2 py-0.5 rounded-full @GetPermissionBadgeClass(user.Permission)">@GetPermissionText(user.Permission)</span>
+                                                @if (!string.IsNullOrEmpty(user.ExpireTimeDisplay))
+                                                {
+                                                    <span class="ml-2">· 过期时间：@user.ExpireTimeDisplay</span>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button @onclick="() => RevokeAuthorization(user.Username)"
+                                            class="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                            title="取消授权">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-8 border border-gray-200 rounded-lg bg-gray-50">
+                            <svg class="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                            </svg>
+                            <p class="text-gray-500">暂无授权用户</p>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- 底部按钮 -->
+            <div class="p-6 border-t border-gray-200 flex justify-end">
+                <button @onclick="Close" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
+                    关闭
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Show { get; set; }
+    [Parameter] public string WorkspacePath { get; set; } = string.Empty;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private bool IsLoading { get; set; } = false;
+    private bool IsSubmitting { get; set; } = false;
+    private string FormError { get; set; } = string.Empty;
+    private List<AuthorizedUserDto> AuthorizedUsers { get; set; } = new();
+    private NewAuthorizationDto NewAuthorization { get; set; } = new();
+
+    public class AuthorizedUserDto
+    {
+        public string Username { get; set; } = string.Empty;
+        public string Permission { get; set; } = string.Empty;
+        public DateTime? ExpireTime { get; set; }
+        public string ExpireTimeDisplay => ExpireTime?.ToString("yyyy-MM-dd HH:mm") ?? string.Empty;
+    }
+
+    public class NewAuthorizationDto
+    {
+        public string Username { get; set; } = string.Empty;
+        public string Permission { get; set; } = "read";
+        public DateTime? ExpireTime { get; set; }
+    }
+
+    public class AuthorizationRequest
+    {
+        public string WorkspacePath { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string Permission { get; set; } = string.Empty;
+        public DateTime? ExpireTime { get; set; }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Show && !string.IsNullOrEmpty(WorkspacePath))
+        {
+            await LoadAuthorizedUsersAsync();
+        }
+    }
+
+    private async Task LoadAuthorizedUsersAsync()
+    {
+        IsLoading = true;
+        try
+        {
+            var response = await Http.GetFromJsonAsync<ApiResponse<List<AuthorizedUserDto>>>($"/api/workspace/authorized-users?path={Uri.EscapeDataString(WorkspacePath)}");
+            AuthorizedUsers = response?.Data ?? new();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载授权列表失败: {ex.Message}");
+            AuthorizedUsers = new();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private async void AddAuthorization()
+    {
+        if (string.IsNullOrWhiteSpace(NewAuthorization.Username))
+        {
+            FormError = "请输入用户名";
+            return;
+        }
+
+        IsSubmitting = true;
+        FormError = string.Empty;
+
+        try
+        {
+            var request = new AuthorizationRequest
+            {
+                WorkspacePath = WorkspacePath,
+                Username = NewAuthorization.Username,
+                Permission = NewAuthorization.Permission
+            };
+
+            if (NewAuthorization.ExpireTime.HasValue)
+            {
+                request.ExpireTime = NewAuthorization.ExpireTime.Value;
+            }
+
+            var response = await Http.PostAsJsonAsync("/api/workspace/authorize", request);
+            if (response.IsSuccessStatusCode)
+            {
+                // 重置表单
+                NewAuthorization = new NewAuthorizationDto();
+                // 重新加载授权列表
+                await LoadAuthorizedUsersAsync();
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                FormError = $"授权失败: {errorContent}";
+            }
+        }
+        catch (Exception ex)
+        {
+            FormError = $"授权失败: {ex.Message}";
+        }
+        finally
+        {
+            IsSubmitting = false;
+        }
+    }
+
+    private async void RevokeAuthorization(string username)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"确定要取消用户 {username} 的授权吗？"))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await Http.DeleteAsync($"/api/workspace/revoke-authorization?path={Uri.EscapeDataString(WorkspacePath)}&username={Uri.EscapeDataString(username)}");
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadAuthorizedUsersAsync();
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                FormError = $"取消授权失败: {errorContent}";
+            }
+        }
+        catch (Exception ex)
+        {
+            FormError = $"取消授权失败: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// 显示对话框
+    /// </summary>
+    public async Task ShowAsync(string workspacePath)
+    {
+        Show = true;
+        WorkspacePath = workspacePath;
+        NewAuthorization = new NewAuthorizationDto();
+        FormError = string.Empty;
+        await LoadAuthorizedUsersAsync();
+        StateHasChanged();
+    }
+
+    private void Close()
+    {
+        Show = false;
+        WorkspacePath = string.Empty;
+        NewAuthorization = new NewAuthorizationDto();
+        FormError = string.Empty;
+        AuthorizedUsers.Clear();
+        OnClose.InvokeAsync();
+    }
+
+    private string GetPermissionText(string permission)
+    {
+        return permission switch
+        {
+            "read" => "只读",
+            "write" => "读写",
+            "admin" => "管理员",
+            _ => "未知"
+        };
+    }
+
+    private string GetPermissionBadgeClass(string permission)
+    {
+        return permission switch
+        {
+            "read" => "bg-gray-100 text-gray-700",
+            "write" => "bg-blue-100 text-blue-700",
+            "admin" => "bg-purple-100 text-purple-700",
+            _ => "bg-gray-100 text-gray-700"
+        };
+    }
+}

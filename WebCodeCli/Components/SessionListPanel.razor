@@ -99,6 +99,12 @@
                             <div class="flex-1 min-w-0">
                                 <h3 class="font-semibold truncate text-sm">@session.Title</h3>
                                 <p class="text-xs text-gray-500 mt-1">@FormatDateTime(session.UpdatedAt)</p>
+                                @if (!string.IsNullOrEmpty(session.WorkspacePath))
+                                {
+                                    <p class="text-xs text-gray-400 mt-0.5 truncate" title="@session.WorkspacePath">
+                                        @session.WorkspacePath
+                                    </p>
+                                }
                             </div>
                             <div class="flex items-center gap-1 flex-shrink-0">
                                 @if (IsLoadingSession && CurrentSessionId == session.SessionId)

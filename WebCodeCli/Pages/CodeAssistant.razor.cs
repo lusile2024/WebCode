@@ -4182,10 +4182,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     /// </summary>
     private async Task CreateNewSession()
     {
-        // 显示项目选择对话框
+        // 显示工作区选择对话框
         _showSessionList = false;
         StateHasChanged();
-        await _projectSelectModal.ShowAsync();
+        await _createSessionModal.ShowAsync();
     }
     
     /// <summary>
