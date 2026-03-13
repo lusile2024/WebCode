@@ -4493,8 +4493,17 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     /// <summary>
     /// 显示删除确认对话框
     /// </summary>
-    private void ShowDeleteDialog(SessionHistory session)
+    private async void ShowDeleteDialog(SessionHistory session)
     {
+        // 自定义目录/项目目录会话：直接删除，无需确认（仅解除绑定，不删内容）
+        if (session.IsCustomWorkspace)
+        {
+            _sessionToDelete = session;
+            await DeleteSession();
+            return;
+        }
+
+        // 临时目录会话：显示确认弹窗（删除会清除目录内容）
         _sessionToDelete = session;
         _showSessionDeleteDialog = true;
         _sessionDeleteError = string.Empty;

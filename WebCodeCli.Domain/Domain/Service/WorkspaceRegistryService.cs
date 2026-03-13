@@ -98,6 +98,8 @@ public class WorkspaceRegistryService : IWorkspaceRegistryService
     public async Task<WorkspaceOwnerEntity> RegisterDirectoryAsync(string directoryPath, string username, string? alias = null, bool isTrusted = false)
     {
         var normalizedPath = NormalizePath(directoryPath);
+        // 添加日志：方便调试注册过程
+        // Console.WriteLine($"[工作区注册] 注册目录: {normalizedPath}, 用户: {username}, 别名: {alias ?? Path.GetFileName(directoryPath)}");
 
         if (IsSensitiveDirectory(normalizedPath))
         {

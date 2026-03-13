@@ -5,7 +5,9 @@
 @using System.Text
 @using WebCodeCli.Pages
 @using WebCodeCli.Components
+@using WebCodeCli.Components.Dialogs
 @using WebCodeCli.Helpers
+@using WebCodeCli.Models
 @inject IJSRuntime JSRuntime
 
 <PageTitle>@T("codeAssistant.title")</PageTitle>
@@ -217,6 +219,11 @@
 
 <!-- 更新提示模态框 -->
 <UpdateNotificationModal @ref="_updateNotificationModal" />
+
+<!-- 新建会话模态框 -->
+<CreateSessionModal @ref="_createSessionModal"
+                   OnSessionCreated="HandleSessionCreated"
+                   OnClose="CloseCreateSessionModal" />
 
 <!-- 项目选择模态框 -->
 <ProjectSelectModal @ref="_projectSelectModal" OnProjectSelected="OnProjectSelected" />

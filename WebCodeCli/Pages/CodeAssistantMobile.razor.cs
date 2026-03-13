@@ -11,7 +11,9 @@ using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
+using WebCodeCli.Components.Dialogs;
 using WebCodeCli.Helpers;
+using WebCodeCli.Models;
 
 namespace WebCodeCli.Pages;
 
@@ -1593,8 +1595,9 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     
     private async Task CreateNewSession()
     {
-        // 显示项目选择对话框
-        await _projectSelectModal.ShowAsync();
+        Console.WriteLine("【调试】CreateNewSession方法被调用");
+        // 显示工作区选择对话框
+        await _createSessionModal.ShowAsync();
     }
 
     /// <summary>
@@ -1603,6 +1606,26 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private async Task OnProjectSelected(ProjectSelectionResult selection)
     {
         await CreateNewSessionWithProjectAsync(selection.ProjectId, selection.IncludeGit);
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 处理新建会话（支持自定义工作区）
+    /// </summary>
+    private async Task HandleSessionCreated(CreateSessionOptions options)
+    {
+        // 创建新会话
+        var newSession = await CreateNewSessionAsync(options.UseDefaultDirectory, options.WorkspacePath);
+
+        // 加载新会话
+        await LoadSessionFromDrawer(newSession.SessionId);
+    }
+
+    /// <summary>
+    /// 关闭新建会话模态框
+    /// </summary>
+    private void CloseCreateSessionModal()
+    {
         StateHasChanged();
     }
 
@@ -1694,7 +1717,33 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             Console.WriteLine($"错误详情: {ex.StackTrace}");
         }
     }
-    
+
+    /// <summary>
+    /// 创建新会话（支持自定义工作区，移动端）
+    /// </summary>
+    private async Task<SessionHistory> CreateNewSessionAsync(bool useDefaultDirectory, string workspacePath)
+    {
+        // 创建新会话
+        var newSession = new SessionHistory
+        {
+            SessionId = Guid.NewGuid().ToString(),
+            Title = "新会话",
+            CreatedAt = DateTime.Now,
+            UpdatedAt = DateTime.Now,
+            ToolId = _selectedToolId,
+            WorkspacePath = useDefaultDirectory ? string.Empty : workspacePath,
+            IsCustomWorkspace = !useDefaultDirectory
+        };
+
+        // 保存会话
+        await SessionHistoryManager.SaveSessionImmediateAsync(newSession);
+
+        // 重新加载会话列表
+        await LoadSessions();
+
+        return newSession;
+    }
+
     private async Task CreateNewSessionFromDrawer()
     {
         CloseSessionDrawer();
@@ -2575,6 +2624,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private UpdateNotificationModal _updateNotificationModal = default!;
     private ProjectSelectModal _projectSelectModal = default!;
     private ProjectManageModal _projectManageModal = default!;
+    private CreateSessionModal _createSessionModal = default!;
     
     // 版本相关
     private string _currentVersion = string.Empty;

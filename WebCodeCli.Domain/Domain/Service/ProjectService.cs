@@ -17,11 +17,12 @@ public class ProjectService : IProjectService
     private readonly IUserContextService _userContextService;
     private readonly ISystemSettingsService _systemSettingsService;
     private readonly IGitService _gitService;
+    private readonly IWorkspaceRegistryService _workspaceRegistryService;
     private readonly ILogger<ProjectService> _logger;
-    
+
     // 项目目录在工作区根目录下的子文件夹名
     private const string ProjectsFolder = "projects";
-    
+
     // 简单的 AES 加密密钥（实际生产环境应该使用更安全的密钥管理）
     private const string EncryptionKey = "WebCode2024!Proj";
 
@@ -30,12 +31,14 @@ public class ProjectService : IProjectService
         IUserContextService userContextService,
         ISystemSettingsService systemSettingsService,
         IGitService gitService,
+        IWorkspaceRegistryService workspaceRegistryService,
         ILogger<ProjectService> logger)
     {
         _projectRepository = projectRepository;
         _userContextService = userContextService;
         _systemSettingsService = systemSettingsService;
         _gitService = gitService;
+        _workspaceRegistryService = workspaceRegistryService;
         _logger = logger;
     }
 
@@ -243,7 +246,38 @@ public class ProjectService : IProjectService
                 }
                 return (null, "保存项目失败");
             }
-            
+
+            // 自动注册ZIP项目目录到工作区注册表
+            try
+            {
+                // 确保目录存在
+                if (!Directory.Exists(entity.LocalPath))
+                {
+                    Directory.CreateDirectory(entity.LocalPath);
+                }
+
+                // 检查是否已经注册过
+                var existingRegistration = await _workspaceRegistryService.GetDirectoryOwnerAsync(entity.LocalPath);
+                if (existingRegistration == null)
+                {
+                    await _workspaceRegistryService.RegisterDirectoryAsync(
+                        directoryPath: entity.LocalPath,
+                        username: username,
+                        alias: entity.Name,
+                        isTrusted: true);
+                    _logger.LogInformation("ZIP项目目录已自动注册到工作区: {ProjectId}, 别名: {Name}, 路径: {LocalPath}", projectId, projectName, entity.LocalPath);
+                }
+                else
+                {
+                    _logger.LogInformation("ZIP项目目录已存在于工作区注册表，无需重复注册: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                // 注册失败不影响创建结果，仅记录日志
+                _logger.LogWarning(ex, "ZIP项目目录注册到工作区失败: {ProjectId}, 路径: {LocalPath}", projectId, localPath);
+            }
+
             _logger.LogInformation("ZIP 项目创建成功: {ProjectId}, {Name}", projectId, projectName);
             return (MapToProjectInfo(entity), null);
         }
@@ -451,6 +485,37 @@ public class ProjectService : IProjectService
                     entity.LastSyncAt = DateTime.Now;
                     entity.ErrorMessage = null;
                     _logger.LogInformation("项目克隆成功: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+
+                    // 自动注册项目目录到工作区注册表，方便新建会话时直接选择
+                    try
+                    {
+                        // 确保目录存在（防止Git克隆刚完成时的延迟问题）
+                        if (!Directory.Exists(entity.LocalPath))
+                        {
+                            Directory.CreateDirectory(entity.LocalPath);
+                        }
+
+                        // 检查是否已经注册过，避免重复注册
+                        var existingRegistration = await _workspaceRegistryService.GetDirectoryOwnerAsync(entity.LocalPath);
+                        if (existingRegistration == null)
+                        {
+                            await _workspaceRegistryService.RegisterDirectoryAsync(
+                                directoryPath: entity.LocalPath,
+                                username: username,
+                                alias: entity.Name,
+                                isTrusted: true);
+                            _logger.LogInformation("项目目录已自动注册到工作区: {ProjectId}, 别名: {Name}, 路径: {LocalPath}", projectId, entity.Name, entity.LocalPath);
+                        }
+                        else
+                        {
+                            _logger.LogInformation("项目目录已存在于工作区注册表，无需重复注册: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // 注册失败不影响克隆结果，仅记录日志，用户可手动注册
+                        _logger.LogWarning(ex, "项目目录注册到工作区失败: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+                    }
                 }
                 else
                 {

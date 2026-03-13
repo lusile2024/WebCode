@@ -9,6 +9,7 @@ using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service.Adapters;
+using WebCodeCli.Domain.Repositories.Base.ChatSession;
 using WebCodeCli.Domain.Repositories.Base.SystemSettings;
 
 namespace WebCodeCli.Domain.Domain.Service;
@@ -1104,8 +1105,8 @@ public class CliExecutorService : ICliExecutorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "创建会话工作目录失败: {SessionId}", sessionId);
-                // 如果创建失败,返回临时目录根路径
-                return workspaceRoot;
+                // 创建失败直接抛出异常，不降级使用根目录
+                throw new InvalidOperationException($"创建会话 {sessionId} 工作目录失败: {ex.Message}", ex);
             }
         }
     }
@@ -1117,43 +1118,68 @@ public class CliExecutorService : ICliExecutorService
     {
         // 清理持久化进程
         _processManager.CleanupSessionProcesses(sessionId);
-        
+
         // 清理CLI thread id
         lock (_cliSessionLock)
         {
             _cliThreadIds.Remove(sessionId);
         }
-        
-        string? workspacePathFromCache = null;
 
+        string? workspacePath = null;
+        bool isCustomWorkspace = false;
+
+        // 查询会话信息判断目录类型
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var chatSessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            var session = chatSessionRepository.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+
+            if (session != null)
+            {
+                workspacePath = session.WorkspacePath;
+                isCustomWorkspace = session.IsCustomWorkspace;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "查询会话 {SessionId} 信息失败，将按临时目录处理", sessionId);
+        }
+
+        // 清理内存缓存
         lock (_workspaceLock)
         {
-            if (_sessionWorkspaces.TryGetValue(sessionId, out var workspacePath))
+            if (_sessionWorkspaces.TryGetValue(sessionId, out var cachedPath))
             {
-                workspacePathFromCache = workspacePath;
+                workspacePath ??= cachedPath;
                 _sessionWorkspaces.Remove(sessionId);
             }
         }
 
-        // 注意：即使内存缓存中不存在该会话，也应该尝试清理默认路径下的目录。
-        // 典型场景：服务重启后 _sessionWorkspaces 被清空，但磁盘目录仍然存在。
-        var workspacePathToDelete = workspacePathFromCache;
-        var workspaceRoot = GetEffectiveWorkspaceRoot();
-        if (string.IsNullOrWhiteSpace(workspacePathToDelete))
+        // 自定义目录：只解除绑定，不删除内容
+        if (isCustomWorkspace)
         {
-            workspacePathToDelete = Path.Combine(workspaceRoot, sessionId);
+            _logger.LogInformation("已解除自定义目录会话 {SessionId} 的绑定，保留目录内容: {Path}", sessionId, workspacePath);
+            return;
+        }
+
+        // 临时目录：执行删除逻辑
+        if (string.IsNullOrEmpty(workspacePath))
+        {
+            var workspaceRoot = GetEffectiveWorkspaceRoot();
+            workspacePath = Path.Combine(workspaceRoot, sessionId);
         }
 
         try
         {
-            var rootFullPath = Path.GetFullPath(workspaceRoot);
-            var workspaceFullPath = Path.GetFullPath(workspacePathToDelete);
+            var rootFullPath = Path.GetFullPath(GetEffectiveWorkspaceRoot());
+            var workspaceFullPath = Path.GetFullPath(workspacePath);
 
-            // 防御：只允许删除 TempWorkspaceRoot 下的子目录，避免误删。
+            // 防御：只允许删除 TempWorkspaceRoot 下的临时目录
             if (!workspaceFullPath.StartsWith(rootFullPath, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(workspaceFullPath, rootFullPath, StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogWarning("跳过清理会话工作目录（路径异常）: {SessionId}, {Path}", sessionId, workspaceFullPath);
+                _logger.LogWarning("跳过清理非临时目录: {SessionId}, {Path}", sessionId, workspaceFullPath);
                 return;
             }
 
@@ -1162,7 +1188,7 @@ public class CliExecutorService : ICliExecutorService
                 try
                 {
                     Directory.Delete(workspaceFullPath, recursive: true);
-                    _logger.LogInformation("已清理会话 {SessionId} 的工作目录: {Path}", sessionId, workspaceFullPath);
+                    _logger.LogInformation("已清理临时会话 {SessionId} 的工作目录: {Path}", sessionId, workspaceFullPath);
                 }
                 catch (Exception ex)
                 {
@@ -1171,18 +1197,18 @@ public class CliExecutorService : ICliExecutorService
                     {
                         NormalizeDirectoryAttributes(workspaceFullPath);
                         Directory.Delete(workspaceFullPath, recursive: true);
-                        _logger.LogInformation("已清理会话 {SessionId} 的工作目录(重试成功): {Path}", sessionId, workspaceFullPath);
+                        _logger.LogInformation("已清理临时会话 {SessionId} 的工作目录(重试成功): {Path}", sessionId, workspaceFullPath);
                     }
                     catch
                     {
-                        _logger.LogWarning(ex, "清理会话工作目录失败: {SessionId}, {Path}", sessionId, workspaceFullPath);
+                        _logger.LogWarning(ex, "清理临时会话工作目录失败: {SessionId}, {Path}", sessionId, workspaceFullPath);
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "清理会话工作目录失败(路径解析异常): {SessionId}", sessionId);
+            _logger.LogWarning(ex, "清理临时会话工作目录失败(路径解析异常): {SessionId}", sessionId);
         }
     }
 
@@ -1442,8 +1468,19 @@ public class CliExecutorService : ICliExecutorService
                 return path;
             }
 
-            // 如果不存在,创建一个
-            return GetOrCreateSessionWorkspace(sessionId);
+            // 缓存丢失时查询数据库获取会话绑定的工作目录
+            using var scope = _serviceProvider.CreateScope();
+            var chatSessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            var session = chatSessionRepository.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+
+            if (session != null && !string.IsNullOrEmpty(session.WorkspacePath) && Directory.Exists(session.WorkspacePath))
+            {
+                _sessionWorkspaces[sessionId] = session.WorkspacePath;
+                return session.WorkspacePath;
+            }
+
+            // 会话不存在或工作目录无效，抛出异常（不自动创建临时目录）
+            throw new InvalidOperationException($"会话 {sessionId} 工作目录不存在或已被清理，请重新创建会话");
         }
     }
     

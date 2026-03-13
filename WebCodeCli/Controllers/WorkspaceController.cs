@@ -19,13 +19,15 @@ public class WorkspaceController : ControllerBase
     private readonly IWorkspaceRegistryService _workspaceRegistryService;
     private readonly IWorkspaceAuthorizationService _workspaceAuthorizationService;
     private readonly ISessionDirectoryService _sessionDirectoryService;
+    private readonly IUserContextService _userContextService;
 
     public WorkspaceController(
         ICliExecutorService cliExecutorService,
         ILogger<WorkspaceController> logger,
         IWorkspaceRegistryService workspaceRegistryService,
         IWorkspaceAuthorizationService workspaceAuthorizationService,
-        ISessionDirectoryService sessionDirectoryService)
+        ISessionDirectoryService sessionDirectoryService,
+        IUserContextService userContextService)
     {
         _cliExecutorService = cliExecutorService;
         _logger = logger;
@@ -33,6 +35,7 @@ public class WorkspaceController : ControllerBase
         _workspaceRegistryService = workspaceRegistryService;
         _workspaceAuthorizationService = workspaceAuthorizationService;
         _sessionDirectoryService = sessionDirectoryService;
+        _userContextService = userContextService;
     }
 
     /// <summary>
@@ -40,7 +43,11 @@ public class WorkspaceController : ControllerBase
     /// </summary>
     private string GetCurrentUsername()
     {
-        return User.FindFirstValue(ClaimTypes.Name) ?? "default";
+        // 优先使用 UserContextService，该服务在 Blazor 登录时设置用户名
+        // 如果 UserContextService 返回配置默认值（未登录时），则回退到 Claims
+        var username = _userContextService.GetCurrentUsername();
+        _logger.LogDebug("[工作区] 获取当前用户名: {Username}", username);
+        return username;
     }
 
     /// <summary>

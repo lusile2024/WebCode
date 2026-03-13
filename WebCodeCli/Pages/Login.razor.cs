@@ -12,6 +12,7 @@ public partial class Login : ComponentBase
     [Inject] private NavigationManager NavigationManager { get; set; } = default!;
     [Inject] private IJSRuntime JSRuntime { get; set; } = default!;
     [Inject] private ILocalizationService L { get; set; } = default!;
+    [Inject] private IUserContextService UserContextService { get; set; } = default!;
 
     private string _username = string.Empty;
     private string _password = string.Empty;
@@ -44,9 +45,11 @@ public partial class Login : ComponentBase
         }
 
         // 检查是否已登录
-        var isAuthenticated = await CheckAuthenticationAsync();
-        if (isAuthenticated)
+        var (isAuthenticated, username) = await CheckAuthenticationAsync();
+        if (isAuthenticated && !string.IsNullOrEmpty(username))
         {
+            // 已登录用户，设置用户名到上下文
+            UserContextService.SetCurrentUsername(username);
             NavigationManager.NavigateTo("/code-assistant");
         }
     }
@@ -105,7 +108,10 @@ public partial class Login : ComponentBase
             {
                 // 登录成功，保存认证状态到 SessionStorage
                 await SaveAuthentication(_username);
-                
+
+                // 设置当前登录用户名到上下文，后续所有操作都使用这个用户名
+                UserContextService.SetCurrentUsername(_username);
+
                 // 跳转到主页
                 NavigationManager.NavigateTo("/code-assistant", forceLoad: true);
             }
@@ -153,16 +159,21 @@ public partial class Login : ComponentBase
         }
     }
 
-    private async Task<bool> CheckAuthenticationAsync()
+    private async Task<(bool IsAuthenticated, string? Username)> CheckAuthenticationAsync()
     {
         try
         {
             var isAuthenticated = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "isAuthenticated");
-            return isAuthenticated == "true";
+            if (isAuthenticated == "true")
+            {
+                var username = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username");
+                return (true, username);
+            }
+            return (false, null);
         }
         catch
         {
-            return false;
+            return (false, null);
         }
     }
 

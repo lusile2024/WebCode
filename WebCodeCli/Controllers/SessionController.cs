@@ -229,13 +229,16 @@ public class SessionController : ControllerBase
     {
         try
         {
-            var currentUser = GetCurrentUsername();
-            await _sessionDirectoryService.SwitchSessionWorkspaceAsync(
-                sessionId,
-                currentUser,
-                request.DirectoryPath);
+            // 已禁用切换目录功能：会话绑定后不允许更改工作目录
+            return BadRequest(new { error = "会话目录已绑定，不允许切换。如需使用其他目录，请创建新会话。" });
 
-            return Ok(new { success = true });
+            // var currentUser = GetCurrentUsername();
+            // await _sessionDirectoryService.SwitchSessionWorkspaceAsync(
+            //     sessionId,
+            //     currentUser,
+            //     request.DirectoryPath);
+            //
+            // return Ok(new { success = true });
         }
         catch (KeyNotFoundException ex)
         {

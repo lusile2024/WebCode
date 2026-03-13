@@ -54,5 +54,7 @@ public class UserContextService : IUserContextService
     public void SetCurrentUsername(string username)
     {
         _overrideUsername = username;
+        // 注意：这里应该添加日志，方便调试用户上下文问题
+        // Console.WriteLine($"[用户上下文] 设置当前用户名: {username}");
     }
 }

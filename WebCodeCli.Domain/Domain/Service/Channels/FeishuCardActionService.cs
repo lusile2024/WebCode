@@ -2,9 +2,11 @@
 using FeishuNetSdk.CallbackEvents;
 using FeishuNetSdk.Im.Dtos;
 using WebCodeCli.Domain.Domain.Model.Channels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
+using WebCodeCli.Domain.Repositories.Base.ChatSession;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -21,12 +23,16 @@ public class FeishuCardActionService
     private readonly IChatSessionService _chatSessionService;
     private readonly IFeishuChannelService _feishuChannel;
     private readonly ILogger<FeishuCardActionService> _logger;
+    private readonly IServiceProvider _serviceProvider;
 
     // 默认使用的 CLI 工具 ID
     private const string DefaultToolId = "claude-code";
 
     // 会话映射（从 FeishuChannelService 复制）
     private readonly Dictionary<string, string> _sessionMappings = new();
+
+    // 待确认关闭的临时会话：sessionId -> 确认有效期截止时间
+    private readonly Dictionary<string, DateTime> _pendingCloseSessions = new();
 
     public FeishuCardActionService(
         FeishuCommandService commandService,
@@ -35,7 +41,8 @@ public class FeishuCardActionService
         ICliExecutorService cliExecutor,
         IChatSessionService chatSessionService,
         IFeishuChannelService feishuChannel,
-        ILogger<FeishuCardActionService> logger)
+        ILogger<FeishuCardActionService> logger,
+        IServiceProvider serviceProvider)
     {
         _commandService = commandService;
         _cardBuilder = cardBuilder;
@@ -44,6 +51,7 @@ public class FeishuCardActionService
         _chatSessionService = chatSessionService;
         _feishuChannel = feishuChannel;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     /// <summary>
@@ -600,15 +608,62 @@ public class FeishuCardActionService
         var chatKeyParts = chatKey.Split(':');
         var actualChatKey = chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
 
-        var success = _feishuChannel.CloseSession(actualChatKey, sessionId);
-        if (success)
+        // 查询会话信息判断目录类型
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAsync(sessionId);
+
+        if (session == null)
         {
-            return _cardBuilder.BuildCardActionToastOnlyResponse(
-                $"🗑️ 已关闭会话 {sessionId[..8]}...\n工作目录已清理",
-                "info");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在，关闭失败", "error");
         }
 
-        return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在，关闭失败", "error");
+        // 自定义目录/项目目录：直接关闭，无需确认
+        if (session.IsCustomWorkspace)
+        {
+            var success = _feishuChannel.CloseSession(actualChatKey, sessionId);
+            if (success)
+            {
+                return _cardBuilder.BuildCardActionToastOnlyResponse(
+                    $"🗑️ 已关闭会话 {sessionId[..8]}...\n✅ 自定义目录内容已保留",
+                    "info");
+            }
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话关闭失败", "error");
+        }
+
+        // 临时目录：需要二次确认
+        lock (_pendingCloseSessions)
+        {
+            // 清理过期的待确认会话
+            var expiredKeys = _pendingCloseSessions.Where(kv => kv.Value < DateTime.Now).Select(kv => kv.Key).ToList();
+            foreach (var key in expiredKeys)
+            {
+                _pendingCloseSessions.Remove(key);
+            }
+
+            // 检查是否已在待确认列表中
+            if (_pendingCloseSessions.TryGetValue(sessionId, out var expireTime) && expireTime > DateTime.Now)
+            {
+                // 确认有效期内，执行关闭
+                _pendingCloseSessions.Remove(sessionId);
+                var success = _feishuChannel.CloseSession(actualChatKey, sessionId);
+                if (success)
+                {
+                    return _cardBuilder.BuildCardActionToastOnlyResponse(
+                        $"🗑️ 已关闭会话 {sessionId[..8]}...\n⚠️ 临时目录内容已清理",
+                        "info");
+                }
+                return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话关闭失败", "error");
+            }
+            else
+            {
+                // 第一次点击，加入待确认列表，有效期10秒
+                _pendingCloseSessions[sessionId] = DateTime.Now.AddSeconds(10);
+                return _cardBuilder.BuildCardActionToastOnlyResponse(
+                    $"⚠️ 确认关闭临时会话 {sessionId[..8]} 吗？\n关闭后临时目录内容将被永久删除。\n请在10秒内再次点击确认。",
+                    "warning");
+            }
+        }
     }
 
     /// <summary>
