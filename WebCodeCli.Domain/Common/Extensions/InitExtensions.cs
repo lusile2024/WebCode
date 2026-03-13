@@ -114,6 +114,19 @@ namespace WebCodeCli.Domain.Common.Extensions
                 {
                     Console.WriteLine($"初始化定时任务表失败: {ex.Message}");
                 }
+
+                // 初始化工作区管理相关表
+                try
+                {
+                    Console.WriteLine("开始初始化工作区管理表...");
+                    _repository.GetDB().CodeFirst.InitTables<WebCodeCli.Domain.Repositories.Base.Workspace.WorkspaceOwnerEntity>();
+                    _repository.GetDB().CodeFirst.InitTables<WebCodeCli.Domain.Repositories.Base.Workspace.WorkspaceAuthorizationEntity>();
+                    Console.WriteLine("工作区管理表初始化成功");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"初始化工作区管理表失败: {ex.Message}");
+                }
             }
         }
 

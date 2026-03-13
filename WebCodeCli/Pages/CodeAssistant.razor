@@ -357,6 +357,17 @@
                        GitHubText="GitHub"
                        ClearChatText="@T("codeAssistant.clearChat")"
                        OnClearChat="ClearChat" />
+
+        <!-- 工作区切换器 -->
+        <WorkspaceSwitcher ShowSwitcher="true"
+                          CurrentDirectoryId="@((_currentSession != null ? _currentSession.SessionId.GetHashCode() : 0))"
+                          CurrentDirectoryName='@(string.IsNullOrEmpty(_currentSession?.WorkspacePath) ? "默认工作区" : Path.GetFileName(_currentSession.WorkspacePath))'
+                          CurrentDirectoryPath="@(_currentSession?.WorkspacePath ?? string.Empty)"
+                          CurrentDirectoryType='@(_currentSession?.IsCustomWorkspace == true ? "custom" : "default")'
+                          SessionId="@_sessionId"
+                          OnDirectorySwitched="HandleDirectorySwitched"
+                          OnOpenAuthorizationModal="ShowAuthorizationModal" />
+
         <ChatToolbarPanel SessionHistoryTitle="@T("codeAssistant.sessionHistory")"
                           SessionHistoryText="@T("codeAssistant.sessionHistory")"
                           ProjectTitle="@T("project.title")"
@@ -436,6 +447,12 @@
 <!-- 代码预览模态框 -->
 @* 代码预览模态框 (已应用Tailwind样式) *@
 <CodePreviewModal @ref="_codePreviewModal" />
+
+<!-- 新建会话模态框 -->
+<CreateSessionModal @ref="_createSessionModal"
+                   Show="false"
+                   OnSessionCreated="HandleSessionCreated"
+                   OnClose="CloseCreateSessionModal" />
 
 <CreateFolderDialog Show="@_showCreateFolderDialog"
                     Title="@T("codeAssistant.createFolder")"

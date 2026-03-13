@@ -1,12 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
+using System.Security.Claims;
 using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Controllers;
 
 /// <summary>
-/// 工作区静态文件访问控制器
-/// 用于支持HTML预览中的CSS/JS等资源相对路径加载
+/// 工作区控制器
+/// 提供静态文件访问和工作区授权管理功能
 /// </summary>
 [ApiController]
 [Route("api/workspace")]
@@ -15,14 +16,31 @@ public class WorkspaceController : ControllerBase
     private readonly ICliExecutorService _cliExecutorService;
     private readonly ILogger<WorkspaceController> _logger;
     private readonly FileExtensionContentTypeProvider _contentTypeProvider;
+    private readonly IWorkspaceRegistryService _workspaceRegistryService;
+    private readonly IWorkspaceAuthorizationService _workspaceAuthorizationService;
+    private readonly ISessionDirectoryService _sessionDirectoryService;
 
     public WorkspaceController(
         ICliExecutorService cliExecutorService,
-        ILogger<WorkspaceController> logger)
+        ILogger<WorkspaceController> logger,
+        IWorkspaceRegistryService workspaceRegistryService,
+        IWorkspaceAuthorizationService workspaceAuthorizationService,
+        ISessionDirectoryService sessionDirectoryService)
     {
         _cliExecutorService = cliExecutorService;
         _logger = logger;
         _contentTypeProvider = new FileExtensionContentTypeProvider();
+        _workspaceRegistryService = workspaceRegistryService;
+        _workspaceAuthorizationService = workspaceAuthorizationService;
+        _sessionDirectoryService = sessionDirectoryService;
+    }
+
+    /// <summary>
+    /// 获取当前用户名
+    /// </summary>
+    private string GetCurrentUsername()
+    {
+        return User.FindFirstValue(ClaimTypes.Name) ?? "default";
     }
 
     /// <summary>
@@ -201,5 +219,257 @@ public class WorkspaceController : ControllerBase
     {
         return Ok(new { status = "healthy", timestamp = DateTime.UtcNow });
     }
+
+    #region 工作区授权管理API
+
+    /// <summary>
+    /// 授权用户访问目录
+    /// </summary>
+    /// <param name="request">授权请求参数</param>
+    [HttpPost("authorize")]
+    public async Task<IActionResult> AuthorizeDirectory([FromBody] AuthorizeDirectoryRequest request)
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var authorization = await _workspaceAuthorizationService.GrantPermissionAsync(
+                request.DirectoryPath,
+                currentUser,
+                request.AuthorizedUsername,
+                request.Permission,
+                request.ExpiresAt);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    authorization.Id,
+                    authorization.DirectoryPath,
+                    authorization.AuthorizedUsername,
+                    authorization.Permission,
+                    authorization.GrantedBy,
+                    authorization.GrantedAt,
+                    authorization.ExpiresAt
+                }
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Forbid(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "目录授权失败");
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 取消用户的目录访问授权
+    /// </summary>
+    /// <param name="request">取消授权请求参数</param>
+    [HttpPost("revoke-authorization")]
+    public async Task<IActionResult> RevokeAuthorization([FromBody] RevokeAuthorizationRequest request)
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var success = await _workspaceAuthorizationService.RevokePermissionAsync(
+                request.DirectoryPath,
+                currentUser,
+                request.AuthorizedUsername);
+
+            return Ok(new { success });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Forbid(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "取消授权失败");
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 获取我拥有的所有目录
+    /// </summary>
+    [HttpGet("my-owned-directories")]
+    public async Task<IActionResult> GetMyOwnedDirectories()
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var directories = await _workspaceRegistryService.GetOwnedDirectoriesAsync(currentUser);
+
+            return Ok(new
+            {
+                success = true,
+                data = directories.Select(d => new
+                {
+                    d.Id,
+                    d.DirectoryPath,
+                    d.Alias,
+                    d.IsTrusted,
+                    d.CreatedAt,
+                    d.UpdatedAt
+                })
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取拥有的目录失败");
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 获取我被授权访问的所有目录
+    /// </summary>
+    [HttpGet("my-authorized-directories")]
+    public async Task<IActionResult> GetMyAuthorizedDirectories()
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var authorizations = await _workspaceAuthorizationService.GetUserAuthorizedDirectoriesAsync(currentUser);
+
+            return Ok(new
+            {
+                success = true,
+                data = authorizations.Select(a => new
+                {
+                    a.Id,
+                    a.DirectoryPath,
+                    a.Permission,
+                    a.GrantedBy,
+                    a.GrantedAt,
+                    a.ExpiresAt
+                })
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取被授权的目录失败");
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 获取目录的授权用户列表
+    /// </summary>
+    /// <param name="directoryPath">目录路径</param>
+    [HttpGet("directory-authorizations")]
+    public async Task<IActionResult> GetDirectoryAuthorizations([FromQuery] string directoryPath)
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var authorizations = await _workspaceAuthorizationService.GetDirectoryAuthorizationsAsync(
+                directoryPath, currentUser);
+
+            return Ok(new
+            {
+                success = true,
+                data = authorizations.Select(a => new
+                {
+                    a.Id,
+                    a.AuthorizedUsername,
+                    a.Permission,
+                    a.GrantedBy,
+                    a.GrantedAt,
+                    a.ExpiresAt
+                })
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Forbid(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取目录授权列表失败");
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 获取我有权限访问的所有目录（拥有的 + 被授权的）
+    /// </summary>
+    [HttpGet("my-accessible-directories")]
+    public async Task<IActionResult> GetMyAccessibleDirectories()
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var directories = await _sessionDirectoryService.GetUserAccessibleDirectoriesAsync(currentUser);
+
+            return Ok(new
+            {
+                success = true,
+                data = directories
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取可访问目录失败");
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    #endregion
 }
+
+#region 请求参数模型
+
+/// <summary>
+/// 目录授权请求参数
+/// </summary>
+public class AuthorizeDirectoryRequest
+{
+    /// <summary>
+    /// 目录路径
+    /// </summary>
+    public string DirectoryPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 被授权的用户名
+    /// </summary>
+    public string AuthorizedUsername { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 权限级别：read/write/admin
+    /// </summary>
+    public string Permission { get; set; } = "read";
+
+    /// <summary>
+    /// 过期时间（可选）
+    /// </summary>
+    public DateTime? ExpiresAt { get; set; }
+}
+
+/// <summary>
+/// 取消授权请求参数
+/// </summary>
+public class RevokeAuthorizationRequest
+{
+    /// <summary>
+    /// 目录路径
+    /// </summary>
+    public string DirectoryPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 要取消授权的用户名
+    /// </summary>
+    public string AuthorizedUsername { get; set; } = string.Empty;
+}
+
+#endregion
+
 

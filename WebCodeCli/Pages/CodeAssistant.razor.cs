@@ -11,6 +11,8 @@ using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
+using WebCodeCli.Components.Dialogs;
+using WebCodeCli.Models;
 
 namespace WebCodeCli.Pages;
 
@@ -269,6 +271,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private QuickActionsPanel _quickActionsPanel = default!;
     private TemplateLibraryModal _templateLibraryModal = default!;
     private AutoCompleteDropdown _autoCompleteDropdown = default!;
+    private CreateSessionModal _createSessionModal = default!;
     
     // 自动补全相关
     private System.Threading.Timer? _autoCompleteDebounceTimer;
@@ -3951,7 +3954,84 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         // 直接创建空白会话，不显示项目选择
         await CreateNewSessionWithProjectAsync(null, includeGit: false);
     }
-    
+
+    /// <summary>
+    /// 新建会话（支持自定义工作区）
+    /// </summary>
+    private async Task<SessionHistory> CreateNewSessionAsync(bool useDefaultDirectory, string workspacePath)
+    {
+        // 创建新会话
+        var newSession = new SessionHistory
+        {
+            SessionId = Guid.NewGuid().ToString(),
+            Title = "新会话",
+            CreatedAt = DateTime.Now,
+            UpdatedAt = DateTime.Now,
+            ToolId = _selectedToolId,
+            WorkspacePath = useDefaultDirectory ? string.Empty : workspacePath,
+            IsCustomWorkspace = !useDefaultDirectory
+        };
+
+        // 保存会话
+        await SessionHistoryManager.SaveSessionImmediateAsync(newSession);
+
+        // 重新加载会话列表
+        await LoadSessionsAsync();
+
+        return newSession;
+    }
+
+    /// <summary>
+    /// 处理工作区切换
+    /// </summary>
+    private async Task HandleDirectorySwitched(AccessibleDirectoryDto directory)
+    {
+        // 更新会话工作区
+        if (_currentSession != null)
+        {
+            _currentSession.WorkspacePath = directory.Path;
+            _currentSession.IsCustomWorkspace = true;
+            await SessionHistoryManager.SaveSessionImmediateAsync(_currentSession);
+
+            // 重新加载工作区文件
+            await LoadWorkspaceFiles();
+
+            // 刷新前端项目检测
+            await DetectFrontendProjects();
+
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 显示授权管理模态框
+    /// </summary>
+    private void ShowAuthorizationModal()
+    {
+        // TODO: 实现授权管理模态框
+        Console.WriteLine("显示授权管理模态框");
+    }
+
+    /// <summary>
+    /// 处理新建会话
+    /// </summary>
+    private async Task HandleSessionCreated(CreateSessionOptions options)
+    {
+        // 创建新会话
+        var newSession = await CreateNewSessionAsync(options.UseDefaultDirectory, options.WorkspacePath);
+
+        // 加载新会话
+        await LoadSession(newSession.SessionId);
+    }
+
+    /// <summary>
+    /// 关闭新建会话模态框
+    /// </summary>
+    private void CloseCreateSessionModal()
+    {
+        StateHasChanged();
+    }
+
     /// <summary>
     /// 切换会话列表显示状态
     /// </summary>

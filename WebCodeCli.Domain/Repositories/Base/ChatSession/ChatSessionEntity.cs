@@ -74,4 +74,10 @@ public class ChatSessionEntity
     /// </summary>
     [SugarColumn(IsNullable = false)]
     public bool IsFeishuActive { get; set; } = false;
+
+    /// <summary>
+    /// 是否为自定义工作目录（非系统自动生成的临时目录）
+    /// </summary>
+    [SugarColumn(IsNullable = false)]
+    public bool IsCustomWorkspace { get; set; } = false;
 }
