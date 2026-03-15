@@ -9,7 +9,6 @@ using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service.Adapters;
-using WebCodeCli.Domain.Repositories.Base.ChatSession;
 using WebCodeCli.Domain.Repositories.Base.SystemSettings;
 
 namespace WebCodeCli.Domain.Domain.Service;
@@ -33,18 +32,14 @@ public class CliExecutorService : ICliExecutorService
     // 缓存的有效工作区根目录
     private string? _effectiveWorkspaceRoot;
     private readonly object _workspaceRootLock = new();
-
+    
     // 存储每个会话的CLI Thread ID（适用于所有CLI工具）
     private readonly Dictionary<string, string> _cliThreadIds = new();
     private readonly object _cliSessionLock = new();
-
+    
     // Codex 配置文件缓存（避免每次执行都重新生成）
     private string? _lastCodexConfigHash;
     private readonly object _codexConfigLock = new();
-
-    // Windows 下为 Claude Code 选择可用的较高版本 Node.js
-    private string? _preferredNodeExecutablePath;
-    private readonly object _preferredNodeExecutableLock = new();
 
     public CliExecutorService(
         ILogger<CliExecutorService> logger,
@@ -672,23 +667,17 @@ public class CliExecutorService : ICliExecutorService
             startInfo.WorkingDirectory = sessionWorkspace;
         }
 
-        // 设置环境变量
+        // 设置环境变量 - 只有在有实际值的变量才设置(避免空值覆盖系统默认配置)
         if (environmentVariables != null && environmentVariables.Count > 0)
         {
             foreach (var kvp in environmentVariables)
             {
-                // 空字符串表示显式移除环境变量（用于取消继承父进程的环境变量）
-                // 这对于像 CLAUDECODE 这样的变量很重要，需要完全未设置而不是空字符串
-                if (string.IsNullOrEmpty(kvp.Value))
+                // 跳过空值的环境变量，避免覆盖系统中已存在的配置
+                if (string.IsNullOrWhiteSpace(kvp.Value))
                 {
-                    if (startInfo.EnvironmentVariables.ContainsKey(kvp.Key))
-                    {
-                        startInfo.EnvironmentVariables.Remove(kvp.Key);
-                        _logger.LogDebug("移除环境变量: {Key}", kvp.Key);
-                    }
+                    _logger.LogDebug("跳过空值环境变量: {Key}", kvp.Key);
                     continue;
                 }
-                // 非空值正常设置
                 startInfo.EnvironmentVariables[kvp.Key] = kvp.Value;
                 _logger.LogDebug("设置环境变量: {Key} = {Value}", kvp.Key, kvp.Value);
             }
@@ -715,11 +704,8 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
-        RewriteClaudeLaunchToNode(startInfo, tool, commandPath, arguments);
-        EnsurePreferredNodeForClaude(startInfo, tool, commandPath);
-
         _logger.LogInformation("准备启动进程: {FileName} {Arguments}", startInfo.FileName, startInfo.Arguments);
-
+        
         process = new Process { StartInfo = startInfo };
 
         // 启动进程
@@ -860,18 +846,6 @@ public class CliExecutorService : ICliExecutorService
                 ErrorMessage = "执行已取消"
             };
         }
-        else if (process.ExitCode != 0)
-        {
-            yield return new StreamOutputChunk
-            {
-                IsError = true,
-                IsCompleted = true,
-                ErrorMessage = $"执行失败（退出码 {process.ExitCode}）"
-            };
-
-            _logger.LogWarning("CLI 工具执行失败: {Tool}, 退出代码: {ExitCode}",
-                tool.Name, process.ExitCode);
-        }
         else
         {
             // 返回完成标记
@@ -894,20 +868,19 @@ public class CliExecutorService : ICliExecutorService
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("开始读取流，isErrorStream: {IsError}", isErrorStream);
-        var buffer = new char[4096];
-        int chunkCount = 0;
-
+        int lineCount = 0;
+        
         while (true)
         {
-            int charsRead;
-
+            string? line;
+            
             try
             {
-                charsRead = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+                line = await reader.ReadLineAsync(cancellationToken);
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("读取流被取消，isErrorStream: {IsError}, 已读取 {Count} 块", isErrorStream, chunkCount);
+                _logger.LogInformation("读取流被取消，isErrorStream: {IsError}, 已读取 {Count} 行", isErrorStream, lineCount);
                 break;
             }
             catch (Exception ex)
@@ -916,21 +889,16 @@ public class CliExecutorService : ICliExecutorService
                 break;
             }
 
-            if (charsRead <= 0)
+            if (line == null)
             {
-                _logger.LogInformation("流结束，isErrorStream: {IsError}, 共读取 {Count} 块", isErrorStream, chunkCount);
+                _logger.LogInformation("流结束，isErrorStream: {IsError}, 共读取 {Count} 行", isErrorStream, lineCount);
                 break;
             }
-
-            chunkCount++;
-            var content = new string(buffer, 0, charsRead);
-            var trimmedPreview = content.TrimStart();
-            if (!trimmedPreview.StartsWith("{\"type\":\"system\""))
-            {
-                var preview = content.Length > 100 ? content[..100] + "..." : content;
-                _logger.LogDebug("CLI输出块: {Preview}", preview.Replace("\r", "\\r").Replace("\n", "\\n"));
-            }
-
+            
+            lineCount++;
+            // 添加换行符，保持原始格式
+            var content = line + Environment.NewLine;
+            _logger.LogInformation(content);
             yield return (content, isErrorStream);
         }
     }
@@ -1110,8 +1078,8 @@ public class CliExecutorService : ICliExecutorService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "创建会话工作目录失败: {SessionId}", sessionId);
-                // 创建失败直接抛出异常，不降级使用根目录
-                throw new InvalidOperationException($"创建会话 {sessionId} 工作目录失败: {ex.Message}", ex);
+                // 如果创建失败,返回临时目录根路径
+                return workspaceRoot;
             }
         }
     }
@@ -1123,68 +1091,43 @@ public class CliExecutorService : ICliExecutorService
     {
         // 清理持久化进程
         _processManager.CleanupSessionProcesses(sessionId);
-
+        
         // 清理CLI thread id
         lock (_cliSessionLock)
         {
             _cliThreadIds.Remove(sessionId);
         }
+        
+        string? workspacePathFromCache = null;
 
-        string? workspacePath = null;
-        bool isCustomWorkspace = false;
-
-        // 查询会话信息判断目录类型
-        try
-        {
-            using var scope = _serviceProvider.CreateScope();
-            var chatSessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-            var session = chatSessionRepository.GetByIdAsync(sessionId).GetAwaiter().GetResult();
-
-            if (session != null)
-            {
-                workspacePath = session.WorkspacePath;
-                isCustomWorkspace = session.IsCustomWorkspace;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "查询会话 {SessionId} 信息失败，将按临时目录处理", sessionId);
-        }
-
-        // 清理内存缓存
         lock (_workspaceLock)
         {
-            if (_sessionWorkspaces.TryGetValue(sessionId, out var cachedPath))
+            if (_sessionWorkspaces.TryGetValue(sessionId, out var workspacePath))
             {
-                workspacePath ??= cachedPath;
+                workspacePathFromCache = workspacePath;
                 _sessionWorkspaces.Remove(sessionId);
             }
         }
 
-        // 自定义目录：只解除绑定，不删除内容
-        if (isCustomWorkspace)
+        // 注意：即使内存缓存中不存在该会话，也应该尝试清理默认路径下的目录。
+        // 典型场景：服务重启后 _sessionWorkspaces 被清空，但磁盘目录仍然存在。
+        var workspacePathToDelete = workspacePathFromCache;
+        var workspaceRoot = GetEffectiveWorkspaceRoot();
+        if (string.IsNullOrWhiteSpace(workspacePathToDelete))
         {
-            _logger.LogInformation("已解除自定义目录会话 {SessionId} 的绑定，保留目录内容: {Path}", sessionId, workspacePath);
-            return;
-        }
-
-        // 临时目录：执行删除逻辑
-        if (string.IsNullOrEmpty(workspacePath))
-        {
-            var workspaceRoot = GetEffectiveWorkspaceRoot();
-            workspacePath = Path.Combine(workspaceRoot, sessionId);
+            workspacePathToDelete = Path.Combine(workspaceRoot, sessionId);
         }
 
         try
         {
-            var rootFullPath = Path.GetFullPath(GetEffectiveWorkspaceRoot());
-            var workspaceFullPath = Path.GetFullPath(workspacePath);
+            var rootFullPath = Path.GetFullPath(workspaceRoot);
+            var workspaceFullPath = Path.GetFullPath(workspacePathToDelete);
 
-            // 防御：只允许删除 TempWorkspaceRoot 下的临时目录
+            // 防御：只允许删除 TempWorkspaceRoot 下的子目录，避免误删。
             if (!workspaceFullPath.StartsWith(rootFullPath, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(workspaceFullPath, rootFullPath, StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogWarning("跳过清理非临时目录: {SessionId}, {Path}", sessionId, workspaceFullPath);
+                _logger.LogWarning("跳过清理会话工作目录（路径异常）: {SessionId}, {Path}", sessionId, workspaceFullPath);
                 return;
             }
 
@@ -1193,7 +1136,7 @@ public class CliExecutorService : ICliExecutorService
                 try
                 {
                     Directory.Delete(workspaceFullPath, recursive: true);
-                    _logger.LogInformation("已清理临时会话 {SessionId} 的工作目录: {Path}", sessionId, workspaceFullPath);
+                    _logger.LogInformation("已清理会话 {SessionId} 的工作目录: {Path}", sessionId, workspaceFullPath);
                 }
                 catch (Exception ex)
                 {
@@ -1202,18 +1145,18 @@ public class CliExecutorService : ICliExecutorService
                     {
                         NormalizeDirectoryAttributes(workspaceFullPath);
                         Directory.Delete(workspaceFullPath, recursive: true);
-                        _logger.LogInformation("已清理临时会话 {SessionId} 的工作目录(重试成功): {Path}", sessionId, workspaceFullPath);
+                        _logger.LogInformation("已清理会话 {SessionId} 的工作目录(重试成功): {Path}", sessionId, workspaceFullPath);
                     }
                     catch
                     {
-                        _logger.LogWarning(ex, "清理临时会话工作目录失败: {SessionId}, {Path}", sessionId, workspaceFullPath);
+                        _logger.LogWarning(ex, "清理会话工作目录失败: {SessionId}, {Path}", sessionId, workspaceFullPath);
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "清理临时会话工作目录失败(路径解析异常): {SessionId}", sessionId);
+            _logger.LogWarning(ex, "清理会话工作目录失败(路径解析异常): {SessionId}", sessionId);
         }
     }
 
@@ -1473,19 +1416,8 @@ public class CliExecutorService : ICliExecutorService
                 return path;
             }
 
-            // 缓存丢失时查询数据库获取会话绑定的工作目录
-            using var scope = _serviceProvider.CreateScope();
-            var chatSessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-            var session = chatSessionRepository.GetByIdAsync(sessionId).GetAwaiter().GetResult();
-
-            if (session != null && !string.IsNullOrEmpty(session.WorkspacePath) && Directory.Exists(session.WorkspacePath))
-            {
-                _sessionWorkspaces[sessionId] = session.WorkspacePath;
-                return session.WorkspacePath;
-            }
-
-            // 会话不存在或工作目录无效，抛出异常（不自动创建临时目录）
-            throw new InvalidOperationException($"会话 {sessionId} 工作目录不存在或已被清理，请重新创建会话");
+            // 如果不存在,创建一个
+            return GetOrCreateSessionWorkspace(sessionId);
         }
     }
     
@@ -1667,7 +1599,7 @@ public class CliExecutorService : ICliExecutorService
     }
 
     /// <summary>
-    /// 获取指定工具的环境变量配置（智能合并：当数据库API key与本地配置一致时，优先使用本地完整配置）
+    /// 获取指定工具的环境变量配置（优先从数据库读取）
     /// </summary>
     public async Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId)
     {
@@ -1675,232 +1607,29 @@ public class CliExecutorService : ICliExecutorService
         {
             using var scope = _serviceProvider.CreateScope();
             var envService = scope.ServiceProvider.GetRequiredService<ICliToolEnvironmentService>();
-            var dbEnvVars = await envService.GetEnvironmentVariablesAsync(toolId);
-
-            // 智能配置合并：检测本地CLI配置
-            var localConfig = await GetLocalCliConfigAsync(toolId);
-            if (localConfig != null && localConfig.HasValidApiKey)
+            var envVars = await envService.GetEnvironmentVariablesAsync(toolId);
+            
+            // 记录获取到的环境变量（用于调试）
+            _logger.LogInformation("获取工具 {ToolId} 的环境变量，共 {Count} 个", toolId, envVars.Count);
+            foreach (var kvp in envVars)
             {
-                // 比较数据库和本地配置的 API key
-                var dbApiKey = GetApiKeyFromEnvVars(dbEnvVars, toolId);
-                var localApiKey = GetApiKeyFromEnvVars(localConfig.EnvironmentVariables, toolId);
-
-                // 如果 API key 一致，优先使用本地完整配置
-                if (!string.IsNullOrEmpty(dbApiKey) &&
-                    !string.IsNullOrEmpty(localApiKey) &&
-                    string.Equals(dbApiKey, localApiKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation(
-                        "工具 {ToolId} 的数据库API key与本地配置一致，优先使用本地完整配置",
-                        toolId);
-
-                    // 记录配置来源
-                    foreach (var kvp in localConfig.EnvironmentVariables)
-                    {
-                        var maskedValue = kvp.Value.Length > 8
-                            ? kvp.Value.Substring(0, 4) + "****"
-                            : "****";
-                        _logger.LogDebug("  本地环境变量: {Key} = {Value}", kvp.Key, maskedValue);
-                    }
-
-                    return localConfig.EnvironmentVariables;
-                }
-            }
-
-            // 默认使用数据库配置
-            _logger.LogInformation("获取工具 {ToolId} 的环境变量，共 {Count} 个", toolId, dbEnvVars.Count);
-            foreach (var kvp in dbEnvVars)
-            {
-                var maskedValue = kvp.Value.Length > 8
-                    ? kvp.Value.Substring(0, 4) + "****"
+                // 敏感信息只显示前几个字符
+                var maskedValue = kvp.Value.Length > 8 
+                    ? kvp.Value.Substring(0, 4) + "****" 
                     : "****";
                 _logger.LogDebug("  环境变量: {Key} = {Value}", kvp.Key, maskedValue);
             }
-
-            return dbEnvVars;
+            
+            return envVars;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "获取工具 {ToolId} 的环境变量失败", toolId);
-
+            
             // 降级到appsettings配置
             var tool = GetTool(toolId);
             return tool?.EnvironmentVariables ?? new Dictionary<string, string>();
         }
-    }
-
-    /// <summary>
-    /// 从环境变量中提取 API key（根据工具类型）
-    /// </summary>
-    private string GetApiKeyFromEnvVars(Dictionary<string, string> envVars, string toolId)
-    {
-        return toolId.ToLower() switch
-        {
-            "claude-code" => envVars.GetValueOrDefault("ANTHROPIC_API_KEY", ""),
-            "codex" => envVars.GetValueOrDefault("OPENAI_API_KEY", "")
-                ?? envVars.GetValueOrDefault("NEW_API_KEY", ""),
-            "opencode" => envVars.GetValueOrDefault("OPENCODE_CONFIG_CONTENT", ""),
-            _ => ""
-        };
-    }
-
-    /// <summary>
-    /// 获取本地 CLI 配置
-    /// </summary>
-    private async Task<DetectedCliConfig?> GetLocalCliConfigAsync(string toolId)
-    {
-        try
-        {
-            using var scope = _serviceProvider.CreateScope();
-            var detector = scope.ServiceProvider.GetService<ILocalCliConfigDetector>();
-            if (detector == null)
-            {
-                return null;
-            }
-
-            var result = await detector.DetectLocalConfigsAsync();
-            return result?.DetectedConfigs?.FirstOrDefault(c =>
-                c.ToolId.Equals(toolId, StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "获取本地 CLI 配置失败: {ToolId}", toolId);
-            return null;
-        }
-    }
-
-    private void RewriteClaudeLaunchToNode(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath, string originalArguments)
-    {
-        var isWindows = OperatingSystem.IsWindows();
-        var isClaudeTool = IsClaudeTool(tool, commandPath);
-        _logger.LogInformation("Claude 启动重写检查: IsWindows={IsWindows}, IsClaudeTool={IsClaudeTool}, CommandPath={CommandPath}", isWindows, isClaudeTool, commandPath);
-
-        if (!isWindows || !isClaudeTool)
-        {
-            return;
-        }
-
-        var extension = Path.GetExtension(commandPath);
-        if (!string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogInformation("Claude 启动重写跳过：命令不是 .cmd，Extension={Extension}", extension);
-            return;
-        }
-
-        var commandDirectory = Path.GetDirectoryName(commandPath);
-        if (string.IsNullOrWhiteSpace(commandDirectory))
-        {
-            _logger.LogWarning("Claude 启动重写跳过：无法获取命令目录，CommandPath={CommandPath}", commandPath);
-            return;
-        }
-
-        var cliJsPath = Path.Combine(commandDirectory, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-        _logger.LogInformation("Claude 启动重写检查 cli.js 路径: {CliJsPath}, Exists={Exists}", cliJsPath, File.Exists(cliJsPath));
-        if (!File.Exists(cliJsPath))
-        {
-            return;
-        }
-
-        var preferredNodePath = GetPreferredNodeExecutablePath();
-        _logger.LogInformation("Claude 启动重写检查 Node.js 路径: {NodePath}", preferredNodePath ?? "<null>");
-        if (string.IsNullOrWhiteSpace(preferredNodePath) || !File.Exists(preferredNodePath))
-        {
-            _logger.LogWarning("Claude 启动重写跳过：未找到可用的 Node.js");
-            return;
-        }
-
-        startInfo.FileName = preferredNodePath;
-        startInfo.Arguments = $"\"{cliJsPath}\" {originalArguments}";
-        _logger.LogInformation("Claude Code 改为直接使用 Node.js 启动: {NodePath}", preferredNodePath);
-    }
-
-    private void EnsurePreferredNodeForClaude(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath)
-    {
-        if (!OperatingSystem.IsWindows() || !IsClaudeTool(tool, commandPath))
-        {
-            return;
-        }
-
-        var preferredNodePath = GetPreferredNodeExecutablePath();
-        if (string.IsNullOrWhiteSpace(preferredNodePath))
-        {
-            return;
-        }
-
-        var preferredNodeDirectory = Path.GetDirectoryName(preferredNodePath);
-        if (string.IsNullOrWhiteSpace(preferredNodeDirectory))
-        {
-            return;
-        }
-
-        var currentPath = (startInfo.EnvironmentVariables.ContainsKey("PATH")
-            ? startInfo.EnvironmentVariables["PATH"]
-            : Environment.GetEnvironmentVariable("PATH")) ?? string.Empty;
-
-        var reorderedEntries = currentPath
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(entry => !string.Equals(entry, preferredNodeDirectory, StringComparison.OrdinalIgnoreCase));
-
-        startInfo.EnvironmentVariables["PATH"] = string.Join(
-            Path.PathSeparator,
-            new[] { preferredNodeDirectory }.Concat(reorderedEntries));
-
-        _logger.LogInformation("Claude Code 优先使用 Node.js: {NodePath}", preferredNodePath);
-    }
-
-    private string? GetPreferredNodeExecutablePath()
-    {
-        lock (_preferredNodeExecutableLock)
-        {
-            if (!string.IsNullOrWhiteSpace(_preferredNodeExecutablePath) && File.Exists(_preferredNodeExecutablePath))
-            {
-                return _preferredNodeExecutablePath;
-            }
-
-            try
-            {
-                var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                var fnmRoot = Path.Combine(localAppData, "fnm_multishells");
-                if (Directory.Exists(fnmRoot))
-                {
-                    var fnmCandidate = Directory.GetDirectories(fnmRoot)
-                        .Select(directory => new FileInfo(Path.Combine(directory, "node.exe")))
-                        .Where(file => file.Exists)
-                        .OrderByDescending(file => file.LastWriteTimeUtc)
-                        .FirstOrDefault();
-
-                    if (fnmCandidate != null)
-                    {
-                        _preferredNodeExecutablePath = fnmCandidate.FullName;
-                        _logger.LogInformation("优先选择 fnm Node.js: {NodePath}", _preferredNodeExecutablePath);
-                        return _preferredNodeExecutablePath;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "扫描 fnm node.exe 路径失败");
-            }
-
-            var programFilesNode = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
-            if (File.Exists(programFilesNode))
-            {
-                _preferredNodeExecutablePath = programFilesNode;
-                _logger.LogInformation("回退使用系统 Node.js: {NodePath}", _preferredNodeExecutablePath);
-                return _preferredNodeExecutablePath;
-            }
-
-            _logger.LogWarning("未找到可用的 node.exe");
-            return null;
-        }
-    }
-
-    private static bool IsClaudeTool(CliToolConfig tool, string commandPath)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(commandPath);
-        return string.Equals(tool.Id, "claude-code", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(tool.Id, "claude", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(fileName, "claude", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

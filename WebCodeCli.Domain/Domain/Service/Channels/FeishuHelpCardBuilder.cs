@@ -44,7 +44,14 @@ public class FeishuHelpCardBuilder
                                 tag = "button",
                                 text = new { tag = "plain_text", content = "🔄 更新命令列表" },
                                 type = "default",
-                                value = JsonSerializer.Serialize(new { action = "refresh_commands" })
+                                behaviors = new[]
+                                {
+                                    new
+                                    {
+                                        type = "callback",
+                                        value = new { action = "refresh_commands" }
+                                    }
+                                }
                             }
                         }
                     },
@@ -61,7 +68,14 @@ public class FeishuHelpCardBuilder
                                 tag = "button",
                                 text = new { tag = "plain_text", content = "📋 会话管理" },
                                 type = "primary",
-                                value = JsonSerializer.Serialize(new { action = "open_session_manager" })
+                                behaviors = new[]
+                                {
+                                    new
+                                    {
+                                        type = "callback",
+                                        value = new { action = "open_session_manager" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -77,14 +91,14 @@ public class FeishuHelpCardBuilder
 
             var options = category.Commands.Select(cmd => new
             {
-                text = new { tag = "plain_text", content = cmd.Name },
-                value = JsonSerializer.Serialize(new { action = "select_command", command_id = cmd.Id })
+                text = new { tag = "plain_text", content = BuildCommandOptionText(cmd) },
+                value = new { action = "select_command", command_id = cmd.Id }
             }).ToArray();
 
             elements.Add(new
             {
                 tag = "div",
-                text = new { tag = "lark_md", content = $"**{category.Name}**" },
+                text = new { tag = "lark_md", content = BuildCategoryPreviewMarkdown(category) },
                 extra = new
                 {
                     tag = "overflow",
@@ -477,7 +491,14 @@ public class FeishuHelpCardBuilder
                                 tag = "button",
                                 text = new { tag = "plain_text", content = "🔄 更新命令列表" },
                                 type = "default",
-                                value = JsonSerializer.Serialize(new { action = "refresh_commands" })
+                                behaviors = new[]
+                                {
+                                    new
+                                    {
+                                        type = "callback",
+                                        value = new { action = "refresh_commands" }
+                                    }
+                                }
                             }
                         }
                     },
@@ -494,7 +515,14 @@ public class FeishuHelpCardBuilder
                                 tag = "button",
                                 text = new { tag = "plain_text", content = "📋 会话管理" },
                                 type = "primary",
-                                value = JsonSerializer.Serialize(new { action = "open_session_manager" })
+                                behaviors = new[]
+                                {
+                                    new
+                                    {
+                                        type = "callback",
+                                        value = new { action = "open_session_manager" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -510,14 +538,14 @@ public class FeishuHelpCardBuilder
 
             var options = category.Commands.Select(cmd => new
             {
-                text = new { tag = "plain_text", content = cmd.Name },
-                value = JsonSerializer.Serialize(new { action = "select_command", command_id = cmd.Id })
+                text = new { tag = "plain_text", content = BuildCommandOptionText(cmd) },
+                value = new { action = "select_command", command_id = cmd.Id }
             }).ToArray();
 
             elements.Add(new
             {
                 tag = "div",
-                text = new { tag = "lark_md", content = $"**{category.Name}**" },
+                text = new { tag = "lark_md", content = BuildCategoryPreviewMarkdown(category) },
                 extra = new
                 {
                     tag = "overflow",
@@ -679,7 +707,14 @@ public class FeishuHelpCardBuilder
                             tag = "button",
                             text = new { tag = "plain_text", content = "📋 显示全部命令" },
                             type = "default",
-                            value = JsonSerializer.Serialize(new { action = "back_to_list" })
+                            behaviors = new[]
+                            {
+                                new
+                                {
+                                    type = "callback",
+                                    value = new { action = "back_to_list" }
+                                }
+                            }
                         }
                     }
                 }
@@ -694,8 +729,8 @@ public class FeishuHelpCardBuilder
         {
             var options = allCommands.Select(cmd => new
             {
-                text = new { tag = "plain_text", content = $"{cmd.Name} - {cmd.Description}" },
-                value = JsonSerializer.Serialize(new { action = "select_command", command_id = cmd.Id })
+                text = new { tag = "plain_text", content = BuildCommandOptionText(cmd) },
+                value = new { action = "select_command", command_id = cmd.Id }
             }).ToArray();
 
             elements.Add(new
@@ -773,6 +808,42 @@ public class FeishuHelpCardBuilder
                 content = toastMessage
             }
         };
+    }
+
+    private static string BuildCategoryPreviewMarkdown(FeishuCommandCategory category)
+    {
+        var lines = category.Commands
+            .Take(5)
+            .Select(cmd => $"- `{SanitizeMarkdown(cmd.Name)}`：{SanitizeMarkdown(cmd.Description)}")
+            .ToList();
+
+        if (category.Commands.Count > 5)
+        {
+            lines.Add($"- ... 共 {category.Commands.Count} 条，可点右侧选择");
+        }
+
+        var detail = lines.Count > 0 ? "\n" + string.Join("\n", lines) : string.Empty;
+        return $"**{SanitizeMarkdown(category.Name)}**{detail}";
+    }
+
+    private static string BuildCommandOptionText(FeishuCommand command)
+    {
+        var description = SanitizeMarkdown(command.Description);
+        if (description.Length > 50)
+        {
+            description = description[..50] + "...";
+        }
+
+        return string.IsNullOrWhiteSpace(description)
+            ? command.Name
+            : $"{command.Name} - {description}";
+    }
+
+    private static string SanitizeMarkdown(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Replace("\r", " ").Replace("\n", " ").Trim();
     }
 
 }

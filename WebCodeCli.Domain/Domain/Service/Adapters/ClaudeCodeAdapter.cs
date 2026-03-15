@@ -114,6 +114,9 @@ public class ClaudeCodeAdapter : ICliToolAdapter
 
             switch (eventType)
             {
+                case "stream_event":
+                    ParseStreamEvent(root, outputEvent);
+                    break;
                 case "init":
                     ParseInitEvent(root, outputEvent);
                     break;
@@ -193,7 +196,8 @@ public class ClaudeCodeAdapter : ICliToolAdapter
         // Claude Code的助手消息通常在 message 或 assistant 类型事件中
         if ((outputEvent.EventType == "message" || 
              outputEvent.EventType == "assistant" || 
-             outputEvent.EventType == "assistant:message") &&
+             outputEvent.EventType == "assistant:message" ||
+             outputEvent.EventType == "stream_event") &&
             !string.IsNullOrEmpty(outputEvent.Content))
         {
             return outputEvent.Content;
@@ -208,6 +212,7 @@ public class ClaudeCodeAdapter : ICliToolAdapter
             "init" => "会话初始化",
             "message" => "消息",
             "assistant" or "assistant:message" => "助手消息",
+            "stream_event" => "流式回复",
             "tool_use" => "工具调用",
             "tool_result" => "工具结果",
             "result" => "执行完成",
@@ -229,6 +234,7 @@ public class ClaudeCodeAdapter : ICliToolAdapter
         {
             "init" => "bg-primary-100 text-primary-700",
             "message" or "assistant" or "assistant:message" => "bg-emerald-100 text-emerald-700",
+            "stream_event" => "bg-emerald-100 text-emerald-700",
             "tool_use" => "bg-sky-100 text-sky-700",
             "tool_result" => "bg-blue-100 text-blue-700",
             "result" => "bg-emerald-100 text-emerald-700",
@@ -250,6 +256,7 @@ public class ClaudeCodeAdapter : ICliToolAdapter
         {
             "init" => "初始化",
             "message" or "assistant" or "assistant:message" => "回复",
+            "stream_event" => "流式回复",
             "tool_use" => "工具调用",
             "tool_result" => "工具结果",
             "result" => "完成",
@@ -829,12 +836,28 @@ public class ClaudeCodeAdapter : ICliToolAdapter
         var contentBuilder = new StringBuilder();
         contentBuilder.AppendLine("Claude Code 执行已完成。");
 
+        var isError = false;
+        if (root.TryGetProperty("is_error", out var isErrorElement))
+        {
+            isError = isErrorElement.ValueKind == JsonValueKind.True ||
+                      (isErrorElement.ValueKind == JsonValueKind.String && bool.TryParse(isErrorElement.GetString(), out var parsed) && parsed);
+        }
+
         // 提取最终结果
         var result = GetStringProperty(root, "result") ?? GetStringProperty(root, "content");
         if (!string.IsNullOrEmpty(result))
         {
             contentBuilder.AppendLine();
             contentBuilder.AppendLine(result);
+        }
+        else if (isError)
+        {
+            var error = GetStringProperty(root, "error") ?? GetStringProperty(root, "message");
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                contentBuilder.AppendLine();
+                contentBuilder.AppendLine(error);
+            }
         }
 
         // 提取使用统计
@@ -847,7 +870,53 @@ public class ClaudeCodeAdapter : ICliToolAdapter
             };
         }
 
+        outputEvent.IsError = isError;
         outputEvent.Content = contentBuilder.ToString().TrimEnd();
+    }
+
+    private void ParseStreamEvent(JsonElement root, CliOutputEvent outputEvent)
+    {
+        outputEvent.Title = "流式回复";
+        outputEvent.ItemType = "agent_message";
+
+        if (root.TryGetProperty("session_id", out var sessionIdElement) && sessionIdElement.ValueKind == JsonValueKind.String)
+        {
+            outputEvent.SessionId = sessionIdElement.GetString();
+        }
+
+        if (!root.TryGetProperty("event", out var eventElement) || eventElement.ValueKind != JsonValueKind.Object)
+        {
+            outputEvent.Content = string.Empty;
+            return;
+        }
+
+        var streamEventType = GetStringProperty(eventElement, "type") ?? string.Empty;
+        if (!string.Equals(streamEventType, "content_block_delta", StringComparison.OrdinalIgnoreCase))
+        {
+            outputEvent.Content = string.Empty;
+            return;
+        }
+
+        if (!eventElement.TryGetProperty("delta", out var deltaElement) || deltaElement.ValueKind != JsonValueKind.Object)
+        {
+            outputEvent.Content = string.Empty;
+            return;
+        }
+
+        var deltaType = GetStringProperty(deltaElement, "type") ?? string.Empty;
+        if (string.Equals(deltaType, "text_delta", StringComparison.OrdinalIgnoreCase))
+        {
+            outputEvent.Content = GetStringProperty(deltaElement, "text") ?? string.Empty;
+            return;
+        }
+
+        if (string.Equals(deltaType, "thinking_delta", StringComparison.OrdinalIgnoreCase))
+        {
+            outputEvent.Content = GetStringProperty(deltaElement, "thinking") ?? GetStringProperty(deltaElement, "text") ?? string.Empty;
+            return;
+        }
+
+        outputEvent.Content = string.Empty;
     }
 
     private void ParseErrorEvent(JsonElement root, CliOutputEvent outputEvent)

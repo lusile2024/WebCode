@@ -372,7 +372,7 @@ public class FeishuCardActionService
                 finalOutput = assistantMessageBuilder.ToString().Trim();
                 if (string.IsNullOrWhiteSpace(finalOutput))
                 {
-                    finalOutput = "无输出";
+                    finalOutput = ExtractFallbackOutput(outputBuilder.ToString(), adapter!) ?? "无输出";
                 }
             }
             else
@@ -510,6 +510,38 @@ public class FeishuCardActionService
         }
 
         return formatted.Trim();
+    }
+
+    private string? ExtractFallbackOutput(string fullOutput, ICliToolAdapter adapter)
+    {
+        if (string.IsNullOrWhiteSpace(fullOutput))
+        {
+            return null;
+        }
+
+        string? lastUsefulContent = null;
+        var lines = fullOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var outputEvent = adapter.ParseOutputLine(line);
+            if (outputEvent == null || string.IsNullOrWhiteSpace(outputEvent.Content))
+            {
+                continue;
+            }
+
+            if (outputEvent.EventType is "result" or "error" or "raw" or "assistant" or "assistant:message" or "stream_event")
+            {
+                lastUsefulContent = outputEvent.Content.Trim();
+            }
+        }
+
+        return lastUsefulContent;
     }
 
     private async Task<CardActionTriggerResponseDto> HandleBindWebUserAsync(JsonElement? formValue, string? chatId, string? operatorUserId)

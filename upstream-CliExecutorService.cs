@@ -42,9 +42,9 @@ public class CliExecutorService : ICliExecutorService
     private string? _lastCodexConfigHash;
     private readonly object _codexConfigLock = new();
 
-    // Windows 下为 Claude Code 选择可用的较高版本 Node.js
-    private string? _preferredNodeExecutablePath;
-    private readonly object _preferredNodeExecutableLock = new();
+    // Claude Code 配置检测缓存（避免每次执行都检测）
+    private bool? _hasClaudeCodeConfig;
+    private readonly object _claudeConfigCheckLock = new();
 
     public CliExecutorService(
         ILogger<CliExecutorService> logger,
@@ -715,8 +715,14 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
-        RewriteClaudeLaunchToNode(startInfo, tool, commandPath, arguments);
-        EnsurePreferredNodeForClaude(startInfo, tool, commandPath);
+        // 开发调试模式：检测到本地 Claude Code CLI 配置时才移除 CLAUDECODE 环境变量
+        // 避免子进程检测到嵌套 Claude Code 会话导致启动失败
+        // 只有在使用 Claude Code CLI 开发调试 WebCode 时才需要（配置文件存在且有有效 API Key）
+        if (startInfo.EnvironmentVariables.ContainsKey("CLAUDECODE") && ShouldRemoveClaudeCodeEnvVar())
+        {
+            startInfo.EnvironmentVariables.Remove("CLAUDECODE");
+            _logger.LogDebug("检测到本地 Claude Code CLI 配置，移除 CLAUDECODE 环境变量避免嵌套会话检测");
+        }
 
         _logger.LogInformation("准备启动进程: {FileName} {Arguments}", startInfo.FileName, startInfo.Arguments);
 
@@ -860,18 +866,6 @@ public class CliExecutorService : ICliExecutorService
                 ErrorMessage = "执行已取消"
             };
         }
-        else if (process.ExitCode != 0)
-        {
-            yield return new StreamOutputChunk
-            {
-                IsError = true,
-                IsCompleted = true,
-                ErrorMessage = $"执行失败（退出码 {process.ExitCode}）"
-            };
-
-            _logger.LogWarning("CLI 工具执行失败: {Tool}, 退出代码: {ExitCode}",
-                tool.Name, process.ExitCode);
-        }
         else
         {
             // 返回完成标记
@@ -894,20 +888,19 @@ public class CliExecutorService : ICliExecutorService
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("开始读取流，isErrorStream: {IsError}", isErrorStream);
-        var buffer = new char[4096];
-        int chunkCount = 0;
-
+        int lineCount = 0;
+        
         while (true)
         {
-            int charsRead;
-
+            string? line;
+            
             try
             {
-                charsRead = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+                line = await reader.ReadLineAsync(cancellationToken);
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("读取流被取消，isErrorStream: {IsError}, 已读取 {Count} 块", isErrorStream, chunkCount);
+                _logger.LogInformation("读取流被取消，isErrorStream: {IsError}, 已读取 {Count} 行", isErrorStream, lineCount);
                 break;
             }
             catch (Exception ex)
@@ -916,19 +909,21 @@ public class CliExecutorService : ICliExecutorService
                 break;
             }
 
-            if (charsRead <= 0)
+            if (line == null)
             {
-                _logger.LogInformation("流结束，isErrorStream: {IsError}, 共读取 {Count} 块", isErrorStream, chunkCount);
+                _logger.LogInformation("流结束，isErrorStream: {IsError}, 共读取 {Count} 行", isErrorStream, lineCount);
                 break;
             }
+            
+            lineCount++;
+            // 添加换行符，保持原始格式
+            var content = line + Environment.NewLine;
 
-            chunkCount++;
-            var content = new string(buffer, 0, charsRead);
-            var trimmedPreview = content.TrimStart();
-            if (!trimmedPreview.StartsWith("{\"type\":\"system\""))
+            // 只记录非系统钩子消息的摘要，避免日志过多
+            if (!line.TrimStart().StartsWith("{\"type\":\"system\""))
             {
                 var preview = content.Length > 100 ? content[..100] + "..." : content;
-                _logger.LogDebug("CLI输出块: {Preview}", preview.Replace("\r", "\\r").Replace("\n", "\\n"));
+                _logger.LogDebug("CLI输出: {Preview}", preview);
             }
 
             yield return (content, isErrorStream);
@@ -1769,138 +1764,82 @@ public class CliExecutorService : ICliExecutorService
         }
     }
 
-    private void RewriteClaudeLaunchToNode(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath, string originalArguments)
+    /// <summary>
+    /// 检查是否应该移除 CLAUDECODE 环境变量
+    /// 只有在检测到本地 Claude Code CLI 配置文件存在且有有效 Auth Token 时才返回 true
+    /// </summary>
+    private bool ShouldRemoveClaudeCodeEnvVar()
     {
-        var isWindows = OperatingSystem.IsWindows();
-        var isClaudeTool = IsClaudeTool(tool, commandPath);
-        _logger.LogInformation("Claude 启动重写检查: IsWindows={IsWindows}, IsClaudeTool={IsClaudeTool}, CommandPath={CommandPath}", isWindows, isClaudeTool, commandPath);
-
-        if (!isWindows || !isClaudeTool)
+        // 使用缓存避免重复检测
+        lock (_claudeConfigCheckLock)
         {
-            return;
-        }
-
-        var extension = Path.GetExtension(commandPath);
-        if (!string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogInformation("Claude 启动重写跳过：命令不是 .cmd，Extension={Extension}", extension);
-            return;
-        }
-
-        var commandDirectory = Path.GetDirectoryName(commandPath);
-        if (string.IsNullOrWhiteSpace(commandDirectory))
-        {
-            _logger.LogWarning("Claude 启动重写跳过：无法获取命令目录，CommandPath={CommandPath}", commandPath);
-            return;
-        }
-
-        var cliJsPath = Path.Combine(commandDirectory, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-        _logger.LogInformation("Claude 启动重写检查 cli.js 路径: {CliJsPath}, Exists={Exists}", cliJsPath, File.Exists(cliJsPath));
-        if (!File.Exists(cliJsPath))
-        {
-            return;
-        }
-
-        var preferredNodePath = GetPreferredNodeExecutablePath();
-        _logger.LogInformation("Claude 启动重写检查 Node.js 路径: {NodePath}", preferredNodePath ?? "<null>");
-        if (string.IsNullOrWhiteSpace(preferredNodePath) || !File.Exists(preferredNodePath))
-        {
-            _logger.LogWarning("Claude 启动重写跳过：未找到可用的 Node.js");
-            return;
-        }
-
-        startInfo.FileName = preferredNodePath;
-        startInfo.Arguments = $"\"{cliJsPath}\" {originalArguments}";
-        _logger.LogInformation("Claude Code 改为直接使用 Node.js 启动: {NodePath}", preferredNodePath);
-    }
-
-    private void EnsurePreferredNodeForClaude(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath)
-    {
-        if (!OperatingSystem.IsWindows() || !IsClaudeTool(tool, commandPath))
-        {
-            return;
-        }
-
-        var preferredNodePath = GetPreferredNodeExecutablePath();
-        if (string.IsNullOrWhiteSpace(preferredNodePath))
-        {
-            return;
-        }
-
-        var preferredNodeDirectory = Path.GetDirectoryName(preferredNodePath);
-        if (string.IsNullOrWhiteSpace(preferredNodeDirectory))
-        {
-            return;
-        }
-
-        var currentPath = (startInfo.EnvironmentVariables.ContainsKey("PATH")
-            ? startInfo.EnvironmentVariables["PATH"]
-            : Environment.GetEnvironmentVariable("PATH")) ?? string.Empty;
-
-        var reorderedEntries = currentPath
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(entry => !string.Equals(entry, preferredNodeDirectory, StringComparison.OrdinalIgnoreCase));
-
-        startInfo.EnvironmentVariables["PATH"] = string.Join(
-            Path.PathSeparator,
-            new[] { preferredNodeDirectory }.Concat(reorderedEntries));
-
-        _logger.LogInformation("Claude Code 优先使用 Node.js: {NodePath}", preferredNodePath);
-    }
-
-    private string? GetPreferredNodeExecutablePath()
-    {
-        lock (_preferredNodeExecutableLock)
-        {
-            if (!string.IsNullOrWhiteSpace(_preferredNodeExecutablePath) && File.Exists(_preferredNodeExecutablePath))
+            if (_hasClaudeCodeConfig.HasValue)
             {
-                return _preferredNodeExecutablePath;
+                return _hasClaudeCodeConfig.Value;
             }
 
             try
             {
-                var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                var fnmRoot = Path.Combine(localAppData, "fnm_multishells");
-                if (Directory.Exists(fnmRoot))
+                // 检查 Claude Code 配置文件是否存在
+                var configPaths = new[]
                 {
-                    var fnmCandidate = Directory.GetDirectories(fnmRoot)
-                        .Select(directory => new FileInfo(Path.Combine(directory, "node.exe")))
-                        .Where(file => file.Exists)
-                        .OrderByDescending(file => file.LastWriteTimeUtc)
-                        .FirstOrDefault();
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "config.json"),
+                };
 
-                    if (fnmCandidate != null)
+                foreach (var configPath in configPaths)
+                {
+                    if (File.Exists(configPath))
                     {
-                        _preferredNodeExecutablePath = fnmCandidate.FullName;
-                        _logger.LogInformation("优先选择 fnm Node.js: {NodePath}", _preferredNodeExecutablePath);
-                        return _preferredNodeExecutablePath;
+                        try
+                        {
+                            var content = File.ReadAllText(configPath);
+                            var json = JsonDocument.Parse(content);
+
+                            // 检查新格式：env.ANTHROPIC_AUTH_TOKEN
+                            if (json.RootElement.TryGetProperty("env", out var envElement) &&
+                                envElement.TryGetProperty("ANTHROPIC_AUTH_TOKEN", out var authTokenElement))
+                            {
+                                var authToken = authTokenElement.GetString();
+                                if (!string.IsNullOrWhiteSpace(authToken) && authToken.Length > 20)
+                                {
+                                    _hasClaudeCodeConfig = true;
+                                    _logger.LogDebug("检测到有效的 Claude Code CLI 配置 (ANTHROPIC_AUTH_TOKEN): {Path}", configPath);
+                                    return true;
+                                }
+                            }
+
+                            // 检查旧格式：apiKey（向后兼容）
+                            if (json.RootElement.TryGetProperty("apiKey", out var apiKeyElement))
+                            {
+                                var apiKey = apiKeyElement.GetString();
+                                if (!string.IsNullOrWhiteSpace(apiKey) && apiKey.Length > 20)
+                                {
+                                    _hasClaudeCodeConfig = true;
+                                    _logger.LogDebug("检测到有效的 Claude Code CLI 配置 (apiKey): {Path}", configPath);
+                                    return true;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "解析 Claude Code 配置文件失败: {Path}", configPath);
+                        }
                     }
                 }
+
+                // 未检测到有效配置
+                _hasClaudeCodeConfig = false;
+                _logger.LogDebug("未检测到有效的 Claude Code CLI 配置，保留 CLAUDECODE 环境变量");
+                return false;
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "扫描 fnm node.exe 路径失败");
+                _logger.LogDebug(ex, "检查 Claude Code 配置时发生错误");
+                _hasClaudeCodeConfig = false;
+                return false;
             }
-
-            var programFilesNode = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
-            if (File.Exists(programFilesNode))
-            {
-                _preferredNodeExecutablePath = programFilesNode;
-                _logger.LogInformation("回退使用系统 Node.js: {NodePath}", _preferredNodeExecutablePath);
-                return _preferredNodeExecutablePath;
-            }
-
-            _logger.LogWarning("未找到可用的 node.exe");
-            return null;
         }
-    }
-
-    private static bool IsClaudeTool(CliToolConfig tool, string commandPath)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(commandPath);
-        return string.Equals(tool.Id, "claude-code", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(tool.Id, "claude", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(fileName, "claude", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

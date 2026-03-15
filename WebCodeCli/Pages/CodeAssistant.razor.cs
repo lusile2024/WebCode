@@ -1609,7 +1609,32 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             return string.Empty;
         }
 
-        return _jsonlAssistantMessageBuilder.ToString().TrimEnd();
+        var content = _jsonlAssistantMessageBuilder.ToString().TrimEnd();
+        if (!string.IsNullOrWhiteSpace(content))
+        {
+            return content;
+        }
+
+        return GetJsonlFallbackMessage();
+    }
+
+    private string GetJsonlFallbackMessage()
+    {
+        for (var i = _jsonlEvents.Count - 1; i >= 0; i--)
+        {
+            var evt = _jsonlEvents[i];
+            if (string.IsNullOrWhiteSpace(evt.Content))
+            {
+                continue;
+            }
+
+            if (evt.Type is "result" or "error" or "raw" or "assistant" or "assistant:message" or "stream_event")
+            {
+                return evt.Content.TrimEnd();
+            }
+        }
+
+        return string.Empty;
     }
 
     private string GetEventContainerAccent(JsonlDisplayItem item)
@@ -1823,12 +1848,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 : T("cliEvent.content.turnCompletedWithUsage");
         }
 
-        // result 类型事件与 turn.completed 类似，有 Usage 时不显示内容，避免重复
+        // result 类型事件保留最终文本，便于在缺少 assistant 事件时兜底展示
         if (string.Equals(outputEvent.EventType, "result", StringComparison.OrdinalIgnoreCase))
         {
-            return outputEvent.Usage is null
-                ? (fallbackContent ?? T("cliEvent.content.turnCompleted"))
-                : string.Empty;
+            return fallbackContent ?? T("cliEvent.content.turnCompleted");
         }
 
         if (string.Equals(outputEvent.EventType, "turn.started", StringComparison.OrdinalIgnoreCase))
