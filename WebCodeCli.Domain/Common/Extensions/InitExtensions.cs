@@ -121,6 +121,7 @@ namespace WebCodeCli.Domain.Common.Extensions
                     Console.WriteLine("开始初始化工作区管理表...");
                     _repository.GetDB().CodeFirst.InitTables<WebCodeCli.Domain.Repositories.Base.Workspace.WorkspaceOwnerEntity>();
                     _repository.GetDB().CodeFirst.InitTables<WebCodeCli.Domain.Repositories.Base.Workspace.WorkspaceAuthorizationEntity>();
+                    _repository.GetDB().CodeFirst.InitTables<WebCodeCli.Domain.Repositories.Base.FeishuUserBinding.FeishuUserBindingEntity>();
                     Console.WriteLine("工作区管理表初始化成功");
                 }
                 catch (Exception ex)

@@ -51,7 +51,7 @@ public interface IFeishuChannelService
     /// </summary>
     /// <param name="chatKey">聊天键（格式：feishu:{AppId}:{ChatId}）</param>
     /// <returns>当前会话ID，如果不存在则返回null</returns>
-    string? GetCurrentSession(string chatKey);
+    string? GetCurrentSession(string chatKey, string? username = null);
 
     /// <summary>
     /// 获取会话的最后活跃时间
@@ -65,7 +65,7 @@ public interface IFeishuChannelService
     /// </summary>
     /// <param name="chatKey">聊天键</param>
     /// <returns>会话ID列表</returns>
-    List<string> GetChatSessions(string chatKey);
+    List<string> GetChatSessions(string chatKey, string? username = null);
 
     /// <summary>
     /// 切换聊天的当前活跃会话
@@ -73,7 +73,7 @@ public interface IFeishuChannelService
     /// <param name="chatKey">聊天键</param>
     /// <param name="sessionId">要切换到的会话ID</param>
     /// <returns>是否切换成功</returns>
-    bool SwitchCurrentSession(string chatKey, string sessionId);
+    bool SwitchCurrentSession(string chatKey, string sessionId, string? username = null);
 
     /// <summary>
     /// 关闭指定会话
@@ -81,7 +81,7 @@ public interface IFeishuChannelService
     /// <param name="chatKey">聊天键</param>
     /// <param name="sessionId">要关闭的会话ID</param>
     /// <returns>是否关闭成功</returns>
-    bool CloseSession(string chatKey, string sessionId);
+    bool CloseSession(string chatKey, string sessionId, string? username = null);
 
     /// <summary>
     /// 创建新会话
@@ -90,4 +90,11 @@ public interface IFeishuChannelService
     /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
     /// <returns>新会话ID</returns>
     string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null);
+
+    /// <summary>
+    /// 获取聊天绑定会话的用户名
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <returns>用户名，如果不存在则返回null</returns>
+    string? GetSessionUsername(string chatKey);
 }

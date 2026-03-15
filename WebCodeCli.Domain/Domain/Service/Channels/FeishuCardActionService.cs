@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
+using System.Text.Json.Nodes;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -66,7 +67,8 @@ public class FeishuCardActionService
         string actionJson,
         Dictionary<string, object>? formValue = null,
         string? chatId = null,
-        string? inputValues = null)
+        string? inputValues = null,
+        string? operatorUserId = null)
     {
         try
         {
@@ -101,13 +103,17 @@ public class FeishuCardActionService
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, inputValues);
                 case "switch_session":
-                    return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey);
+                    return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "close_session":
-                    return await HandleCloseSessionAsync(action.SessionId, action.ChatKey);
+                    return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
+                case "show_create_session_form":
+                    return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId);
                 case "create_session":
-                    return await HandleCreateSessionAsync(action.ChatKey, chatId);
+                    return await HandleCreateSessionAsync(action.ChatKey, chatId, formValueElement, operatorUserId, action.CreateMode, action.WorkspacePath, inputValues);
+                case "bind_web_user":
+                    return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId);
                 case "open_session_manager":
-                    return await HandleOpenSessionManagerAsync(chatId);
+                    return await HandleOpenSessionManagerAsync(chatId, operatorUserId);
                 default:
                     return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未知动作", "error");
             }
@@ -152,7 +158,7 @@ public class FeishuCardActionService
         // 特殊处理：会话管理命令直接返回会话管理卡片，不进入执行界面
         if (commandId == "feishusessions")
         {
-            return await HandleOpenSessionManagerAsync(chatId);
+            return await HandleOpenSessionManagerAsync(chatId, null);
         }
 
         var command = await _commandService.GetCommandAsync(commandId);
@@ -506,10 +512,59 @@ public class FeishuCardActionService
         return formatted.Trim();
     }
 
+    private async Task<CardActionTriggerResponseDto> HandleBindWebUserAsync(JsonElement? formValue, string? chatId, string? operatorUserId)
+    {
+        var webUsername = GetFormStringValue(formValue, "web_username")?.Trim();
+        var webPassword = GetFormStringValue(formValue, "web_password")?.Trim();
+
+        if (string.IsNullOrWhiteSpace(operatorUserId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法识别当前飞书用户，绑定失败", "error");
+        }
+
+        if (string.IsNullOrWhiteSpace(webUsername) || string.IsNullOrWhiteSpace(webPassword))
+        {
+            using var retryScope = _serviceProvider.CreateScope();
+            var retryBindingService = retryScope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await retryBindingService.GetBindableWebUsernamesAsync()).ToArray());
+            return _cardBuilder.BuildCardActionResponseV2(retryCard, "⚠️ 请输入用户名和密码", "warning");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var authService = scope.ServiceProvider.GetRequiredService<IAuthenticationService>();
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+
+        if (!authService.ValidateUser(webUsername, webPassword))
+        {
+            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await bindingService.GetBindableWebUsernamesAsync()).ToArray());
+            return _cardBuilder.BuildCardActionResponseV2(retryCard, "❌ 用户名或密码错误", "error");
+        }
+
+        var bindResult = await bindingService.BindAsync(operatorUserId, webUsername);
+        if (!bindResult.Success)
+        {
+            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await bindingService.GetBindableWebUsernamesAsync()).ToArray());
+            return _cardBuilder.BuildCardActionResponseV2(retryCard, $"❌ 绑定失败：{bindResult.ErrorMessage}", "error");
+        }
+
+        if (!string.IsNullOrWhiteSpace(chatId))
+        {
+            var sessionManagerCard = await HandleOpenSessionManagerAsync(chatId, operatorUserId);
+            sessionManagerCard.Toast = new CardActionTriggerResponseDto.ToastSuffix
+            {
+                Content = $"✅ 已绑定 Web 用户：{webUsername}",
+                Type = CardActionTriggerResponseDto.ToastSuffix.ToastType.Success
+            };
+            return sessionManagerCard;
+        }
+
+        return _cardBuilder.BuildCardActionToastOnlyResponse($"✅ 已绑定 Web 用户：{webUsername}", "success");
+    }
+
     /// <summary>
     /// 处理切换会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleSwitchSessionAsync(string? sessionId, string? chatKey)
+    private async Task<CardActionTriggerResponseDto> HandleSwitchSessionAsync(string? sessionId, string? chatKey, string? operatorUserId)
     {
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(chatKey))
         {
@@ -520,10 +575,11 @@ public class FeishuCardActionService
         var chatKeyParts = chatKey.Split(':');
         var actualChatKey = chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
 
-        var success = _feishuChannel.SwitchCurrentSession(actualChatKey, sessionId);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        var success = _feishuChannel.SwitchCurrentSession(actualChatKey, sessionId, username);
         if (success)
         {
-            var workspacePath = _cliExecutor.GetSessionWorkspacePath(sessionId);
+            var workspacePath = GetSessionWorkspaceDisplay(sessionId);
             var lastActiveTime = _feishuChannel.GetSessionLastActiveTime(sessionId);
 
             // 后台异步发送会话历史卡片
@@ -597,7 +653,7 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理关闭会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleCloseSessionAsync(string? sessionId, string? chatKey)
+    private async Task<CardActionTriggerResponseDto> HandleCloseSessionAsync(string? sessionId, string? chatKey, string? operatorUserId)
     {
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(chatKey))
         {
@@ -621,7 +677,8 @@ public class FeishuCardActionService
         // 自定义目录/项目目录：直接关闭，无需确认
         if (session.IsCustomWorkspace)
         {
-            var success = _feishuChannel.CloseSession(actualChatKey, sessionId);
+            var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+            var success = _feishuChannel.CloseSession(actualChatKey, sessionId, username);
             if (success)
             {
                 return _cardBuilder.BuildCardActionToastOnlyResponse(
@@ -646,7 +703,8 @@ public class FeishuCardActionService
             {
                 // 确认有效期内，执行关闭
                 _pendingCloseSessions.Remove(sessionId);
-                var success = _feishuChannel.CloseSession(actualChatKey, sessionId);
+                var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+            var success = _feishuChannel.CloseSession(actualChatKey, sessionId, username);
                 if (success)
                 {
                     return _cardBuilder.BuildCardActionToastOnlyResponse(
@@ -667,44 +725,394 @@ public class FeishuCardActionService
     }
 
     /// <summary>
+    /// 显示新建会话表单
+    /// </summary>
+    private async Task<CardActionTriggerResponseDto> HandleShowCreateSessionFormAsync(string? chatKey, string? chatId, string? operatorUserId)
+    {
+        if (string.IsNullOrEmpty(chatKey) || string.IsNullOrEmpty(chatId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法打开创建表单", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法识别当前用户，请先发送一条普通消息后再创建会话", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var sessionDirectoryService = scope.ServiceProvider.GetRequiredService<ISessionDirectoryService>();
+        var directories = await sessionDirectoryService.GetUserAccessibleDirectoriesAsync(username);
+        _logger.LogInformation("[Feishu] 新建会话卡片加载可访问目录: User={User}, Count={Count}", username, directories.Count);
+        var card = BuildCreateSessionFormCard(actualChatKey, directories);
+        return _cardBuilder.BuildCardActionResponseV2(card, "请选择创建方式");
+    }
+
+    /// <summary>
     /// 处理新建会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleCreateSessionAsync(string? chatKey, string? chatId)
+    private async Task<CardActionTriggerResponseDto> HandleCreateSessionAsync(string? chatKey, string? chatId, JsonElement? formValue, string? operatorUserId, string? createModeFromAction, string? workspacePathFromAction, string? inputValues)
     {
         if (string.IsNullOrEmpty(chatKey) || string.IsNullOrEmpty(chatId))
         {
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，创建失败", "error");
         }
 
-        // 统一使用chatId作为key（去掉AppId前缀，和普通消息保持一致）
-        var chatKeyParts = chatKey.Split(':');
-        var actualChatKey = chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
-        var actualChatId = actualChatKey; // 现在chatKey就是chatId
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var actualChatId = actualChatKey;
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法识别当前用户，请先发送一条普通消息后再创建会话", "error");
+        }
 
-        // 创建模拟消息对象用于创建新会话
+        var createMode = string.IsNullOrWhiteSpace(createModeFromAction)
+            ? GetFormStringValue(formValue, "workspace_mode") ?? "default"
+            : createModeFromAction;
+        var customWorkspacePath = GetFormStringValue(formValue, "custom_workspace_path");
+        var existingWorkspacePath = GetFormStringValue(formValue, "existing_workspace_path");
+
+        _logger.LogInformation("[Feishu] 创建会话提交: Mode={Mode}, WorkspacePathFromAction={WorkspacePathFromAction}, InputValues={InputValues}, FormValue={FormValue}",
+            createMode,
+            workspacePathFromAction,
+            inputValues,
+            formValue?.ToString());
+
+        string? selectedWorkspacePath = null;
+        switch ((createMode ?? "default").ToLowerInvariant())
+        {
+            case "custom":
+                selectedWorkspacePath = !string.IsNullOrWhiteSpace(customWorkspacePath)
+                    ? customWorkspacePath.Trim()
+                    : (!string.IsNullOrWhiteSpace(inputValues) ? inputValues.Trim() : null);
+                if (string.IsNullOrWhiteSpace(selectedWorkspacePath))
+                {
+                    return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请输入自定义工作区路径，然后按回车创建", "error");
+                }
+                break;
+            case "existing":
+                selectedWorkspacePath = !string.IsNullOrWhiteSpace(workspacePathFromAction)
+                    ? workspacePathFromAction.Trim()
+                    : existingWorkspacePath?.Trim();
+                if (string.IsNullOrWhiteSpace(selectedWorkspacePath))
+                {
+                    return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请选择一个已有目录", "error");
+                }
+                break;
+        }
+
         var mockMessage = new FeishuIncomingMessage
         {
             ChatId = actualChatId,
-            SenderName = "用户"
+            SenderName = username
         };
-        _logger.LogInformation("🔍 [新建会话] 卡片回调ChatId={ChatId}, 实际使用ChatId={ActualChatId}", chatId, actualChatId);
 
-        // 创建新会话（使用公开方法）
-        var newSessionId = _feishuChannel.CreateNewSession(mockMessage, null);
-        var workspacePath = _cliExecutor.GetSessionWorkspacePath(newSessionId);
+        try
+        {
+            var newSessionId = _feishuChannel.CreateNewSession(mockMessage, selectedWorkspacePath);
+            var workspacePath = _cliExecutor.GetSessionWorkspacePath(newSessionId);
+            _feishuChannel.SwitchCurrentSession(actualChatKey, newSessionId, username);
 
-        // 设置新会话为当前会话（使用统一的chatKey）
-        _feishuChannel.SwitchCurrentSession(actualChatKey, newSessionId);
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                $"✅ 已创建新会话 {newSessionId[..8]}...\n📂 工作目录: {workspacePath}\n已自动切换到新会话",
+                "success");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [新建会话] 创建飞书会话失败, ChatId={ChatId}, User={User}", actualChatId, username);
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 创建失败: {ex.Message}", "error");
+        }
+    }
 
-        return _cardBuilder.BuildCardActionToastOnlyResponse(
-            $"✅ 已创建新会话 {newSessionId[..8]}...\n📂 工作目录: {workspacePath}\n已自动切换到新会话",
-            "success");
+    private string NormalizeChatKey(string chatKey)
+    {
+        var chatKeyParts = chatKey.Split(':');
+        return chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
+    }
+
+    private string? ResolveFeishuUsername(string chatKey, string? operatorUserId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+
+        if (!string.IsNullOrWhiteSpace(operatorUserId))
+        {
+            var boundWebUsername = bindingService.GetBoundWebUsernameAsync(operatorUserId).GetAwaiter().GetResult();
+            if (!string.IsNullOrWhiteSpace(boundWebUsername))
+            {
+                return boundWebUsername;
+            }
+        }
+
+        return _feishuChannel.GetSessionUsername(chatKey);
+    }
+
+    private static string? GetFormStringValue(JsonElement? formValue, string key)
+    {
+        if (formValue == null || !formValue.Value.TryGetProperty(key, out var valueElement))
+        {
+            return null;
+        }
+
+        return valueElement.ValueKind switch
+        {
+            JsonValueKind.String => valueElement.GetString(),
+            JsonValueKind.Object when valueElement.TryGetProperty("value", out var nestedValue) && nestedValue.ValueKind == JsonValueKind.String => nestedValue.GetString(),
+            _ => valueElement.ToString()
+        };
+    }
+
+    private ElementsCardV2Dto BuildCreateSessionFormCard(string chatKey, List<object> directories)
+    {
+        var ownedDirectories = directories
+            .Where(directory => GetDirectoryType(directory) == "owned")
+            .Take(12)
+            .ToList();
+
+        var sharedDirectories = directories
+            .Where(directory => GetDirectoryType(directory) == "authorized")
+            .Take(12)
+            .ToList();
+
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "## 🆕 新建会话\n支持：**默认目录**、**已有目录/项目**、**自定义路径**。"
+                }
+            },
+            new { tag = "hr" },
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "### 1️⃣ 使用默认目录\n系统自动创建临时工作目录。"
+                }
+            },
+            new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "使用默认目录创建" },
+                type = "primary",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "create_session",
+                            create_mode = "default",
+                            chat_key = chatKey
+                        }
+                    }
+                }
+            },
+            new { tag = "hr" },
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "### 2️⃣ 选择已有目录 / 项目"
+                }
+            }
+        };
+
+        if (ownedDirectories.Count > 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "lark_md", content = "**我的目录**" }
+            });
+
+            foreach (var directory in ownedDirectories)
+            {
+                elements.AddRange(BuildDirectoryCardElements(directory, chatKey));
+            }
+        }
+
+        if (sharedDirectories.Count > 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "lark_md", content = "**共享给我的目录**" }
+            });
+
+            foreach (var directory in sharedDirectories)
+            {
+                elements.AddRange(BuildDirectoryCardElements(directory, chatKey));
+            }
+        }
+
+        if (ownedDirectories.Count == 0 && sharedDirectories.Count == 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "plain_text", content = "暂无可用目录" }
+            });
+        }
+
+        elements.Add(new { tag = "hr" });
+        elements.Add(new
+        {
+            tag = "div",
+            text = new
+            {
+                tag = "lark_md",
+                content = "### 3️⃣ 自定义路径\n在下方输入框输入绝对路径，按回车直接创建。"
+            }
+        });
+        elements.Add(new
+        {
+            tag = "input",
+            input_type = "text",
+            name = "custom_workspace_path",
+            placeholder = new { tag = "plain_text", content = "例如: D:\\VSWorkshop\\testss" },
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "create_session",
+                        create_mode = "custom",
+                        chat_key = chatKey
+                    }
+                }
+            }
+        });
+        elements.Add(new { tag = "hr" });
+        elements.Add(new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = "返回会话管理" },
+            type = "default",
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "open_session_manager"
+                    }
+                }
+            }
+        });
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = "🆕 新建会话" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private IEnumerable<object> BuildDirectoryCardElements(object directory, string chatKey)
+    {
+        var node = JsonSerializer.SerializeToNode(directory) as JsonObject;
+        if (node == null)
+        {
+            return Array.Empty<object>();
+        }
+
+        var path = node["DirectoryPath"]?.GetValue<string>() ?? node["directoryPath"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return Array.Empty<object>();
+        }
+
+        var alias = node["Alias"]?.GetValue<string>()
+            ?? node["alias"]?.GetValue<string>()
+            ?? Path.GetFileName(path);
+        var permission = node["Permission"]?.GetValue<string>() ?? node["permission"]?.GetValue<string>() ?? "owner";
+        var directoryType = node["DirectoryType"]?.GetValue<string>()
+            ?? node["directoryType"]?.GetValue<string>()
+            ?? "workspace";
+
+        return new object[]
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"**{alias}**  `[type:{directoryType} permission:{permission}]`\n`{path}`"
+                }
+            },
+            new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "使用该目录创建" },
+                type = "primary",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "create_session",
+                            create_mode = "existing",
+                            workspace_path = path,
+                            chat_key = chatKey
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    private string GetDirectoryType(object directory)
+    {
+        var node = JsonSerializer.SerializeToNode(directory) as JsonObject;
+        return node?["Type"]?.GetValue<string>()
+            ?? node?["type"]?.GetValue<string>()
+            ?? string.Empty;
+    }
+
+    private string GetSessionWorkspaceDisplay(string sessionId)
+    {
+        try
+        {
+            return _cliExecutor.GetSessionWorkspacePath(sessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Feishu] 获取会话工作区失败，降级显示: {SessionId}", sessionId);
+            return "(工作区未初始化或已失效)";
+        }
     }
 
     /// <summary>
     /// 处理打开会话管理器动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsync(string? chatId)
+    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsync(string? chatId, string? operatorUserId)
     {
         if (string.IsNullOrEmpty(chatId))
         {
@@ -718,9 +1126,14 @@ public class FeishuCardActionService
             // 我们可以通过反射获取_feishuChannel的_options字段
             // 直接使用chatId作为key（和普通消息保持一致，不需要AppId前缀）
             var chatKey = chatId.ToLowerInvariant();
+            var username = ResolveFeishuUsername(chatKey, operatorUserId);
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理会话", "error");
+            }
 
-            var sessions = _feishuChannel.GetChatSessions(chatKey);
-            var currentSessionId = _feishuChannel.GetCurrentSession(chatKey);
+            var sessions = _feishuChannel.GetChatSessions(chatKey, username);
+            var currentSessionId = _feishuChannel.GetCurrentSession(chatKey, username);
 
             var elements = new List<object>();
 
@@ -740,7 +1153,7 @@ public class FeishuCardActionService
             // 添加会话列表
             foreach (var sessionId in sessions.Take(10)) // 最多显示10个最近的会话
             {
-                var workspacePath = _cliExecutor.GetSessionWorkspacePath(sessionId);
+                var workspacePath = GetSessionWorkspaceDisplay(sessionId);
                 var lastActiveTime = _feishuChannel.GetSessionLastActiveTime(sessionId);
                 var isCurrent = sessionId == currentSessionId;
 
@@ -749,35 +1162,50 @@ public class FeishuCardActionService
                 elements.Add(new
                 {
                     tag = "div",
-                    text = new { tag = "lark_md", content = sessionInfo },
-                    actions = new[]
+                    text = new { tag = "lark_md", content = sessionInfo }
+                });
+
+                elements.Add(new
+                {
+                    tag = "button",
+                    text = new { tag = "plain_text", content = isCurrent ? "当前" : "切换" },
+                    type = isCurrent ? "default" : "primary",
+                    behaviors = new[]
                     {
                         new
                         {
-                            tag = "button",
-                            text = new { tag = "plain_text", content = isCurrent ? "当前" : "切换" },
-                            type = isCurrent ? "default" : "primary",
-                            value = JsonSerializer.Serialize(new
+                            type = "callback",
+                            value = new
                             {
                                 action = "switch_session",
                                 session_id = sessionId,
                                 chat_key = chatKey
-                            })
-                        },
+                            }
+                        }
+                    }
+                });
+
+                elements.Add(new
+                {
+                    tag = "button",
+                    text = new { tag = "plain_text", content = "关闭" },
+                    type = "danger",
+                    behaviors = new[]
+                    {
                         new
                         {
-                            tag = "button",
-                            text = new { tag = "plain_text", content = "关闭" },
-                            type = "danger",
-                            value = JsonSerializer.Serialize(new
+                            type = "callback",
+                            value = new
                             {
                                 action = "close_session",
                                 session_id = sessionId,
                                 chat_key = chatKey
-                            })
+                            }
                         }
                     }
                 });
+
+                elements.Add(new { tag = "hr" });
             }
 
             if (sessions.Count == 0)
@@ -804,7 +1232,7 @@ public class FeishuCardActionService
                         type = "callback",
                         value = new
                         {
-                            action = "create_session",
+                            action = "show_create_session_form",
                             chat_key = chatKey
                         }
                     }

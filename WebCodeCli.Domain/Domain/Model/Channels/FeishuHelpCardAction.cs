@@ -38,4 +38,16 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("chat_key")]
     public string? ChatKey { get; set; }
+
+    /// <summary>
+    /// 创建会话模式（default/custom/existing）
+    /// </summary>
+    [JsonPropertyName("create_mode")]
+    public string? CreateMode { get; set; }
+
+    /// <summary>
+    /// 工作区路径（已有目录选择时使用）
+    /// </summary>
+    [JsonPropertyName("workspace_path")]
+    public string? WorkspacePath { get; set; }
 }

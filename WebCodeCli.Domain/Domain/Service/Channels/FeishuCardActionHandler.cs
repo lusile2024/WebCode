@@ -132,6 +132,11 @@ public class FeishuCardActionHandler : ICallbackHandler<
                 actionValue = eventDto.Action.Option;
             }
 
+            if (string.IsNullOrEmpty(actionValue) && eventDto.Action.Tag == "button" && eventDto.Action.Name == "bind_web_user_submit")
+            {
+                actionValue = JsonSerializer.Serialize(new { action = "bind_web_user" });
+            }
+
             if (string.IsNullOrEmpty(actionValue))
             {
                 _logger.LogWarning("🔥 [FeishuCard] 空的 action.value 和 action.option");
@@ -157,7 +162,8 @@ public class FeishuCardActionHandler : ICallbackHandler<
                 actionValue,
                 eventDto.Action.FormValue,
                 chatId,
-                eventDto.Action.InputValue);
+                eventDto.Action.InputValue,
+                eventDto.Operator?.UnionId ?? eventDto.Operator?.OpenId ?? string.Empty);
         }
         catch (Exception ex)
         {

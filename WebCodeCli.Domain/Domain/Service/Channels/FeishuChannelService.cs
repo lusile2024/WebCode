@@ -50,12 +50,27 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// </summary>
     /// <param name="chatKey">聊天键（格式：feishu:{AppId}:{ChatId}）</param>
     /// <returns>当前会话ID，如果不存在则返回null</returns>
-    public string? GetCurrentSession(string chatKey)
+    public string? GetCurrentSession(string chatKey, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-        var session = repo.GetActiveByFeishuChatKeyAsync(chatKey).GetAwaiter().GetResult();
-        return session?.SessionId;
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+        var sessions = GetValidFeishuSessions(repo, bindingService, chatKey, username);
+        var activeSession = sessions.FirstOrDefault(s => s.IsFeishuActive && s.FeishuChatKey == chatKey);
+        if (activeSession != null)
+        {
+            return activeSession.SessionId;
+        }
+
+        var latestSession = sessions.OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
+        if (latestSession == null || string.IsNullOrWhiteSpace(username))
+        {
+            return null;
+        }
+
+        return SwitchCurrentSession(chatKey, latestSession.SessionId, username)
+            ? latestSession.SessionId
+            : null;
     }
 
     /// <summary>
@@ -76,11 +91,12 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// </summary>
     /// <param name="chatKey">聊天键</param>
     /// <returns>会话ID列表</returns>
-    public List<string> GetChatSessions(string chatKey)
+    public List<string> GetChatSessions(string chatKey, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-        var sessions = repo.GetByFeishuChatKeyAsync(chatKey).GetAwaiter().GetResult();
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+        var sessions = GetValidFeishuSessions(repo, bindingService, chatKey, username);
         return sessions.Select(s => s.SessionId).ToList();
     }
 
@@ -90,11 +106,36 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <param name="chatKey">聊天键</param>
     /// <param name="sessionId">要切换到的会话ID</param>
     /// <returns>是否切换成功</returns>
-    public bool SwitchCurrentSession(string chatKey, string sessionId)
+    public bool SwitchCurrentSession(string chatKey, string sessionId, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-        return repo.SetActiveSessionAsync(chatKey, sessionId).GetAwaiter().GetResult();
+
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return repo.SetActiveSessionAsync(chatKey, sessionId).GetAwaiter().GetResult();
+        }
+
+        var targetSession = repo.GetByIdAndUsernameAsync(sessionId, username).GetAwaiter().GetResult();
+        if (targetSession == null)
+        {
+            return false;
+        }
+
+        var userChatSessions = repo.GetListAsync(x => x.Username == username && x.FeishuChatKey == chatKey)
+            .GetAwaiter().GetResult();
+        foreach (var session in userChatSessions.Where(x => x.IsFeishuActive))
+        {
+            session.IsFeishuActive = false;
+            session.UpdatedAt = DateTime.Now;
+            repo.UpdateAsync(session).GetAwaiter().GetResult();
+        }
+
+        targetSession.FeishuChatKey = chatKey;
+        targetSession.IsFeishuActive = true;
+        targetSession.UpdatedAt = DateTime.Now;
+        repo.UpdateAsync(targetSession).GetAwaiter().GetResult();
+        return true;
     }
 
     /// <summary>
@@ -103,16 +144,40 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <param name="chatKey">聊天键</param>
     /// <param name="sessionId">要关闭的会话ID</param>
     /// <returns>是否关闭成功</returns>
-    public bool CloseSession(string chatKey, string sessionId)
+    public bool CloseSession(string chatKey, string sessionId, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-        var success = repo.CloseFeishuSessionAsync(chatKey, sessionId).GetAwaiter().GetResult();
+
+        bool success;
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            success = repo.CloseFeishuSessionAsync(chatKey, sessionId).GetAwaiter().GetResult();
+        }
+        else
+        {
+            var targetSession = repo.GetByIdAndUsernameAsync(sessionId, username).GetAwaiter().GetResult();
+            if (targetSession == null)
+            {
+                return false;
+            }
+
+            var wasActive = targetSession.IsFeishuActive && string.Equals(targetSession.FeishuChatKey, chatKey, StringComparison.OrdinalIgnoreCase);
+            success = repo.DeleteAsync(targetSession).GetAwaiter().GetResult();
+            if (success && wasActive)
+            {
+                var latestSession = repo.GetByUsernameOrderByUpdatedAtAsync(username).GetAwaiter().GetResult().FirstOrDefault();
+                if (latestSession != null)
+                {
+                    SwitchCurrentSession(chatKey, latestSession.SessionId, username);
+                }
+            }
+        }
+
         if (success)
         {
-            // 清理工作目录
             _cliExecutor.CleanupSessionWorkspace(sessionId);
-            _logger.LogInformation("Closed session {SessionId} for chat {ChatKey}", sessionId, chatKey);
+            _logger.LogInformation("Closed session {SessionId} for chat {ChatKey}, user={User}", sessionId, chatKey, username ?? string.Empty);
         }
         return success;
     }
@@ -294,22 +359,25 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private string GetCurrentSession(FeishuIncomingMessage message)
     {
         var chatKey = message.ChatId.ToLowerInvariant();
-        _logger.LogInformation("🔍 [会话匹配] 消息ChatId={ChatId}, 生成ChatKey={ChatKey}",
-            message.ChatId, chatKey);
+        var username = message.SenderName;
+        _logger.LogInformation("🔍 [会话匹配] 消息ChatId={ChatId}, ChatKey={ChatKey}, User={User}",
+            message.ChatId, chatKey, username);
 
-        using var scope = _serviceProvider.CreateScope();
-        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-
-        var currentSession = repo.GetActiveByFeishuChatKeyAsync(chatKey).GetAwaiter().GetResult();
-        if (currentSession != null)
+        var currentSessionId = GetCurrentSession(chatKey, username);
+        if (!string.IsNullOrWhiteSpace(currentSessionId))
         {
-            _logger.LogDebug("Using current session: {SessionId} for chat: {ChatId}", currentSession.SessionId, message.ChatId);
-            // 更新最后活动时间
-            currentSession.UpdatedAt = DateTime.UtcNow;
-            repo.UpdateAsync(currentSession).GetAwaiter().GetResult();
-            return currentSession.SessionId;
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            var currentSession = repo.GetByIdAsync(currentSessionId).GetAwaiter().GetResult();
+            if (currentSession != null)
+            {
+                currentSession.UpdatedAt = DateTime.UtcNow;
+                repo.UpdateAsync(currentSession).GetAwaiter().GetResult();
+            }
+
+            return currentSessionId;
         }
-        // 没有当前会话，抛出异常提示用户手动创建
+
         throw new InvalidOperationException("当前没有可用会话，请先发送 /feishusessions 命令创建或选择会话。");
     }
 
@@ -322,20 +390,89 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     public string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null)
     {
         var chatKey = message.ChatId.ToLowerInvariant();
+        var username = string.IsNullOrWhiteSpace(message.SenderName) ? "unknown" : message.SenderName;
+
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
         var newSessionId = repo.CreateFeishuSessionAsync(
             chatKey,
-            message.SenderName ?? "unknown",
-            customWorkspacePath).GetAwaiter().GetResult();
+            username,
+            null).GetAwaiter().GetResult();
+
+        var session = repo.GetByIdAsync(newSessionId).GetAwaiter().GetResult();
+        if (session == null)
+        {
+            throw new InvalidOperationException($"创建飞书会话后未找到会话记录: {newSessionId}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(customWorkspacePath))
+        {
+            var sessionDirectoryService = scope.ServiceProvider.GetRequiredService<ISessionDirectoryService>();
+            sessionDirectoryService.SetSessionWorkspaceAsync(newSessionId, username, customWorkspacePath, true)
+                .GetAwaiter().GetResult();
+        }
+        else
+        {
+            var workspacePath = _cliExecutor.InitializeSessionWorkspaceAsync(newSessionId).GetAwaiter().GetResult();
+            session.WorkspacePath = workspacePath;
+            session.IsCustomWorkspace = false;
+            session.UpdatedAt = DateTime.Now;
+            repo.UpdateAsync(session).GetAwaiter().GetResult();
+        }
+
         _logger.LogInformation(
-            "Created new session: {SessionId} for chat: {ChatId} (user: {UserName})",
+            "Created new session: {SessionId} for chat: {ChatId} (user: {UserName}, workspace: {WorkspacePath})",
             newSessionId,
             message.ChatId,
-            message.SenderName);
+            username,
+            customWorkspacePath ?? session.WorkspacePath ?? string.Empty);
         return newSessionId;
     }
 
+    public string? GetSessionUsername(string chatKey)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+        var session = GetValidFeishuSessions(repo, bindingService, chatKey).FirstOrDefault();
+        return session?.Username;
+    }
+
+    private List<ChatSessionEntity> GetValidFeishuSessions(
+        IChatSessionRepository repo,
+        IFeishuUserBindingService bindingService,
+        string chatKey,
+        string? username = null)
+    {
+        CleanupUnboundFeishuSessions(repo, bindingService);
+
+        List<ChatSessionEntity> sessions;
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            sessions = repo.GetByFeishuChatKeyAsync(chatKey).GetAwaiter().GetResult();
+        }
+        else
+        {
+            sessions = repo.GetByUsernameOrderByUpdatedAtAsync(username).GetAwaiter().GetResult();
+        }
+
+        return sessions.OrderByDescending(s => s.UpdatedAt).ToList();
+    }
+
+    private void CleanupUnboundFeishuSessions(IChatSessionRepository repo, IFeishuUserBindingService bindingService)
+    {
+        var boundWebUsernames = bindingService.GetAllBoundWebUsernamesAsync().GetAwaiter().GetResult();
+        var feishuSessions = repo.GetListAsync(x => x.FeishuChatKey != null).GetAwaiter().GetResult();
+        var invalidSessions = feishuSessions
+            .Where(session => !boundWebUsernames.Contains(session.Username))
+            .ToList();
+
+        foreach (var invalidSession in invalidSessions)
+        {
+            repo.DeleteAsync(invalidSession).GetAwaiter().GetResult();
+            _logger.LogInformation("清理未绑定 Web 用户的飞书旧会话: {SessionId}, User={User}, ChatKey={ChatKey}", invalidSession.SessionId, invalidSession.Username, invalidSession.FeishuChatKey ?? string.Empty);
+        }
+    }
 
     /// <summary>
     /// 执行 CLI 工具并流式更新卡片

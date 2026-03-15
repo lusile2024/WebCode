@@ -191,6 +191,219 @@ public class FeishuHelpCardBuilder
         };
     }
 
+    public ElementsCardV2Dto BuildBindWebUserCardV2(string[] bindableUsernames)
+    {
+        var hint = bindableUsernames.Length > 0
+            ? $"可绑定用户：{string.Join("、", bindableUsernames)}"
+            : "请联系管理员确认可用的 Web 用户名";
+
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## 🔐 绑定 Web 用户\n绑定后，飞书将共享 Web 端的会话、项目和工作区。\n\n{hint}"
+                }
+            },
+            new { tag = "hr" },
+            new
+            {
+                tag = "form",
+                name = "bind_web_user_form",
+                elements = new object[]
+                {
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "web_username",
+                        label = new { tag = "plain_text", content = "Web 用户名" },
+                        placeholder = new { tag = "plain_text", content = "请输入 Web 用户名" }
+                    },
+                    new
+                    {
+                        tag = "input",
+                        input_type = "password",
+                        name = "web_password",
+                        label = new { tag = "plain_text", content = "Web 密码" },
+                        placeholder = new { tag = "plain_text", content = "请输入 Web 密码" }
+                    },
+                    new
+                    {
+                        tag = "column_set",
+                        flex_mode = "none",
+                        background_style = "default",
+                        horizontal_spacing = "default",
+                        columns = new object[]
+                        {
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "button",
+                                        text = new { tag = "plain_text", content = "绑定" },
+                                        type = "primary",
+                                        action_type = "form_submit",
+                                        name = "bind_web_user_submit",
+                                        value = new { action = "bind_web_user" }
+                                    }
+                                }
+                            },
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "button",
+                                        text = new { tag = "plain_text", content = "取消" },
+                                        type = "default",
+                                        action_type = "form_reset",
+                                        name = "bind_web_user_reset"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = "🔐 绑定 Web 用户" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    public string BuildBindWebUserCard(string[] bindableUsernames)
+    {
+        var hint = bindableUsernames.Length > 0
+            ? $"可绑定用户：{string.Join("、", bindableUsernames)}"
+            : "请联系管理员确认可用的 Web 用户名";
+
+        var card = new
+        {
+            schema = "2.0",
+            config = new { enable_forward = true, update_multi = true },
+            header = new
+            {
+                template = "blue",
+                title = new { tag = "plain_text", content = "🔐 绑定 Web 用户" }
+            },
+            body = new
+            {
+                elements = new object[]
+                {
+                    new
+                    {
+                        tag = "div",
+                        text = new
+                        {
+                            tag = "lark_md",
+                            content = $"## 🔐 绑定 Web 用户\n绑定后，飞书将共享 Web 端的会话、项目和工作区。\n\n{hint}"
+                        }
+                    },
+                    new { tag = "hr" },
+                    new
+                    {
+                        tag = "form",
+                        name = "bind_web_user_form",
+                        elements = new object[]
+                        {
+                            new
+                            {
+                                tag = "input",
+                                input_type = "text",
+                                name = "web_username",
+                                label = new { tag = "plain_text", content = "Web 用户名" },
+                                placeholder = new { tag = "plain_text", content = "请输入 Web 用户名" }
+                            },
+                            new
+                            {
+                                tag = "input",
+                                input_type = "password",
+                                name = "web_password",
+                                label = new { tag = "plain_text", content = "Web 密码" },
+                                placeholder = new { tag = "plain_text", content = "请输入 Web 密码" }
+                            },
+                            new
+                            {
+                                tag = "column_set",
+                                flex_mode = "none",
+                                background_style = "default",
+                                horizontal_spacing = "default",
+                                columns = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "column",
+                                        width = "auto",
+                                        vertical_align = "top",
+                                        elements = new object[]
+                                        {
+                                            new
+                                            {
+                                                tag = "button",
+                                                text = new { tag = "plain_text", content = "绑定" },
+                                                type = "primary",
+                                                action_type = "form_submit",
+                                                name = "bind_web_user_submit",
+                                                value = new { action = "bind_web_user" }
+                                            }
+                                        }
+                                    },
+                                    new
+                                    {
+                                        tag = "column",
+                                        width = "auto",
+                                        vertical_align = "top",
+                                        elements = new object[]
+                                        {
+                                            new
+                                            {
+                                                tag = "button",
+                                                text = new { tag = "plain_text", content = "取消" },
+                                                type = "default",
+                                                action_type = "form_reset",
+                                                name = "bind_web_user_reset"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        return JsonSerializer.Serialize(card);
+    }
+
     /// <summary>
     /// 构建SDK类型的卡片响应（用于回调）- 使用 SetCard 扩展方法
     /// </summary>

@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Configuration;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
+using WebCodeCli.Domain.Repositories.Base.Project;
 
 namespace WebCodeCli.Domain.Domain.Service;
 
@@ -12,15 +14,23 @@ public class SessionDirectoryService : ISessionDirectoryService
     private readonly IChatSessionRepository _chatSessionRepository;
     private readonly IWorkspaceRegistryService _registryService;
     private readonly IWorkspaceAuthorizationService _authorizationService;
+    private readonly IProjectRepository _projectRepository;
+    private readonly bool _autoCreateMissingDirectories;
+    private readonly string[] _allowedRoots;
 
     public SessionDirectoryService(
         IChatSessionRepository chatSessionRepository,
         IWorkspaceRegistryService registryService,
-        IWorkspaceAuthorizationService authorizationService)
+        IWorkspaceAuthorizationService authorizationService,
+        IProjectRepository projectRepository,
+        IConfiguration configuration)
     {
         _chatSessionRepository = chatSessionRepository;
         _registryService = registryService;
         _authorizationService = authorizationService;
+        _projectRepository = projectRepository;
+        _autoCreateMissingDirectories = configuration.GetValue<bool?>("Workspace:AutoCreateMissingDirectories") ?? true;
+        _allowedRoots = configuration.GetSection("Workspace:AllowedRoots").Get<string[]>() ?? Array.Empty<string>();
     }
 
     /// <summary>
@@ -39,16 +49,36 @@ public class SessionDirectoryService : ISessionDirectoryService
         // 如果是自定义目录，自动注册为所有者
         if (isCustom && !string.IsNullOrEmpty(normalizedPath))
         {
-            // 检查是否是敏感目录
             if (_registryService.IsSensitiveDirectory(normalizedPath))
             {
                 throw new UnauthorizedAccessException($"禁止访问系统敏感目录: {directoryPath}");
             }
 
-            // 自动注册目录所有者
+            if (_allowedRoots.Length > 0)
+            {
+                var isUnderAllowedRoots = _allowedRoots
+                    .Select(_registryService.NormalizePath)
+                    .Any(root => normalizedPath.StartsWith(root, StringComparison.OrdinalIgnoreCase));
+                if (!isUnderAllowedRoots)
+                {
+                    throw new UnauthorizedAccessException($"目录不在允许范围内: {directoryPath}");
+                }
+            }
+
+            if (!Directory.Exists(normalizedPath))
+            {
+                if (_autoCreateMissingDirectories)
+                {
+                    Directory.CreateDirectory(normalizedPath);
+                }
+                else
+                {
+                    throw new DirectoryNotFoundException($"目录不存在: {directoryPath}");
+                }
+            }
+
             await _registryService.RegisterDirectoryAsync(normalizedPath, username);
 
-            // 验证权限
             if (!await _authorizationService.CheckPermissionAsync(normalizedPath, username, "write"))
             {
                 throw new UnauthorizedAccessException($"您没有权限访问目录: {directoryPath}");
@@ -111,8 +141,10 @@ public class SessionDirectoryService : ISessionDirectoryService
     {
         var owned = await _registryService.GetOwnedDirectoriesAsync(username);
         var authorized = await _authorizationService.GetUserAuthorizedDirectoriesAsync(username);
+        var projects = await _projectRepository.GetByUsernameOrderByUpdatedAtAsync(username);
 
         var result = new List<object>();
+        var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var dir in owned)
         {
@@ -125,12 +157,40 @@ public class SessionDirectoryService : ISessionDirectoryService
                 dir.CreatedAt,
                 dir.UpdatedAt,
                 Permission = "owner",
-                Type = "owned"
+                Type = "owned",
+                DirectoryType = "workspace"
+            });
+            addedPaths.Add(dir.DirectoryPath);
+        }
+
+        foreach (var project in projects.Where(x => !string.IsNullOrWhiteSpace(x.LocalPath) && Directory.Exists(x.LocalPath)))
+        {
+            if (!addedPaths.Add(project.LocalPath!))
+            {
+                continue;
+            }
+
+            result.Add(new
+            {
+                Id = project.ProjectId,
+                DirectoryPath = project.LocalPath,
+                Alias = project.Name,
+                IsTrusted = true,
+                CreatedAt = project.CreatedAt,
+                UpdatedAt = project.UpdatedAt,
+                Permission = "owner",
+                Type = "owned",
+                DirectoryType = "project"
             });
         }
 
         foreach (var auth in authorized)
         {
+            if (!addedPaths.Add(auth.DirectoryPath))
+            {
+                continue;
+            }
+
             result.Add(new
             {
                 auth.Id,
@@ -140,10 +200,11 @@ public class SessionDirectoryService : ISessionDirectoryService
                 auth.GrantedBy,
                 auth.GrantedAt,
                 auth.ExpiresAt,
-                Type = "authorized"
+                Type = "authorized",
+                DirectoryType = "workspace"
             });
         }
 
-        return result;
+        return result.OrderByDescending(x => x.GetType().GetProperty("UpdatedAt")?.GetValue(x) as DateTime? ?? DateTime.MinValue).ToList<object>();
     }
 }
