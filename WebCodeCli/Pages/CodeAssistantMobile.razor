@@ -150,13 +150,26 @@
                                 <div class="flex-1 min-w-0">
                                     <h3 class="font-semibold text-sm text-gray-800 truncate">@session.Title</h3>
                                     <p class="text-xs text-gray-500 mt-0.5">@FormatDateTime(session.UpdatedAt)</p>
+                                    @if (!string.IsNullOrEmpty(session.WorkspacePath))
+                                    {
+                                        <p class="text-xs text-gray-400 mt-0.5 truncate" title="@session.WorkspacePath">
+                                            @session.WorkspacePath
+                                        </p>
+                                    }
                                 </div>
                                 <div class="flex items-center gap-1 flex-shrink-0 ml-2">
-                                    <button @onclick:stopPropagation="true" 
+                                    <button @onclick:stopPropagation="true"
                                             @onclick="() => ShowDeleteSessionConfirm(session)"
                                             class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-red-100 active:bg-red-200 transition-colors">
                                         <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                        </svg>
+                                    </button>
+                                    <button @onclick:stopPropagation="true"
+                                            @onclick="() => ShowAuthorizeDialog(session)"
+                                            class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-green-100 active:bg-green-200 transition-colors">
+                                        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
                                         </svg>
                                     </button>
                                 </div>
@@ -205,6 +218,120 @@
                         <div class="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
                     }
                     @T("common.delete")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 授权对话框 -->
+@if (_showAuthorizeDialog && _sessionToAuthorize != null)
+{
+    <div class="fixed inset-0 z-[70] flex items-end justify-center" @onclick="CloseAuthorizeDialog">
+        <div class="absolute inset-0 bg-black/50"></div>
+        <div class="relative w-full max-w-lg bg-white rounded-t-3xl shadow-2xl max-h-[85vh] overflow-hidden flex flex-col safe-area-bottom"
+             @onclick:stopPropagation="true">
+            <div class="w-12 h-1 bg-gray-300 rounded-full mx-auto mt-3 mb-2"></div>
+            <div class="px-4 pb-4 border-b border-gray-100 flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <h3 class="text-lg font-bold text-gray-800">@(T("codeAssistant.authorizeDialogTitle") == "codeAssistant.authorizeDialogTitle" ? "授权管理" : T("codeAssistant.authorizeDialogTitle"))</h3>
+                    <p class="text-xs text-gray-500 truncate mt-1">@_sessionToAuthorize.WorkspacePath</p>
+                </div>
+                <button @onclick="CloseAuthorizeDialog"
+                        class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 active:bg-gray-200 transition-colors flex-shrink-0">
+                    <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+                <div class="p-4 bg-gray-50 rounded-2xl">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-3">添加新授权</h4>
+                    <div class="space-y-3">
+                        <input type="text"
+                               placeholder="输入用户名"
+                               @bind="_newAuthUsername"
+                               @onkeypress='@((KeyboardEventArgs e) => { if (e.Key == "Enter") { _ = AddAuthorization(); } })'
+                               class="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent" />
+                        <select @bind="_newAuthPermission"
+                                class="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent">
+                            <option value="read">只读</option>
+                            <option value="write">读写</option>
+                            <option value="admin">管理员</option>
+                        </select>
+                        <button @onclick="AddAuthorization"
+                                disabled="@_isLoadingAuthorization"
+                                class="w-full py-3 bg-green-600 text-white text-sm font-medium rounded-xl hover:bg-green-700 active:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+                            @if (_isLoadingAuthorization)
+                            {
+                                <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                            }
+                            <span>添加授权</span>
+                        </button>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_authorizationError))
+                    {
+                        <p class="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-xl mt-3">@_authorizationError</p>
+                    }
+                </div>
+
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-700 mb-3">已授权用户</h4>
+                    @if (_isLoadingAuthorization && _authorizedUsers.Count == 0)
+                    {
+                        <div class="text-center py-8">
+                            <div class="animate-spin rounded-full h-8 w-8 border-2 border-gray-300 border-t-gray-600 mx-auto mb-2"></div>
+                            <p class="text-sm text-gray-500">加载中...</p>
+                        </div>
+                    }
+                    else if (_authorizedUsers.Any())
+                    {
+                        <div class="space-y-2">
+                            @foreach (var auth in _authorizedUsers)
+                            {
+                                <div class="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-xl">
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-sm font-medium text-gray-800 truncate">@auth.AuthorizedUsername</p>
+                                        <div class="flex flex-wrap items-center gap-2 text-xs text-gray-500 mt-1">
+                                            <span>@GetPermissionLabel(auth.Permission)</span>
+                                            <span>•</span>
+                                            <span>@FormatDate(auth.GrantedAt)</span>
+                                            @if (auth.ExpiresAt.HasValue)
+                                            {
+                                                <span>•</span>
+                                                <span class="@(auth.ExpiresAt.Value < DateTime.Now ? "text-red-500" : "")">过期: @auth.ExpiresAt.Value.ToString("yyyy-MM-dd")</span>
+                                            }
+                                        </div>
+                                    </div>
+                                    <button @onclick="@(() => RevokeAuthorization(auth.AuthorizedUsername))"
+                                            disabled="@_isLoadingAuthorization"
+                                            class="w-10 h-10 flex items-center justify-center rounded-full text-red-600 hover:bg-red-100 active:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                                            title="撤销授权">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-8 text-gray-400 bg-gray-50 rounded-2xl">
+                            <svg class="w-12 h-12 mx-auto mb-2 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                            </svg>
+                            <p class="text-sm">暂无授权用户</p>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="px-4 pb-4 pt-2 border-t border-gray-100">
+                <button @onclick="CloseAuthorizeDialog"
+                        class="w-full py-3 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 rounded-xl font-medium text-gray-700 transition-colors">
+                    @T("common.close")
                 </button>
             </div>
         </div>

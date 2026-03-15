@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using System.Security.Claims;
@@ -263,7 +264,7 @@ public class WorkspaceController : ControllerBase
         }
         catch (UnauthorizedAccessException ex)
         {
-            return Forbid(ex.Message);
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (ArgumentException ex)
         {
@@ -295,7 +296,7 @@ public class WorkspaceController : ControllerBase
         }
         catch (UnauthorizedAccessException ex)
         {
-            return Forbid(ex.Message);
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (Exception ex)
         {
@@ -397,7 +398,7 @@ public class WorkspaceController : ControllerBase
         }
         catch (UnauthorizedAccessException ex)
         {
-            return Forbid(ex.Message);
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (Exception ex)
         {

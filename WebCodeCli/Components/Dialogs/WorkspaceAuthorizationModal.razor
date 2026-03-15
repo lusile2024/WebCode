@@ -1,3 +1,5 @@
+@using System.Text.Json
+@using System.Text.Json.Serialization
 @using WebCodeCli.Domain.Domain.Model
 @using WebCodeCli.Models
 @inject HttpClient Http
@@ -163,6 +165,7 @@
 
     public class AuthorizedUserDto
     {
+        [JsonPropertyName("AuthorizedUsername")]
         public string Username { get; set; } = string.Empty;
         public string Permission { get; set; } = string.Empty;
         public DateTime? ExpireTime { get; set; }
@@ -178,10 +181,10 @@
 
     public class AuthorizationRequest
     {
-        public string WorkspacePath { get; set; } = string.Empty;
-        public string Username { get; set; } = string.Empty;
+        public string DirectoryPath { get; set; } = string.Empty;
+        public string AuthorizedUsername { get; set; } = string.Empty;
         public string Permission { get; set; } = string.Empty;
-        public DateTime? ExpireTime { get; set; }
+        public DateTime? ExpiresAt { get; set; }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -197,7 +200,7 @@
         IsLoading = true;
         try
         {
-            var response = await Http.GetFromJsonAsync<ApiResponse<List<AuthorizedUserDto>>>($"/api/workspace/authorized-users?path={Uri.EscapeDataString(WorkspacePath)}");
+            var response = await Http.GetFromJsonAsync<ApiResponse<List<AuthorizedUserDto>>>($"/api/workspace/directory-authorizations?directoryPath={Uri.EscapeDataString(WorkspacePath)}");
             AuthorizedUsers = response?.Data ?? new();
         }
         catch (Exception ex)
@@ -226,15 +229,11 @@
         {
             var request = new AuthorizationRequest
             {
-                WorkspacePath = WorkspacePath,
-                Username = NewAuthorization.Username,
-                Permission = NewAuthorization.Permission
+                DirectoryPath = WorkspacePath,
+                AuthorizedUsername = NewAuthorization.Username,
+                Permission = NewAuthorization.Permission,
+                ExpiresAt = NewAuthorization.ExpireTime
             };
-
-            if (NewAuthorization.ExpireTime.HasValue)
-            {
-                request.ExpireTime = NewAuthorization.ExpireTime.Value;
-            }
 
             var response = await Http.PostAsJsonAsync("/api/workspace/authorize", request);
             if (response.IsSuccessStatusCode)
@@ -246,8 +245,7 @@
             }
             else
             {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                FormError = $"授权失败: {errorContent}";
+                FormError = $"授权失败: {await ExtractErrorMessageAsync(response)}";
             }
         }
         catch (Exception ex)
@@ -269,15 +267,18 @@
 
         try
         {
-            var response = await Http.DeleteAsync($"/api/workspace/revoke-authorization?path={Uri.EscapeDataString(WorkspacePath)}&username={Uri.EscapeDataString(username)}");
+            var response = await Http.PostAsJsonAsync("/api/workspace/revoke-authorization", new RevokeAuthorizationRequest
+            {
+                DirectoryPath = WorkspacePath,
+                AuthorizedUsername = username
+            });
             if (response.IsSuccessStatusCode)
             {
                 await LoadAuthorizedUsersAsync();
             }
             else
             {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                FormError = $"取消授权失败: {errorContent}";
+                FormError = $"取消授权失败: {await ExtractErrorMessageAsync(response)}";
             }
         }
         catch (Exception ex)
@@ -307,6 +308,34 @@
         FormError = string.Empty;
         AuthorizedUsers.Clear();
         OnClose.InvokeAsync();
+    }
+
+    private static async Task<string> ExtractErrorMessageAsync(HttpResponseMessage response)
+    {
+        var content = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return $"HTTP {(int)response.StatusCode}";
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(content);
+            if (json.RootElement.TryGetProperty("error", out var errorElement))
+            {
+                return errorElement.GetString() ?? content;
+            }
+
+            if (json.RootElement.TryGetProperty("message", out var messageElement))
+            {
+                return messageElement.GetString() ?? content;
+            }
+        }
+        catch
+        {
+        }
+
+        return content;
     }
 
     private string GetPermissionText(string permission)

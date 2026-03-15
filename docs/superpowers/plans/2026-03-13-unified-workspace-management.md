@@ -4,11 +4,16 @@
 
 **Goal:** 实现完整的统一工作区管理架构，支持目录授权、多会话共享、权限控制，完全替换旧的WorkspaceService，不影响现有功能正常运行。
 
+**重要约束：**
+- 会话创建后**不允许切换**工作目录（工作区与会话绑定）
+- 授权管理入口在**会话列表**中，通过会话项的操作按钮访问
+
 **Architecture:** 采用三层核心架构设计：
 1. 目录注册表层：统一管理所有工作区目录的元数据、所有者信息
 2. 授权服务层：管理目录的用户授权、权限校验、授权生命周期
-3. 会话目录关联层：管理会话与工作区目录的绑定关系、切换逻辑
-完全丢弃旧的WorkspaceService实现，所有现有功能迁移到新架构。
+3. 会话目录关联层：管理会话与工作区目录的绑定关系（创建时绑定，不允许切换）
+
+**完全丢弃旧的WorkspaceService实现，所有现有功能迁移到新架构。**
 
 **Tech Stack:** .NET 10.0 + Blazor Server + SqlSugar ORM + MySQL + Playwright
 
@@ -34,8 +39,7 @@
 | `WebCodeCli.Domain/Domain/Service/WorkspaceAuthorizationService.cs` | 授权服务实现 |
 | `WebCodeCli.Domain/Domain/Service/ISessionDirectoryService.cs` | 会话目录服务接口 |
 | `WebCodeCli.Domain/Domain/Service/SessionDirectoryService.cs` | 会话目录服务实现 |
-| `WebCodeCli/Components/WorkspaceSwitcher.razor` | 工作区切换组件 |
-| `WebCodeCli/Components/WorkspaceAuthorizationModal.razor` | 目录授权模态框 |
+| `WebCodeCli/Components/Dialogs/WorkspaceAuthorizationModal.razor` | 目录授权模态框 |
 | `tests/web-workspace-management.spec.ts` | Playwright端到端测试用例 |
 
 ### 修改文件
@@ -48,10 +52,9 @@
 | `WebCodeCli.Domain/Domain/Service/WorkspaceCleanupBackgroundService.cs` | 迁移到新工作区架构 |
 | `WebCodeCli/Controllers/WorkspaceController.cs` | 扩展API支持新架构 |
 | `WebCodeCli/Controllers/SessionController.cs` | 扩展API支持新架构 |
-| `WebCodeCli/Components/SessionListPanel.razor` | 显示工作区信息 |
+| `WebCodeCli/Components/SessionListPanel.razor` | 显示工作区信息，添加授权管理入口 |
 | `WebCodeCli/Components/Dialogs/CreateSessionModal.razor` | 支持目录选择 |
-| `WebCodeCli/Pages/CodeAssistant.razor` | 集成新组件 |
-| `WebCodeCli/Pages/CodeAssistant.razor.cs` | 集成新组件逻辑 |
+| `WebCodeCli/Components/Dialogs/CreateSessionModal.razor.cs` | 添加目录选择逻辑 |
 
 ### 删除文件
 | 文件路径 | 原因 |
@@ -847,6 +850,8 @@ Expected: 编译成功，无错误
 
 - [ ] **Step 1: 创建ISessionDirectoryService接口**
 
+**注意：** 移除切换目录方法，会话创建后不允许切换
+
 ```csharp
 using WebCodeCli.Domain.Repositories.Base.Workspace;
 using System.Threading.Tasks;
@@ -864,11 +869,6 @@ namespace WebCodeCli.Domain.Domain.Service
         /// 获取会话关联的目录
         /// </summary>
         Task<WorkspaceDirectoryEntity?> GetSessionDirectoryAsync(string sessionId);
-
-        /// <summary>
-        /// 切换会话关联的目录
-        /// </summary>
-        Task SwitchSessionDirectoryAsync(string sessionId, long newDirectoryId, string currentUsername);
 
         /// <summary>
         /// 解除会话与目录的关联
@@ -900,18 +900,15 @@ namespace WebCodeCli.Domain.Domain.Service
         private readonly ILogger<SessionDirectoryService> _logger;
         private readonly ISessionDirectoryMappingRepository _mappingRepository;
         private readonly IWorkspaceRegistryService _workspaceRegistryService;
-        private readonly IWorkspaceAuthorizationService _authorizationService;
 
         public SessionDirectoryService(
             ILogger<SessionDirectoryService> logger,
             ISessionDirectoryMappingRepository mappingRepository,
-            IWorkspaceRegistryService workspaceRegistryService,
-            IWorkspaceAuthorizationService authorizationService)
+            IWorkspaceRegistryService workspaceRegistryService)
         {
             _logger = logger;
             _mappingRepository = mappingRepository;
             _workspaceRegistryService = workspaceRegistryService;
-            _authorizationService = authorizationService;
         }
 
         public async Task AssociateSessionWithDirectoryAsync(string sessionId, long directoryId)
@@ -955,19 +952,6 @@ namespace WebCodeCli.Domain.Domain.Service
                 return null;
 
             return await _workspaceRegistryService.GetDirectoryByIdAsync(mapping.DirectoryId);
-        }
-
-        public async Task SwitchSessionDirectoryAsync(string sessionId, long newDirectoryId, string currentUsername)
-        {
-            // 检查用户对新目录的权限
-            var hasPermission = await _authorizationService.CheckPermissionAsync(newDirectoryId, currentUsername, "ReadWrite");
-            if (!hasPermission)
-            {
-                throw new UnauthorizedAccessException("您没有权限访问该目录");
-            }
-
-            await AssociateSessionWithDirectoryAsync(sessionId, newDirectoryId);
-            _logger.LogInformation("会话 {SessionId} 切换到目录：{DirectoryId}", sessionId, newDirectoryId);
         }
 
         public async Task DisassociateSessionAsync(string sessionId)
@@ -1319,6 +1303,8 @@ Expected: 编译成功，无错误
 
 ### Task 10: 扩展SessionController
 
+**注意：** 移除切换目录API，会话创建后不允许切换
+
 **Files:**
 - Modify: `WebCodeCli/Controllers/SessionController.cs`
 
@@ -1335,37 +1321,11 @@ public async Task<IActionResult> CreateSession([FromBody] CreateSessionRequest r
     return Ok(session);
 }
 
-/// <summary>
-/// 切换会话工作目录
-/// </summary>
-[HttpPost("{sessionId}/switch-directory")]
-public async Task<IActionResult> SwitchDirectory(string sessionId, [FromBody] SwitchDirectoryRequest request)
-{
-    try
-    {
-        await _sessionDirectoryService.SwitchSessionDirectoryAsync(
-            sessionId,
-            request.DirectoryId,
-            _userContextService.CurrentUsername);
-
-        return Ok();
-    }
-    catch (Exception ex)
-    {
-        return BadRequest(ex.Message);
-    }
-}
-
 // 请求模型
 public class CreateSessionRequest
 {
     public string SessionName { get; set; } = string.Empty;
     public string? CustomDirectoryPath { get; set; }
-}
-
-public class SwitchDirectoryRequest
-{
-    public long DirectoryId { get; set; }
 }
 ```
 
@@ -1377,272 +1337,355 @@ Expected: 编译成功，无错误
 
 ## Chunk 5: 前端实现
 
-### Task 11: 实现工作区切换组件
+### Task 11: 实现目录授权模态框（仅授权管理）
+
+**注意：** 会话创建后不允许切换工作目录，授权管理入口放在会话列表中
 
 **Files:**
-- Create: `WebCodeCli/Components/WorkspaceSwitcher.razor`
+- Create: `WebCodeCli/Components/Dialogs/WorkspaceAuthorizationModal.razor`
 
-- [ ] **Step 1: 创建WorkspaceSwitcher组件**
+- [ ] **Step 1: 创建WorkspaceAuthorizationModal组件**
 
 ```razor
-@inject IWorkspaceRegistryService WorkspaceRegistryService
-@inject IWorkspaceAuthorizationService WorkspaceAuthorizationService
-@inject ISessionDirectoryService SessionDirectoryService
+@using WebCodeCli.Domain.Domain.Model
+@using WebCodeCli.Models
+@inject HttpClient Http
 @inject IUserContextService UserContextService
-@inject NavigationManager NavigationManager
-@inject ToastService ToastService
+@inject IJSRuntime JSRuntime
 
-<div class="workspace-switcher">
-    <button class="workspace-toggle" @onclick="ToggleDropdown">
-        <span class="icon">📁</span>
-        <span class="directory-name">@CurrentDirectory?.DirectoryName ?? "默认工作区"</span>
-        <span class="arrow">▼</span>
-    </button>
-
-    @if (ShowDropdown)
-    {
-        <div class="workspace-dropdown">
-            <div class="dropdown-header">
-                <input type="text" class="search-input" placeholder="搜索目录..." @bind-value="SearchTerm" />
+@if (Show)
+{
+    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <!-- 头部 -->
+            <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+                <h3 class="text-xl font-bold text-gray-800">目录授权管理</h3>
+                <button @onclick="Close" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
             </div>
 
-            <div class="dropdown-section">
-                <div class="section-title">我的目录</div>
-                @foreach (var dir in OwnedDirectories.Where(d => d.DirectoryName.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)))
-                {
-                    <div class="directory-item @(CurrentDirectory?.DirectoryId == dir.DirectoryId ? "active" : "")"
-                         @onclick="() => SelectDirectory(dir)">
-                        <span class="icon">👑</span>
-                        <span class="name">@dir.DirectoryName</span>
-                        <span class="path">@dir.DirectoryPath</span>
-                        @if (CurrentDirectory?.DirectoryId == dir.DirectoryId)
+            <!-- 内容区域 -->
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                <!-- 当前目录信息 -->
+                <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <h4 class="font-semibold text-blue-800 mb-2">当前目录</h4>
+                    <p class="text-sm text-blue-700">@WorkspacePath</p>
+                </div>
+
+                <!-- 新增授权表单 -->
+                <div class="p-4 border border-gray-200 rounded-lg">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        新增用户授权
+                    </h4>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">用户名</label>
+                            <input type="text"
+                                   @bind="NewAuthorization.Username"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                   placeholder="输入要授权的用户名" />
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">权限级别</label>
+                            <select @bind="NewAuthorization.Permission"
+                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="read">只读（仅查看文件）</option>
+                                <option value="write">读写（可编辑文件）</option>
+                                <option value="admin">管理员（可授权其他用户）</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">过期时间（可选）</label>
+                            <input type="datetime-local"
+                                   @bind="NewAuthorization.ExpireTime"
+                                   @bind:format="yyyy-MM-ddTHH:mm"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                            <p class="text-xs text-gray-500 mt-1">留空则永久有效</p>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(FormError))
                         {
-                            <span class="current-mark">✓</span>
+                            <p class="text-red-500 text-sm">@FormError</p>
                         }
-                    </div>
-                }
-            </div>
 
-            @if (AuthorizedDirectories.Any())
-            {
-                <div class="dropdown-section">
-                    <div class="section-title">被授权的目录</div>
-                    @foreach (var dir in AuthorizedDirectories.Where(d => d.DirectoryName.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase)))
+                        <div class="flex justify-end">
+                            <button @onclick="AddAuthorization"
+                                    disabled="@IsSubmitting"
+                                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2">
+                                @if (IsSubmitting)
+                                {
+                                    <div class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                                    <span>授权中...</span>
+                                }
+                                else
+                                {
+                                    <span>添加授权</span>
+                                }
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 已授权用户列表 -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                        <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                        已授权用户
+                    </h4>
+
+                    @if (IsLoading)
                     {
-                        <div class="directory-item @(CurrentDirectory?.DirectoryId == dir.DirectoryId ? "active" : "")"
-                             @onclick="() => SelectDirectory(dir)">
-                            <span class="icon">🔑</span>
-                            <span class="name">@dir.DirectoryName</span>
-                            <span class="path">@dir.DirectoryPath</span>
-                            @if (CurrentDirectory?.DirectoryId == dir.DirectoryId)
+                        <div class="text-center py-8">
+                            <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-300 border-t-blue-600 mb-4"></div>
+                            <p class="text-gray-500">加载授权列表中...</p>
+                        </div>
+                    }
+                    else if (AuthorizedUsers.Any())
+                    {
+                        <div class="space-y-2">
+                            @foreach (var user in AuthorizedUsers)
                             {
-                                <span class="current-mark">✓</span>
+                                <div class="p-4 border border-gray-200 rounded-lg flex items-center justify-between">
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                                            <span class="text-blue-600 font-medium">@user.Username[0].ToString().ToUpper()</span>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium text-gray-800">@user.Username</div>
+                                            <div class="text-xs text-gray-500 mt-0.5">
+                                                权限：<span class="px-2 py-0.5 rounded-full @GetPermissionBadgeClass(user.Permission)">@GetPermissionText(user.Permission)</span>
+                                                @if (!string.IsNullOrEmpty(user.ExpireTimeDisplay))
+                                                {
+                                                    <span class="ml-2">· 过期时间：@user.ExpireTimeDisplay</span>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <button @onclick="() => RevokeAuthorization(user.Username)"
+                                            class="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                            title="取消授权">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                        </svg>
+                                    </button>
+                                </div>
                             }
                         </div>
                     }
+                    else
+                    {
+                        <div class="text-center py-8 border border-gray-200 rounded-lg bg-gray-50">
+                            <svg class="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                            </svg>
+                            <p class="text-gray-500">暂无授权用户</p>
+                        </div>
+                    }
                 </div>
-            }
+            </div>
 
-            <div class="dropdown-footer">
-                <button class="manage-authorization-btn" @onclick="OpenAuthorizationModal">
-                    <span class="icon">👥</span>
-                    管理目录授权
+            <!-- 底部按钮 -->
+            <div class="p-6 border-t border-gray-200 flex justify-end">
+                <button @onclick="Close" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
+                    关闭
                 </button>
             </div>
         </div>
-    }
-</div>
-
-@if (ShowAuthorizationModal)
-{
-    <WorkspaceAuthorizationModal DirectoryId="@CurrentDirectory?.DirectoryId ?? 0"
-                                 OnClose="() => ShowAuthorizationModal = false" />
+    </div>
 }
 
 @code {
-    [Parameter]
-    public string SessionId { get; set; } = string.Empty;
+    [Parameter] public bool Show { get; set; }
+    [Parameter] public string WorkspacePath { get; set; } = string.Empty;
+    [Parameter] public EventCallback OnClose { get; set; }
 
-    private bool ShowDropdown { get; set; }
-    private bool ShowAuthorizationModal { get; set; }
-    private string SearchTerm { get; set; } = string.Empty;
-    private WorkspaceDirectoryEntity? CurrentDirectory { get; set; }
-    private List<WorkspaceDirectoryEntity> OwnedDirectories { get; set; } = new();
-    private List<WorkspaceDirectoryEntity> AuthorizedDirectories { get; set; } = new();
+    private bool IsLoading { get; set; } = false;
+    private bool IsSubmitting { get; set; } = false;
+    private string FormError { get; set; } = string.Empty;
+    private List<AuthorizedUserDto> AuthorizedUsers { get; set; } = new();
+    private NewAuthorizationDto NewAuthorization { get; set; } = new();
 
-    protected override async Task OnInitializedAsync()
+    public class AuthorizedUserDto
     {
-        await LoadData();
+        public string Username { get; set; } = string.Empty;
+        public string Permission { get; set; } = string.Empty;
+        public DateTime? ExpireTime { get; set; }
+        public string ExpireTimeDisplay => ExpireTime?.ToString("yyyy-MM-dd HH:mm") ?? string.Empty;
     }
 
-    private async Task LoadData()
+    public class NewAuthorizationDto
     {
-        CurrentDirectory = await SessionDirectoryService.GetSessionDirectoryAsync(SessionId);
-        OwnedDirectories = await WorkspaceRegistryService.GetUserOwnedDirectoriesAsync(UserContextService.CurrentUsername);
-        AuthorizedDirectories = await WorkspaceAuthorizationService.GetUserAuthorizedDirectoriesAsync(UserContextService.CurrentUsername);
+        public string Username { get; set; } = string.Empty;
+        public string Permission { get; set; } = "read";
+        public DateTime? ExpireTime { get; set; }
     }
 
-    private void ToggleDropdown()
+    public class AuthorizationRequest
     {
-        ShowDropdown = !ShowDropdown;
-        if (ShowDropdown)
+        public string WorkspacePath { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string Permission { get; set; } = string.Empty;
+        public DateTime? ExpireTime { get; set; }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Show && !string.IsNullOrEmpty(WorkspacePath))
         {
-            SearchTerm = string.Empty;
+            await LoadAuthorizedUsersAsync();
         }
     }
 
-    private async Task SelectDirectory(WorkspaceDirectoryEntity directory)
+    /// <summary>
+    /// 显示对话框
+    /// </summary>
+    public async Task ShowAsync(string workspacePath)
     {
-        if (CurrentDirectory?.DirectoryId == directory.DirectoryId)
+        Show = true;
+        WorkspacePath = workspacePath;
+        NewAuthorization = new NewAuthorizationDto();
+        FormError = string.Empty;
+        await LoadAuthorizedUsersAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadAuthorizedUsersAsync()
+    {
+        IsLoading = true;
+        try
         {
-            ShowDropdown = false;
+            var response = await Http.GetFromJsonAsync<ApiResponse<List<AuthorizedUserDto>>>($"/api/workspace/authorized-users?path={Uri.EscapeDataString(WorkspacePath)}");
+            AuthorizedUsers = response?.Data ?? new();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载授权列表失败: {ex.Message}");
+            AuthorizedUsers = new();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private async void AddAuthorization()
+    {
+        if (string.IsNullOrWhiteSpace(NewAuthorization.Username))
+        {
+            FormError = "请输入用户名";
+            return;
+        }
+
+        IsSubmitting = true;
+        FormError = string.Empty;
+
+        try
+        {
+            var request = new AuthorizationRequest
+            {
+                WorkspacePath = WorkspacePath,
+                Username = NewAuthorization.Username,
+                Permission = NewAuthorization.Permission
+            };
+
+            if (NewAuthorization.ExpireTime.HasValue)
+            {
+                request.ExpireTime = NewAuthorization.ExpireTime.Value;
+            }
+
+            var response = await Http.PostAsJsonAsync("/api/workspace/authorize", request);
+            if (response.IsSuccessStatusCode)
+            {
+                // 重置表单
+                NewAuthorization = new NewAuthorizationDto();
+                // 重新加载授权列表
+                await LoadAuthorizedUsersAsync();
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                FormError = $"授权失败: {errorContent}";
+            }
+        }
+        catch (Exception ex)
+        {
+            FormError = $"授权失败: {ex.Message}";
+        }
+        finally
+        {
+            IsSubmitting = false;
+        }
+    }
+
+    private async void RevokeAuthorization(string username)
+    {
+        if (!await JSRuntime.InvokeAsync<bool>("confirm", $"确定要取消用户 {username} 的授权吗？"))
+        {
             return;
         }
 
         try
         {
-            await SessionDirectoryService.SwitchSessionDirectoryAsync(SessionId, directory.DirectoryId, UserContextService.CurrentUsername);
-            CurrentDirectory = directory;
-            ToastService.Success("工作区切换成功");
-            NavigationManager.Refresh();
+            var response = await Http.DeleteAsync($"/api/workspace/revoke-authorization?path={Uri.EscapeDataString(WorkspacePath)}&username={Uri.EscapeDataString(username)}");
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadAuthorizedUsersAsync();
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                FormError = $"取消授权失败: {errorContent}";
+            }
         }
         catch (Exception ex)
         {
-            ToastService.Error(ex.Message);
-        }
-        finally
-        {
-            ShowDropdown = false;
+            FormError = $"取消授权失败: {ex.Message}";
         }
     }
 
-    private void OpenAuthorizationModal()
+    private void Close()
     {
-        ShowDropdown = false;
-        ShowAuthorizationModal = true;
+        Show = false;
+        WorkspacePath = string.Empty;
+        NewAuthorization = new NewAuthorizationDto();
+        FormError = string.Empty;
+        AuthorizedUsers.Clear();
+        OnClose.InvokeAsync();
+    }
+
+    private string GetPermissionText(string permission)
+    {
+        return permission switch
+        {
+            "read" => "只读",
+            "write" => "读写",
+            "admin" => "管理员",
+            _ => "未知"
+        };
+    }
+
+    private string GetPermissionBadgeClass(string permission)
+    {
+        return permission switch
+        {
+            "read" => "bg-gray-100 text-gray-700",
+            "write" => "bg-blue-100 text-blue-700",
+            "admin" => "bg-purple-100 text-purple-700",
+            _ => "bg-gray-100 text-gray-700"
+        };
     }
 }
-
-<style>
-    .workspace-switcher {
-        position: relative;
-        display: inline-block;
-    }
-
-    .workspace-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        border-radius: 6px;
-        color: white;
-        cursor: pointer;
-        font-size: 14px;
-    }
-
-    .workspace-toggle:hover {
-        background: rgba(255, 255, 255, 0.15);
-    }
-
-    .workspace-dropdown {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        margin-top: 4px;
-        background: #1e1e1e;
-        border: 1px solid #3e3e3e;
-        border-radius: 8px;
-        min-width: 400px;
-        max-height: 500px;
-        overflow-y: auto;
-        z-index: 1000;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    }
-
-    .dropdown-header {
-        padding: 12px;
-        border-bottom: 1px solid #3e3e3e;
-    }
-
-    .search-input {
-        width: 100%;
-        padding: 8px 12px;
-        background: #2d2d2d;
-        border: 1px solid #3e3e3e;
-        border-radius: 4px;
-        color: white;
-    }
-
-    .dropdown-section {
-        padding: 8px 0;
-    }
-
-    .section-title {
-        padding: 4px 12px;
-        font-size: 12px;
-        color: #888;
-        text-transform: uppercase;
-        font-weight: 600;
-    }
-
-    .directory-item {
-        display: grid;
-        grid-template-columns: 20px 1fr auto;
-        gap: 8px;
-        padding: 8px 12px;
-        cursor: pointer;
-        align-items: center;
-    }
-
-    .directory-item:hover {
-        background: #2d2d2d;
-    }
-
-    .directory-item.active {
-        background: #0d47a1;
-    }
-
-    .directory-item .name {
-        font-weight: 500;
-        color: white;
-    }
-
-    .directory-item .path {
-        font-size: 12px;
-        color: #888;
-        grid-column: 2;
-    }
-
-    .current-mark {
-        color: #4caf50;
-        font-weight: bold;
-    }
-
-    .dropdown-footer {
-        padding: 12px;
-        border-top: 1px solid #3e3e3e;
-    }
-
-    .manage-authorization-btn {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        background: #2d2d2d;
-        border: 1px solid #3e3e3e;
-        border-radius: 4px;
-        color: white;
-        cursor: pointer;
-        justify-content: center;
-    }
-
-    .manage-authorization-btn:hover {
-        background: #3d3d3d;
-    }
-</style>
 ```
 
 ---
@@ -1979,36 +2022,16 @@ Expected: 编译成功，无错误
 
 ---
 
-### Task 13: 更新现有组件
+### Task 13: 更新CreateSessionModal支持目录选择
+
+**注意：** 会话创建时选择工作目录，创建后不允许切换
 
 **Files:**
-- Modify: `WebCodeCli/Components/SessionListPanel.razor`
 - Modify: `WebCodeCli/Components/Dialogs/CreateSessionModal.razor`
-- Modify: `WebCodeCli/Pages/CodeAssistant.razor`
 
-- [ ] **Step 1: 更新SessionListPanel显示工作区信息**
-在会话项中添加工作区路径显示：
-```razor
-<div class="session-item">
-    <div class="session-header">
-        <div class="session-name">@session.SessionName</div>
-        <div class="session-actions">
-            <!-- 原有操作按钮 -->
-        </div>
-    </div>
-    @if (!string.IsNullOrEmpty(session.WorkspacePath))
-    {
-        <div class="session-workspace">
-            <span class="icon">📁</span>
-            <span class="path">@session.WorkspacePath</span>
-        </div>
-    }
-    <div class="session-time">@session.UpdatedAt.ToString("yyyy-MM-dd HH:mm")</div>
-</div>
-```
-
-- [ ] **Step 2: 更新CreateSessionModal支持目录选择**
+- [ ] **Step 1: 更新CreateSessionModal支持目录选择**
 添加自定义目录输入框和已有目录选择Tab：
+
 ```razor
 <div class="modal-body">
     <div class="form-group">
@@ -2048,16 +2071,33 @@ Expected: 编译成功，无错误
 </div>
 ```
 
-- [ ] **Step 3: 在CodeAssistant页面集成WorkspaceSwitcher**
-在顶部工具栏添加工作区切换器：
-```razor
-<div class="top-toolbar">
-    <SessionHistoryButton />
-    <WorkspaceSwitcher SessionId="@CurrentSessionId" />
-    <div class="session-title">@CurrentSession?.SessionName</div>
-    <NewSessionButton />
-</div>
+- [ ] **Step 2: 添加目录选择相关的State和回调**
+
+在 `@code` 部分添加：
+
+```csharp
+private string SelectedTab { get; set; } = "default";
+private string CustomDirectoryPath { get; set; } = string.Empty;
+private long SelectedDirectoryId { get; set; }
+private List<AccessibleDirectoryDto> AvailableDirectories { get; set; } = new();
+
+[Parameter] public EventCallback<CreateSessionRequest> OnCreateSession { get; set; }
+
+// 在 OnInitializedAsync 中加载可用目录
+protected override async Task OnInitializedAsync()
+{
+    await LoadAvailableDirectoriesAsync();
+}
+
+private async Task LoadAvailableDirectoriesAsync()
+{
+    // 调用API获取用户可用目录
+    var response = await Http.GetFromJsonAsync<ApiResponse<List<AccessibleDirectoryDto>>("/api/workspace/my-accessible-directories");
+    AvailableDirectories = response?.Data ?? new();
+}
 ```
+
+---
 
 ---
 
@@ -2068,7 +2108,7 @@ Expected: 编译成功，无错误
 **Files:**
 - Modify: `tests/web-workspace-management.spec.ts`
 
-- [ ] **Step 1: 扩展测试用例，添加Git导入测试**
+- [ ] **Step 1: 扩展测试用例，添加Git导入和授权管理测试**
 ```typescript
 test('测试Git项目导入功能', async ({ page }) => {
   const TEST_GIT_URL = 'https://gh.llkk.cc/https://github.com/lusile2024/skills-hub.git';
@@ -2094,7 +2134,7 @@ test('测试Git项目导入功能', async ({ page }) => {
   // 验证项目出现在可用目录列表中
   await page.click('[data-menu-item="sessions"]');
   await page.click('button:has-text("新建会话")');
-  await page.click('role="tab":has-text("选择已有目录")');
+  await page.click('button:has-text("选择已有目录")');
 
   const projectName = 'skills-hub';
   await expect(page.locator(`text="${projectName}"`)).toBeVisible();
@@ -2103,9 +2143,34 @@ test('测试Git项目导入功能', async ({ page }) => {
   await page.click(`text="${projectName}"`);
   await page.click('button:has-text("创建会话")');
   await page.waitForLoadState('networkidle');
+});
 
-  // 验证工作区切换器显示正确的目录
-  await expect(page.locator('text="skills-hub"').first()).toBeVisible();
+test('测试目录授权管理功能', async ({ page }) => {
+  // 打开会话列表
+  await page.click('[data-menu-item="sessions"]');
+  await page.waitForLoadState('networkidle');
+
+  // 找到一个有工作区的会话
+  const sessionWithWorkspace = page.locator('.session-item').filter({ hasText: 'D:' }).first();
+  await expect(sessionWithWorkspace).toBeVisible();
+
+  // 点击授权管理按钮
+  await sessionWithWorkspace.getByRole('button', { name: '管理目录授权' }).click();
+  await expect(page.locator('text="目录授权管理"')).toBeVisible();
+
+  // 添加授权用户
+  await page.fill('input[placeholder="输入要授权的用户名"]', 'testuser');
+  await page.selectOption('select', 'write');
+  await page.click('button:has-text("添加授权")');
+
+  // 等待授权成功提示
+  await expect(page.locator('text=testuser')).toBeVisible();
+
+  // 撤销授权
+  await page.click('button:has-text("取消授权")');
+
+  // 等待撤销完成
+  await expect(page.locator('text=testuser')).not.toBeVisible();
 });
 ```
 

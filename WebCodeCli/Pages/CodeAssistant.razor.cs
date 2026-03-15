@@ -229,7 +229,17 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private string _newSessionTitle = string.Empty;
     private bool _isRenamingSession = false;
     private string _renameError = string.Empty;
-    
+
+    // 授权对话框（会话）
+    private bool _showAuthorizeDialog = false;
+    private SessionHistory? _sessionToAuthorize = null;
+    private List<WorkspaceAuthorizationDto> _authorizedUsers = new();
+    private bool _isLoadingAuthorization = false;
+    private string _authorizationError = string.Empty;
+    private string _newAuthUsername = string.Empty;
+    private string _newAuthPermission = "read";
+    private DateTime? _newAuthExpireTime = null;
+
     // 会话历史管理
     private List<SessionHistory> _sessions = new();
     private SessionHistory? _currentSession = null;
@@ -4812,7 +4822,217 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         _isRenamingSession = false;
         StateHasChanged();
     }
-    
+
+    /// <summary>
+    /// 显示授权对话框
+    /// </summary>
+    private async void ShowAuthorizeDialog(SessionHistory session)
+    {
+        _sessionToAuthorize = session;
+        _showAuthorizeDialog = true;
+        _authorizationError = string.Empty;
+        _newAuthUsername = string.Empty;
+        _newAuthPermission = "read";
+        _newAuthExpireTime = DateTime.Now.AddDays(7);
+
+        // 加载已授权用户列表
+        await LoadAuthorizedUsers();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 关闭授权对话框
+    /// </summary>
+    private void CloseAuthorizeDialog()
+    {
+        _showAuthorizeDialog = false;
+        _sessionToAuthorize = null;
+        _authorizedUsers.Clear();
+        _newAuthUsername = string.Empty;
+        _authorizationError = string.Empty;
+        _isLoadingAuthorization = false;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 加载已授权用户列表
+    /// </summary>
+    private async Task LoadAuthorizedUsers()
+    {
+        if (_sessionToAuthorize == null || string.IsNullOrEmpty(_sessionToAuthorize.WorkspacePath))
+            return;
+
+        _isLoadingAuthorization = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.GetAsync($"/api/workspace/directory-authorizations?directoryPath={Uri.EscapeDataString(_sessionToAuthorize.WorkspacePath)}");
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<ApiResponse<List<WorkspaceAuthorizationDto>>>();
+                _authorizedUsers = result?.Data ?? new List<WorkspaceAuthorizationDto>();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载授权用户失败: {ex.Message}");
+        }
+        finally
+        {
+            _isLoadingAuthorization = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 添加新授权
+    /// </summary>
+    private async Task AddAuthorization()
+    {
+        if (_sessionToAuthorize == null || string.IsNullOrEmpty(_newAuthUsername))
+        {
+            _authorizationError = "请输入用户名";
+            StateHasChanged();
+            return;
+        }
+
+        _isLoadingAuthorization = true;
+        _authorizationError = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/workspace/authorize", new AuthorizeDirectoryRequest
+            {
+                DirectoryPath = _sessionToAuthorize.WorkspacePath,
+                AuthorizedUsername = _newAuthUsername,
+                Permission = _newAuthPermission,
+                ExpiresAt = _newAuthExpireTime
+            });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _newAuthUsername = string.Empty;
+                await LoadAuthorizedUsers();
+            }
+            else
+            {
+                _authorizationError = $"授权失败: {await ExtractErrorMessageAsync(response)}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _authorizationError = $"授权失败: {ex.Message}";
+        }
+        finally
+        {
+            _isLoadingAuthorization = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 撤销授权
+    /// </summary>
+    private async Task RevokeAuthorization(string username)
+    {
+        if (_sessionToAuthorize == null)
+            return;
+
+        _isLoadingAuthorization = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/workspace/revoke-authorization", new RevokeAuthorizationRequest
+            {
+                DirectoryPath = _sessionToAuthorize.WorkspacePath,
+                AuthorizedUsername = username
+            });
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadAuthorizedUsers();
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"撤销授权失败: {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"撤销授权失败: {ex.Message}");
+        }
+        finally
+        {
+            _isLoadingAuthorization = false;
+            StateHasChanged();
+        }
+    }
+
+    private static async Task<string> ExtractErrorMessageAsync(HttpResponseMessage response)
+    {
+        var content = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return $"HTTP {(int)response.StatusCode}";
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(content);
+            if (json.RootElement.TryGetProperty("error", out var errorElement))
+            {
+                return errorElement.GetString() ?? content;
+            }
+
+            if (json.RootElement.TryGetProperty("message", out var messageElement))
+            {
+                return messageElement.GetString() ?? content;
+            }
+        }
+        catch
+        {
+        }
+
+        return content;
+    }
+
+    /// <summary>
+    /// 获取权限标签
+    /// </summary>
+    private string GetPermissionLabel(string permission)
+    {
+        return permission switch
+        {
+            "read" => "只读",
+            "write" => "读写",
+            "admin" => "管理员",
+            _ => permission
+        };
+    }
+
+    /// <summary>
+    /// 格式化日期
+    /// </summary>
+    private string FormatDate(DateTime date)
+    {
+        var now = DateTime.Now;
+        var diff = now - date;
+
+        if (diff.TotalSeconds < 60)
+            return "刚刚";
+        if (diff.TotalMinutes < 60)
+            return $"{(int)diff.TotalMinutes} 分钟前";
+        if (diff.TotalHours < 24)
+            return $"{(int)diff.TotalHours} 小时前";
+        if (diff.TotalDays < 30)
+            return $"{(int)diff.TotalDays} 天前";
+
+        return date.ToString("yyyy-MM-dd");
+    }
+
     /// <summary>
     /// 处理重命名输入框的键盘事件
     /// </summary>

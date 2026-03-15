@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace WebCodeCli.Models;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace WebCodeCli.Models;
 public class AccessibleDirectoryDto
 {
     public int Id { get; set; }
+    [JsonPropertyName("DirectoryPath")]
     public string Path { get; set; } = string.Empty;
     public string? Alias { get; set; }
     public bool IsTrusted { get; set; }

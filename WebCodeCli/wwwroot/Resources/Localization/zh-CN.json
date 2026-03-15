@@ -241,6 +241,8 @@
     "folderDeleteWarning": "文件夹及其所有内容将被永久删除",
     "renameSession": "重命名会话",
     "shareSession": "分享会话",
+    "authorizeSession": "授权管理",
+    "authorizeDialogTitle": "授权管理",
     "deleteSession": "删除会话",
     "deleteSessionWarning": "确定要删除此会话吗？此操作无法撤销。",
     "sessionDeleteTitle": "确认删除会话",
