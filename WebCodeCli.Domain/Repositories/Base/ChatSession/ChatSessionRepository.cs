@@ -153,7 +153,7 @@ public class ChatSessionRepository : Repository<ChatSessionEntity>, IChatSession
     /// <summary>
     /// 创建飞书新会话
     /// </summary>
-    public async Task<string> CreateFeishuSessionAsync(string feishuChatKey, string username, string? workspacePath = null)
+    public async Task<string> CreateFeishuSessionAsync(string feishuChatKey, string username, string? workspacePath = null, string? toolId = null)
     {
         try
         {
@@ -174,6 +174,7 @@ public class ChatSessionRepository : Repository<ChatSessionEntity>, IChatSession
                 FeishuChatKey = feishuChatKey,
                 IsFeishuActive = true,
                 WorkspacePath = workspacePath,
+                ToolId = toolId,
                 CreatedAt = DateTime.Now,
                 UpdatedAt = DateTime.Now
             };

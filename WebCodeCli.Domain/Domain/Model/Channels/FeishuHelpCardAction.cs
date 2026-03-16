@@ -50,4 +50,10 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("workspace_path")]
     public string? WorkspacePath { get; set; }
+
+    /// <summary>
+    /// CLI 工具 ID（新建会话选择工具时使用）
+    /// </summary>
+    [JsonPropertyName("tool_id")]
+    public string? ToolId { get; set; }
 }

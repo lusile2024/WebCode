@@ -88,8 +88,9 @@ public interface IFeishuChannelService
     /// </summary>
     /// <param name="message">飞书 incoming 消息</param>
     /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
+    /// <param name="toolId">指定工具 ID（可选）</param>
     /// <returns>新会话ID</returns>
-    string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null);
+    string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null, string? toolId = null);
 
     /// <summary>
     /// 获取聊天绑定会话的用户名
@@ -97,4 +98,13 @@ public interface IFeishuChannelService
     /// <param name="chatKey">聊天键</param>
     /// <returns>用户名，如果不存在则返回null</returns>
     string? GetSessionUsername(string chatKey);
+
+    /// <summary>
+    /// 解析当前飞书聊天应使用的 CLI 工具 ID
+    /// 优先使用活跃会话绑定的工具，其次回退到飞书默认工具和首个可用工具
+    /// </summary>
+    /// <param name="chatKey">聊天键</param>
+    /// <param name="username">用户名（可选）</param>
+    /// <returns>工具 ID</returns>
+    string ResolveToolId(string chatKey, string? username = null);
 }

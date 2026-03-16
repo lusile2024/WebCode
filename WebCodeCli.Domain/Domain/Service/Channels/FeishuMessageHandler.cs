@@ -403,9 +403,12 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
         try
         {
+            var toolId = _feishuChannel.ResolveToolId(chatId);
+            _logger.LogInformation("🔥 [FeishuHelp] 当前聊天解析工具: ToolId={ToolId}", toolId);
+
             // 自动刷新命令列表，确保获取最新的技能和插件
             _logger.LogInformation("🔥 [FeishuHelp] 开始刷新命令列表...");
-            await _commandService.RefreshCommandsAsync();
+            await _commandService.RefreshCommandsAsync(toolId);
             _logger.LogInformation("✅ [FeishuHelp] 命令列表刷新完成");
 
             List<FeishuCommandCategory> categories;
@@ -414,13 +417,13 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             _logger.LogInformation("🔥 [FeishuHelp] 开始获取命令列表...");
             if (string.IsNullOrEmpty(keyword))
             {
-                categories = await _commandService.GetCategorizedCommandsAsync();
+                categories = await _commandService.GetCategorizedCommandsAsync(toolId);
                 _logger.LogInformation("🔥 [FeishuHelp] 获取到 {Count} 个分组", categories.Count);
                 cardJson = _cardBuilder.BuildCommandListCard(categories);
             }
             else
             {
-                categories = await _commandService.FilterCommandsAsync(keyword);
+                categories = await _commandService.FilterCommandsAsync(keyword, toolId);
                 _logger.LogInformation("🔥 [FeishuHelp] 过滤后获取到 {Count} 个分组", categories.Count);
                 cardJson = _cardBuilder.BuildFilteredCard(categories, keyword);
             }
@@ -458,7 +461,8 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         {
             // 直接使用chatId作为key（统一规则，去掉AppId前缀）
             var chatKey = chatId.ToLowerInvariant();
-            var sessions = _feishuChannel.GetChatSessions(chatKey, webUsername);
+            var sessionEntities = await GetChatSessionEntitiesAsync(chatKey, webUsername);
+            var sessions = sessionEntities.Select(s => s.SessionId).ToList();
             var currentSessionId = _feishuChannel.GetCurrentSession(chatKey, webUsername);
 
             var elements = new List<object>();
@@ -470,20 +474,21 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 text = new
                 {
                     tag = "lark_md",
-                    content = $"## 📋 会话管理\n当前聊天共有 **{sessions.Count}** 个会话"
+                    content = $"## 📋 会话管理\n当前聊天共有 **{sessions.Count}** 个会话\n🛠️ 每个会话的 CLI 工具在创建时确定，如需更换请新建会话。"
                 }
             });
 
             elements.Add(new { tag = "hr" });
 
             //添加会话列表
-            foreach (var sessionId in sessions.Take(10)) // 最多显示10个最近的会话
+            foreach (var session in sessionEntities.Take(10)) // 最多显示10个最近的会话
             {
+                var sessionId = session.SessionId;
                 var workspacePath = GetSessionWorkspaceDisplay(sessionId);
-                var lastActiveTime = _feishuChannel.GetSessionLastActiveTime(sessionId);
                 var isCurrent = sessionId == currentSessionId;
+                var toolLabel = GetToolDisplayName(session.ToolId);
 
-                var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n📂 {workspacePath}\n⏱️ {lastActiveTime:yyyy-MM-dd HH:mm}";
+                var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
 
                 // 添加会话信息
                 elements.Add(new
@@ -567,25 +572,6 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 }
             });
 
-            elements.Add(new
-            {
-                tag = "button",
-                text = new { tag = "plain_text", content = "🧹 清理空闲会话" },
-                type = "default",
-                behaviors = new[]
-                {
-                    new
-                    {
-                        type = "callback",
-                        value = new
-                        {
-                            action = "clean_idle_sessions",
-                            chat_key = chatKey
-                        }
-                    }
-                }
-            });
-
             // 构建卡片（与帮助卡片格式完全一致）
             var card = new
             {
@@ -605,5 +591,48 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             _logger.LogError(ex, "处理sessions命令失败");
             await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 会话管理功能暂时不可用，请稍后重试。");
         }
+    }
+
+    private async Task<List<ChatSessionEntity>> GetChatSessionEntitiesAsync(string chatKey, string username)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+
+        var sessions = await repo.GetByUsernameOrderByUpdatedAtAsync(username);
+        return sessions
+            .Where(s => string.Equals(s.FeishuChatKey, chatKey, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(s => s.UpdatedAt)
+            .ToList();
+    }
+
+    private static string GetToolDisplayName(string? toolId)
+    {
+        return NormalizeToolId(toolId) switch
+        {
+            "claude-code" => "Claude Code",
+            "codex" => "Codex",
+            "opencode" => "OpenCode",
+            _ => "未设置"
+        };
+    }
+
+    private static string? NormalizeToolId(string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return null;
+        }
+
+        if (toolId.Equals("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-code";
+        }
+
+        if (toolId.Equals("opencode-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return "opencode";
+        }
+
+        return toolId;
     }
 }

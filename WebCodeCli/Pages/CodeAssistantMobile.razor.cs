@@ -381,6 +381,10 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             {
                 filtered = filtered.Where(s => s.Source.Equals("codex", StringComparison.OrdinalIgnoreCase));
             }
+            else if (selectedTool.Id.Contains("opencode", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered = filtered.Where(s => s.Source.Equals("opencode", StringComparison.OrdinalIgnoreCase));
+            }
         }
         
         // 用户输入的搜索词过滤（仅搜索名称和描述）
@@ -403,6 +407,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         {
             "claude" => "text-orange-500",
             "codex" => "text-blue-500",
+            "opencode" => "text-emerald-500",
             _ => "text-gray-500"
         };
     }
@@ -416,6 +421,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         {
             "claude" => "bg-orange-100 text-orange-700",
             "codex" => "bg-blue-100 text-blue-700",
+            "opencode" => "bg-emerald-100 text-emerald-700",
             _ => "bg-gray-100 text-gray-700"
         };
     }

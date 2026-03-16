@@ -63,6 +63,7 @@ public interface IChatSessionRepository : IRepository<ChatSessionEntity>
     /// <param name="feishuChatKey">飞书聊天键</param>
     /// <param name="username">用户名</param>
     /// <param name="workspacePath">工作区路径</param>
+    /// <param name="toolId">工具 ID</param>
     /// <returns>新会话ID</returns>
-    Task<string> CreateFeishuSessionAsync(string feishuChatKey, string username, string? workspacePath = null);
+    Task<string> CreateFeishuSessionAsync(string feishuChatKey, string username, string? workspacePath = null, string? toolId = null);
 }

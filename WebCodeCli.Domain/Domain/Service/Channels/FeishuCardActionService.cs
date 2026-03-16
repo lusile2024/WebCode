@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using FeishuNetSdk.CallbackEvents;
 using FeishuNetSdk.Im.Dtos;
+using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -26,8 +27,8 @@ public class FeishuCardActionService
     private readonly ILogger<FeishuCardActionService> _logger;
     private readonly IServiceProvider _serviceProvider;
 
-    // 默认使用的 CLI 工具 ID
-    private const string DefaultToolId = "claude-code";
+    // 默认回退工具 ID，最终会按当前会话和可用工具解析
+    private const string FallbackToolId = "claude-code";
 
     // 会话映射（从 FeishuChannelService 复制）
     private readonly Dictionary<string, string> _sessionMappings = new();
@@ -107,9 +108,11 @@ public class FeishuCardActionService
                 case "close_session":
                     return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "show_create_session_form":
-                    return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId);
+                    return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId, action.ToolId);
                 case "create_session":
-                    return await HandleCreateSessionAsync(action.ChatKey, chatId, formValueElement, operatorUserId, action.CreateMode, action.WorkspacePath, inputValues);
+                    return await HandleCreateSessionAsync(action.ChatKey, chatId, formValueElement, operatorUserId, action.CreateMode, action.WorkspacePath, action.ToolId, inputValues);
+                case "switch_tool":
+                    return await HandleSwitchToolAsync(action.ToolId, action.ChatKey, operatorUserId);
                 case "bind_web_user":
                     return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId);
                 case "open_session_manager":
@@ -130,8 +133,9 @@ public class FeishuCardActionService
     /// </summary>
     private async Task<CardActionTriggerResponseDto> HandleRefreshCommandsAsync(string? chatId)
     {
-        await _commandService.RefreshCommandsAsync();
-        var categories = await _commandService.GetCategorizedCommandsAsync();
+        var toolId = ResolveToolIdForChat(chatId);
+        await _commandService.RefreshCommandsAsync(toolId);
+        var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
         var card = _cardBuilder.BuildCommandListCardV2(categories, showRefreshButton: false);
         _logger.LogInformation("✅ [FeishuHelp] 返回命令列表卡片（回调响应）");
         return _cardBuilder.BuildCardActionResponseV2(card, "🔄 命令列表已更新", "info");
@@ -150,7 +154,7 @@ public class FeishuCardActionService
 
         if (string.IsNullOrEmpty(commandId))
         {
-            var categories = await _commandService.GetCategorizedCommandsAsync();
+            var categories = await _commandService.GetCategorizedCommandsAsync(ResolveToolIdForChat(chatId));
             var card = _cardBuilder.BuildCommandListCardV2(categories);
             return _cardBuilder.BuildCardActionResponseV2(card, "📋 显示命令列表", "info");
         }
@@ -161,10 +165,11 @@ public class FeishuCardActionService
             return await HandleOpenSessionManagerAsync(chatId, null);
         }
 
-        var command = await _commandService.GetCommandAsync(commandId);
+        var toolId = ResolveToolIdForChat(chatId);
+        var command = await _commandService.GetCommandAsync(commandId, toolId);
         if (command == null)
         {
-            var categories = await _commandService.GetCategorizedCommandsAsync();
+            var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
             var card = _cardBuilder.BuildCommandListCardV2(categories);
             _logger.LogWarning("❌ [FeishuHelp] 命令不存在");
             return _cardBuilder.BuildCardActionResponseV2(card, "❌ 命令不存在", "warning");
@@ -186,7 +191,7 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少 chatId", "error");
         }
 
-        var categories = await _commandService.GetCategorizedCommandsAsync();
+        var categories = await _commandService.GetCategorizedCommandsAsync(ResolveToolIdForChat(chatId));
         var card = _cardBuilder.BuildCommandListCardV2(categories);
         _logger.LogInformation("📋 [FeishuHelp] 返回命令列表卡片（回调响应）");
         return _cardBuilder.BuildCardActionResponseV2(card, "", "info");
@@ -241,13 +246,15 @@ public class FeishuCardActionService
             try
             {
                 // 获取或创建会话
-                var sessionId = GetOrCreateSession(chatId);
+                var toolId = ResolveToolIdForChat(chatId);
+                var sessionId = GetOrCreateSession(chatId, toolId);
 
                 // 添加用户消息到会话
                 _chatSessionService.AddMessage(sessionId, new Domain.Model.ChatMessage
                 {
                     Role = "user",
                     Content = commandInput,
+                    CliToolId = toolId,
                     CreatedAt = DateTime.Now
                 });
 
@@ -263,7 +270,7 @@ public class FeishuCardActionService
                     handle.CardId);
 
                 // 执行 CLI 工具并流式更新卡片
-                await ExecuteCliAndStreamAsync(handle, sessionId, commandInput);
+                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, commandInput);
             }
             catch (Exception ex)
             {
@@ -277,9 +284,10 @@ public class FeishuCardActionService
     /// <summary>
     /// 获取或创建会话
     /// </summary>
-    private string GetOrCreateSession(string chatId)
+    private string GetOrCreateSession(string chatId, string toolId)
     {
-        var chatKey = $"feishu:help:{chatId}";
+        var normalizedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
+        var chatKey = $"feishu:help:{chatId}:{normalizedToolId}";
 
         if (_sessionMappings.TryGetValue(chatKey, out var existingSessionId))
         {
@@ -291,9 +299,10 @@ public class FeishuCardActionService
         _sessionMappings[chatKey] = newSessionId;
 
         _logger.LogInformation(
-            "Created new session: {SessionId} for chat: {ChatId}",
+            "Created new session: {SessionId} for chat: {ChatId}, ToolId={ToolId}",
             newSessionId,
-            chatId);
+            chatId,
+            normalizedToolId);
 
         return newSessionId;
     }
@@ -304,17 +313,19 @@ public class FeishuCardActionService
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
         string sessionId,
+        string toolId,
         string userPrompt)
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
         var jsonlBuffer = new System.Text.StringBuilder();
-        var tool = _cliExecutor.GetTool(DefaultToolId);
+        var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
+        var tool = _cliExecutor.GetTool(resolvedToolId);
 
         if (tool == null)
         {
-            await handle.FinishAsync($"错误：未找到 CLI 工具 '{DefaultToolId}'，请在配置中添加该工具。");
-            _logger.LogWarning("CLI tool not found: {ToolId}", DefaultToolId);
+            await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
+            _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
             return;
         }
 
@@ -386,7 +397,7 @@ public class FeishuCardActionService
             {
                 Role = "assistant",
                 Content = finalOutput,
-                CliToolId = DefaultToolId,
+                CliToolId = tool.Id,
                 IsCompleted = true,
                 CreatedAt = DateTime.Now
             });
@@ -613,6 +624,10 @@ public class FeishuCardActionService
         {
             var workspacePath = GetSessionWorkspaceDisplay(sessionId);
             var lastActiveTime = _feishuChannel.GetSessionLastActiveTime(sessionId);
+            using var detailScope = _serviceProvider.CreateScope();
+            var detailRepo = detailScope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            var sessionEntity = await detailRepo.GetByIdAsync(sessionId);
+            var toolLabel = GetToolDisplayName(sessionEntity?.ToolId);
 
             // 后台异步发送会话历史卡片
             _ = Task.Run(async () =>
@@ -633,6 +648,7 @@ public class FeishuCardActionService
                     contentBuilder.AppendLine($"## 📜 会话历史 `{sessionId[..8]}`");
                     contentBuilder.AppendLine($"⏱️ 最后活跃: {lastActiveTime:yyyy-MM-dd HH:mm}");
                     contentBuilder.AppendLine($"📂 工作目录: `{workspacePath}`");
+                    contentBuilder.AppendLine($"🛠️ CLI 工具: `{toolLabel}`");
                     contentBuilder.AppendLine();
                     contentBuilder.AppendLine("---");
                     contentBuilder.AppendLine();
@@ -675,11 +691,26 @@ public class FeishuCardActionService
             });
 
             return _cardBuilder.BuildCardActionToastOnlyResponse(
-                $"✅ 已切换到会话 {sessionId[..8]}...\n📂 当前工作目录: {workspacePath}\n📜 历史消息已发送到聊天窗口",
+                $"✅ 已切换到会话 {sessionId[..8]}...\n🛠️ CLI 工具: {toolLabel}\n📂 当前工作目录: {workspacePath}\n📜 历史消息已发送到聊天窗口",
                 "success");
         }
 
         return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在，切换失败", "error");
+    }
+
+    /// <summary>
+    /// 处理旧卡片中的切换工具动作
+    /// </summary>
+    private async Task<CardActionTriggerResponseDto> HandleSwitchToolAsync(string? toolId, string? chatKey, string? operatorUserId)
+    {
+        var normalizedChatKey = string.IsNullOrWhiteSpace(chatKey) ? chatKey : NormalizeChatKey(chatKey);
+        var response = await HandleOpenSessionManagerAsync(normalizedChatKey, operatorUserId);
+        response.Toast = new CardActionTriggerResponseDto.ToastSuffix
+        {
+            Content = "⚠️ 现有会话不支持切换 CLI 工具，请新建会话时选择工具",
+            Type = CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning
+        };
+        return response;
     }
 
     /// <summary>
@@ -759,7 +790,7 @@ public class FeishuCardActionService
     /// <summary>
     /// 显示新建会话表单
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleShowCreateSessionFormAsync(string? chatKey, string? chatId, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleShowCreateSessionFormAsync(string? chatKey, string? chatId, string? operatorUserId, string? selectedToolId)
     {
         if (string.IsNullOrEmpty(chatKey) || string.IsNullOrEmpty(chatId))
         {
@@ -776,15 +807,22 @@ public class FeishuCardActionService
         using var scope = _serviceProvider.CreateScope();
         var sessionDirectoryService = scope.ServiceProvider.GetRequiredService<ISessionDirectoryService>();
         var directories = await sessionDirectoryService.GetUserAccessibleDirectoriesAsync(username);
+        var availableTools = _cliExecutor.GetAvailableTools();
+        var effectiveToolId = NormalizeToolId(selectedToolId);
+        if (string.IsNullOrWhiteSpace(effectiveToolId) || _cliExecutor.GetTool(effectiveToolId) == null)
+        {
+            effectiveToolId = ResolveToolIdForChat(actualChatKey, username);
+        }
+
         _logger.LogInformation("[Feishu] 新建会话卡片加载可访问目录: User={User}, Count={Count}", username, directories.Count);
-        var card = BuildCreateSessionFormCard(actualChatKey, directories);
-        return _cardBuilder.BuildCardActionResponseV2(card, "请选择创建方式");
+        var card = BuildCreateSessionFormCard(actualChatKey, directories, availableTools, effectiveToolId);
+        return _cardBuilder.BuildCardActionResponseV2(card, $"请选择工作区和 CLI 工具（当前选择：{GetToolDisplayName(effectiveToolId)}）");
     }
 
     /// <summary>
     /// 处理新建会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleCreateSessionAsync(string? chatKey, string? chatId, JsonElement? formValue, string? operatorUserId, string? createModeFromAction, string? workspacePathFromAction, string? inputValues)
+    private async Task<CardActionTriggerResponseDto> HandleCreateSessionAsync(string? chatKey, string? chatId, JsonElement? formValue, string? operatorUserId, string? createModeFromAction, string? workspacePathFromAction, string? toolIdFromAction, string? inputValues)
     {
         if (string.IsNullOrEmpty(chatKey) || string.IsNullOrEmpty(chatId))
         {
@@ -804,9 +842,19 @@ public class FeishuCardActionService
             : createModeFromAction;
         var customWorkspacePath = GetFormStringValue(formValue, "custom_workspace_path");
         var existingWorkspacePath = GetFormStringValue(formValue, "existing_workspace_path");
+        var selectedToolId = NormalizeToolId(toolIdFromAction)
+            ?? NormalizeToolId(GetFormStringValue(formValue, "tool_id") ?? string.Empty)
+            ?? NormalizeToolId(ResolveDefaultToolId())
+            ?? FallbackToolId;
 
-        _logger.LogInformation("[Feishu] 创建会话提交: Mode={Mode}, WorkspacePathFromAction={WorkspacePathFromAction}, InputValues={InputValues}, FormValue={FormValue}",
+        if (_cliExecutor.GetTool(selectedToolId) == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 工具不存在或未启用：{selectedToolId}", "error");
+        }
+
+        _logger.LogInformation("[Feishu] 创建会话提交: Mode={Mode}, ToolId={ToolId}, WorkspacePathFromAction={WorkspacePathFromAction}, InputValues={InputValues}, FormValue={FormValue}",
             createMode,
+            selectedToolId,
             workspacePathFromAction,
             inputValues,
             formValue?.ToString());
@@ -842,12 +890,13 @@ public class FeishuCardActionService
 
         try
         {
-            var newSessionId = _feishuChannel.CreateNewSession(mockMessage, selectedWorkspacePath);
+            var newSessionId = _feishuChannel.CreateNewSession(mockMessage, selectedWorkspacePath, selectedToolId);
             var workspacePath = _cliExecutor.GetSessionWorkspacePath(newSessionId);
             _feishuChannel.SwitchCurrentSession(actualChatKey, newSessionId, username);
+            var toolLabel = GetToolDisplayName(selectedToolId);
 
             return _cardBuilder.BuildCardActionToastOnlyResponse(
-                $"✅ 已创建新会话 {newSessionId[..8]}...\n📂 工作目录: {workspacePath}\n已自动切换到新会话",
+                $"✅ 已创建新会话 {newSessionId[..8]}...\n🛠️ CLI 工具: {toolLabel}\n📂 工作目录: {workspacePath}\n已自动切换到新会话",
                 "success");
         }
         catch (Exception ex)
@@ -861,6 +910,51 @@ public class FeishuCardActionService
     {
         var chatKeyParts = chatKey.Split(':');
         return chatKeyParts.Length >= 3 ? chatKeyParts[2].ToLowerInvariant() : chatKey.ToLowerInvariant();
+    }
+
+    private string ResolveToolIdForChat(string? chatId, string? username = null)
+    {
+        var normalizedChatKey = string.IsNullOrWhiteSpace(chatId) ? string.Empty : NormalizeChatKey(chatId);
+        if (!string.IsNullOrWhiteSpace(normalizedChatKey))
+        {
+            return _feishuChannel.ResolveToolId(normalizedChatKey, username);
+        }
+
+        return ResolveDefaultToolId();
+    }
+
+    private string ResolveDefaultToolId()
+    {
+        foreach (var candidate in new[] { FallbackToolId, "codex", "opencode" })
+        {
+            var normalized = NormalizeToolId(candidate);
+            if (!string.IsNullOrWhiteSpace(normalized) && _cliExecutor.GetTool(normalized) != null)
+            {
+                return normalized;
+            }
+        }
+
+        return _cliExecutor.GetAvailableTools().FirstOrDefault()?.Id ?? FallbackToolId;
+    }
+
+    private static string? NormalizeToolId(string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return null;
+        }
+
+        if (toolId.Equals("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-code";
+        }
+
+        if (toolId.Equals("opencode-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return "opencode";
+        }
+
+        return toolId;
     }
 
     private string? ResolveFeishuUsername(string chatKey, string? operatorUserId)
@@ -895,8 +989,9 @@ public class FeishuCardActionService
         };
     }
 
-    private ElementsCardV2Dto BuildCreateSessionFormCard(string chatKey, List<object> directories)
+    private ElementsCardV2Dto BuildCreateSessionFormCard(string chatKey, List<object> directories, List<CliToolConfig> availableTools, string? selectedToolId)
     {
+        var effectiveToolId = NormalizeToolId(selectedToolId) ?? ResolveDefaultToolId();
         var ownedDirectories = directories
             .Where(directory => GetDirectoryType(directory) == "owned")
             .Take(12)
@@ -915,9 +1010,61 @@ public class FeishuCardActionService
                 text = new
                 {
                     tag = "lark_md",
-                    content = "## 🆕 新建会话\n支持：**默认目录**、**已有目录/项目**、**自定义路径**。"
+                    content = $"## 🆕 新建会话\n先选择 **CLI 工具**，再选择 **默认目录**、**已有目录/项目** 或 **自定义路径**。\n当前选择：**{GetToolDisplayName(effectiveToolId)}**"
                 }
             },
+            new { tag = "hr" },
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "### 0️⃣ 选择 CLI 工具\n会话创建后工具固定，如需更换请新建会话。"
+                }
+            }
+        };
+
+        foreach (var availableTool in availableTools)
+        {
+            var normalizedToolId = NormalizeToolId(availableTool.Id);
+            var isSelected = string.Equals(normalizedToolId, effectiveToolId, StringComparison.OrdinalIgnoreCase);
+            elements.Add(new
+            {
+                tag = "button",
+                text = new
+                {
+                    tag = "plain_text",
+                    content = isSelected ? $"已选: {GetToolDisplayName(availableTool.Id)}" : $"选择 {GetToolDisplayName(availableTool.Id)}"
+                },
+                type = isSelected ? "default" : "primary",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "show_create_session_form",
+                            chat_key = chatKey,
+                            tool_id = availableTool.Id
+                        }
+                    }
+                }
+            });
+        }
+
+        if (availableTools.Count == 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "plain_text", content = "当前没有可用的 CLI 工具，无法创建会话。" }
+            });
+        }
+
+        elements.AddRange(new object[]
+        {
             new { tag = "hr" },
             new
             {
@@ -942,7 +1089,8 @@ public class FeishuCardActionService
                         {
                             action = "create_session",
                             create_mode = "default",
-                            chat_key = chatKey
+                            chat_key = chatKey,
+                            tool_id = effectiveToolId
                         }
                     }
                 }
@@ -957,7 +1105,7 @@ public class FeishuCardActionService
                     content = "### 2️⃣ 选择已有目录 / 项目"
                 }
             }
-        };
+        });
 
         if (ownedDirectories.Count > 0)
         {
@@ -969,7 +1117,7 @@ public class FeishuCardActionService
 
             foreach (var directory in ownedDirectories)
             {
-                elements.AddRange(BuildDirectoryCardElements(directory, chatKey));
+                elements.AddRange(BuildDirectoryCardElements(directory, chatKey, effectiveToolId));
             }
         }
 
@@ -983,7 +1131,7 @@ public class FeishuCardActionService
 
             foreach (var directory in sharedDirectories)
             {
-                elements.AddRange(BuildDirectoryCardElements(directory, chatKey));
+                elements.AddRange(BuildDirectoryCardElements(directory, chatKey, effectiveToolId));
             }
         }
 
@@ -1021,7 +1169,8 @@ public class FeishuCardActionService
                     {
                         action = "create_session",
                         create_mode = "custom",
-                        chat_key = chatKey
+                        chat_key = chatKey,
+                        tool_id = effectiveToolId
                     }
                 }
             }
@@ -1064,7 +1213,7 @@ public class FeishuCardActionService
         };
     }
 
-    private IEnumerable<object> BuildDirectoryCardElements(object directory, string chatKey)
+    private IEnumerable<object> BuildDirectoryCardElements(object directory, string chatKey, string toolId)
     {
         var node = JsonSerializer.SerializeToNode(directory) as JsonObject;
         if (node == null)
@@ -1112,7 +1261,8 @@ public class FeishuCardActionService
                             action = "create_session",
                             create_mode = "existing",
                             workspace_path = path,
-                            chat_key = chatKey
+                            chat_key = chatKey,
+                            tool_id = toolId
                         }
                     }
                 }
@@ -1153,10 +1303,6 @@ public class FeishuCardActionService
 
         try
         {
-            // 获取appId（需要从FeishuOptions获取，这里我们先构造chatKey）
-            // 先获取FeishuOptions，通过_serviceProvider或者直接从_feishuChannel获取？
-            // 我们可以通过反射获取_feishuChannel的_options字段
-            // 直接使用chatId作为key（和普通消息保持一致，不需要AppId前缀）
             var chatKey = chatId.ToLowerInvariant();
             var username = ResolveFeishuUsername(chatKey, operatorUserId);
             if (string.IsNullOrWhiteSpace(username))
@@ -1164,7 +1310,8 @@ public class FeishuCardActionService
                 return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理会话", "error");
             }
 
-            var sessions = _feishuChannel.GetChatSessions(chatKey, username);
+            var sessionEntities = await GetChatSessionEntitiesAsync(chatKey, username);
+            var sessions = sessionEntities.Select(s => s.SessionId).ToList();
             var currentSessionId = _feishuChannel.GetCurrentSession(chatKey, username);
 
             var elements = new List<object>();
@@ -1176,20 +1323,21 @@ public class FeishuCardActionService
                 text = new
                 {
                     tag = "lark_md",
-                    content = $"## 📋 会话管理\n当前聊天共有 **{sessions.Count}** 个会话"
+                    content = $"## 📋 会话管理\n当前聊天共有 **{sessions.Count}** 个会话\n🛠️ 每个会话的 CLI 工具在创建时确定，如需更换请新建会话。"
                 }
             });
 
             elements.Add(new { tag = "hr" });
 
             // 添加会话列表
-            foreach (var sessionId in sessions.Take(10)) // 最多显示10个最近的会话
+            foreach (var session in sessionEntities.Take(10)) // 最多显示10个最近的会话
             {
+                var sessionId = session.SessionId;
                 var workspacePath = GetSessionWorkspaceDisplay(sessionId);
-                var lastActiveTime = _feishuChannel.GetSessionLastActiveTime(sessionId);
                 var isCurrent = sessionId == currentSessionId;
+                var toolLabel = GetToolDisplayName(session.ToolId);
 
-                var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n📂 {workspacePath}\n⏱️ {lastActiveTime:yyyy-MM-dd HH:mm}";
+                var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
 
                 elements.Add(new
                 {
@@ -1315,5 +1463,28 @@ public class FeishuCardActionService
             _logger.LogError(ex, "处理打开会话管理失败");
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话管理功能暂时不可用，请稍后重试。", "error");
         }
+    }
+
+    private async Task<List<ChatSessionEntity>> GetChatSessionEntitiesAsync(string chatKey, string username)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+
+        var sessions = await repo.GetByUsernameOrderByUpdatedAtAsync(username);
+        return sessions
+            .Where(s => string.Equals(s.FeishuChatKey, chatKey, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(s => s.UpdatedAt)
+            .ToList();
+    }
+
+    private static string GetToolDisplayName(string? toolId)
+    {
+        return NormalizeToolId(toolId) switch
+        {
+            "claude-code" => "Claude Code",
+            "codex" => "Codex",
+            "opencode" => "OpenCode",
+            _ => "未设置"
+        };
     }
 }

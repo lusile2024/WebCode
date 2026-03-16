@@ -112,7 +112,7 @@ public class FeishuHelpCardBuilder
             Header = new ElementsCardV2Dto.HeaderSuffix
             {
                 Template = "blue",
-                Title = new HeaderTitleElement { Content = "🤖 Claude Code CLI 命令帮助" }
+                Title = new HeaderTitleElement { Content = "🤖 当前 CLI 命令帮助" }
             },
             Config = new ElementsCardV2Dto.ConfigSuffix
             {
@@ -144,7 +144,7 @@ public class FeishuHelpCardBuilder
                 name = "command_input",
                 label = new { tag = "plain_text", content = "点编辑后enter发送" },
                 placeholder = new { tag = "plain_text", content = "编辑命令..." },
-                default_value = command.Name,
+                default_value = string.IsNullOrWhiteSpace(command.ExecuteText) ? command.Name : command.ExecuteText,
                 behaviors = new[]
                 {
                     new{
@@ -561,7 +561,7 @@ public class FeishuHelpCardBuilder
             header = new
             {
                 template = "blue",
-                title = new { tag = "plain_text", content = "🤖 Claude Code CLI 命令帮助" }
+                title = new { tag = "plain_text", content = "🤖 当前 CLI 命令帮助" }
             },
             body = new { elements = elements }
         };
