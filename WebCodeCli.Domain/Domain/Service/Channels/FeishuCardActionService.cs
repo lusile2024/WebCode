@@ -97,6 +97,8 @@ public class FeishuCardActionService
             {
                 case "refresh_commands":
                     return await HandleRefreshCommandsAsync(chatId);
+                case "show_category":
+                    return await HandleShowCategoryAsync(action.CategoryId, chatId);
                 case "select_command":
                     return await HandleSelectCommandAsync(action.CommandId, chatId);
                 case "back_to_list":
@@ -237,6 +239,21 @@ public class FeishuCardActionService
 
         _logger.LogInformation("🚀 [FeishuHelp] 执行命令: {Command}", commandInput);
 
+        var actualChatKey = NormalizeChatKey(chatId);
+        var currentSessionId = _feishuChannel.GetCurrentSession(actualChatKey);
+        if (string.IsNullOrWhiteSpace(currentSessionId))
+        {
+            _logger.LogInformation("⚠️ [FeishuHelp] 当前聊天没有活跃会话，跳转到新建会话表单: ChatId={ChatId}", chatId);
+            var toolId = ResolveToolIdForChat(chatId);
+            var response = await HandleShowCreateSessionFormAsync(actualChatKey, chatId, null, toolId);
+            response.Toast = new CardActionTriggerResponseDto.ToastSuffix
+            {
+                Content = "⚠️ 当前没有活跃会话，请先新建会话并选择目录",
+                Type = CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning
+            };
+            return response;
+        }
+
         // 立即返回 toast 响应
         var toastResponse = _cardBuilder.BuildCardActionToastOnlyResponse("🚀 开始执行命令...", "info");
 
@@ -270,7 +287,7 @@ public class FeishuCardActionService
                     handle.CardId);
 
                 // 执行 CLI 工具并流式更新卡片
-                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, commandInput);
+                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, commandInput, chatId);
             }
             catch (Exception ex)
             {
@@ -286,6 +303,17 @@ public class FeishuCardActionService
     /// </summary>
     private string GetOrCreateSession(string chatId, string toolId)
     {
+        var activeChatKey = NormalizeChatKey(chatId);
+        var currentSessionId = _feishuChannel.GetCurrentSession(activeChatKey);
+        if (!string.IsNullOrWhiteSpace(currentSessionId))
+        {
+            _logger.LogInformation(
+                "Using active Feishu session: {SessionId} for chat: {ChatId}",
+                currentSessionId,
+                chatId);
+            return currentSessionId;
+        }
+
         var normalizedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var chatKey = $"feishu:help:{chatId}:{normalizedToolId}";
 
@@ -308,13 +336,46 @@ public class FeishuCardActionService
     }
 
     /// <summary>
+    /// 处理分类选择 - 显示该分类下的命令按钮
+    /// </summary>
+    private async Task<CardActionTriggerResponseDto> HandleShowCategoryAsync(string? categoryId, string? chatId)
+    {
+        if (string.IsNullOrEmpty(chatId))
+        {
+            _logger.LogWarning("❌ [FeishuHelp] 没有 chatId，无法显示分类命令");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少 chatId", "error");
+        }
+
+        var toolId = ResolveToolIdForChat(chatId);
+        var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
+
+        if (string.IsNullOrEmpty(categoryId))
+        {
+            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            return _cardBuilder.BuildCardActionResponseV2(card, "📋 显示命令列表", "info");
+        }
+
+        var category = categories.FirstOrDefault(c => string.Equals(c.Id, categoryId, StringComparison.OrdinalIgnoreCase));
+        if (category == null)
+        {
+            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            return _cardBuilder.BuildCardActionResponseV2(card, "❌ 分类不存在", "warning");
+        }
+
+        var categoryCard = _cardBuilder.BuildCategoryCommandsCardV2(category);
+        _logger.LogInformation("📋 [FeishuHelp] 返回分类命令卡片: {Category}", category.Name);
+        return _cardBuilder.BuildCardActionResponseV2(categoryCard, "", "info");
+    }
+
+    /// <summary>
     /// 执行 CLI 工具并流式更新卡片（从 FeishuChannelService 复制）
     /// </summary>
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
         string sessionId,
         string toolId,
-        string userPrompt)
+        string userPrompt,
+        string chatId)
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
@@ -389,6 +450,15 @@ public class FeishuCardActionService
             else
             {
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
+            }
+
+            try
+            {
+                await _feishuChannel.SendMessageAsync(chatId, "已完成");
+            }
+            catch (Exception notificationEx)
+            {
+                _logger.LogWarning(notificationEx, "发送完成通知失败: ChatId={ChatId}", chatId);
             }
 
             await handle.FinishAsync(finalOutput);

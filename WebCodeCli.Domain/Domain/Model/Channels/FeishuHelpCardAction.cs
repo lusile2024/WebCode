@@ -22,6 +22,12 @@ public class FeishuHelpCardAction
     public string? CommandId { get; set; }
 
     /// <summary>
+    /// 分类ID（show_category时使用）
+    /// </summary>
+    [JsonPropertyName("category_id")]
+    public string? CategoryId { get; set; }
+
+    /// <summary>
     /// 命令内容（execute_command时使用）
     /// </summary>
     [JsonPropertyName("command")]

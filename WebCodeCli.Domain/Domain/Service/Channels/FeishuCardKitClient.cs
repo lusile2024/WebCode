@@ -1,5 +1,8 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -10,7 +13,7 @@ using WebCodeCli.Domain.Domain.Model.Channels;
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
 /// <summary>
-/// 飞书 CardKit 客户端实现
+/// 椋炰功 CardKit 瀹㈡埛绔疄鐜?
 /// </summary>
 [ServiceDescription(typeof(IFeishuCardKitClient), ServiceLifetime.Scoped)]
 public class FeishuCardKitClient : IFeishuCardKitClient
@@ -20,11 +23,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl = "https://open.feishu.cn";
 
-    // Token 缓存
+    // Token 缂撳瓨
     private string _accessToken = string.Empty;
     private DateTime _tokenExpiresAt = DateTime.MinValue;
-    private readonly SemaphoreSlim _tokenLock = new(1, 1); // 异步锁，修复并发安全问题
-    private string? _lastValidToken; // 上次有效的 token，用于失败回退
+    private readonly SemaphoreSlim _tokenLock = new(1, 1); // 寮傛閿侊紝淇骞跺彂瀹夊叏闂
+    private string? _lastValidToken; // 涓婃鏈夋晥鐨?token锛岀敤浜庡け璐ュ洖閫€
 
     public FeishuCardKitClient(
         IOptions<FeishuOptions> options,
@@ -199,7 +202,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string cardId,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("📤 [FeishuCardKit] ReplyCardMessageAsync: ReplyMessageId={ReplyMessageId}, CardId={CardId}",
+        _logger.LogInformation("馃摛 [FeishuCardKit] ReplyCardMessageAsync: ReplyMessageId={ReplyMessageId}, CardId={CardId}",
             replyMessageId, cardId);
 
         var token = await EnsureTokenAsync(cancellationToken);
@@ -217,26 +220,26 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             })
         };
 
-        _logger.LogInformation("📤 [FeishuCardKit] 发送 POST 请求到 /open-apis/im/v1/messages/{ReplyMessageId}/reply", replyMessageId);
+        _logger.LogInformation("馃摛 [FeishuCardKit] 鍙戦€?POST 璇锋眰鍒?/open-apis/im/v1/messages/{ReplyMessageId}/reply", replyMessageId);
         var response = await PostAsync(
             $"/open-apis/im/v1/messages/{replyMessageId}/reply",
             token,
             payload,
             cancellationToken);
 
-        _logger.LogInformation("📤 [FeishuCardKit] 响应状态码: {StatusCode}", response.StatusCode);
+        _logger.LogInformation("馃摛 [FeishuCardKit] 鍝嶅簲鐘舵€佺爜: {StatusCode}", response.StatusCode);
         var result = await ParseResponseAsync(response, cancellationToken);
-        _logger.LogDebug("📤 [FeishuCardKit] 响应内容: {Response}", result);
+        _logger.LogDebug("馃摛 [FeishuCardKit] 鍝嶅簲鍐呭: {Response}", result);
 
         if (result.TryGetProperty("data", out var data) &&
             data.TryGetProperty("message_id", out var messageIdProp))
         {
             var messageId = messageIdProp.GetString() ?? string.Empty;
-            _logger.LogInformation("✅ [FeishuCardKit] 回复成功, MessageId={MessageId}", messageId);
+            _logger.LogInformation("鉁?[FeishuCardKit] 鍥炲鎴愬姛, MessageId={MessageId}", messageId);
             return messageId;
         }
 
-        _logger.LogError("❌ [FeishuCardKit] 响应中没有 message_id");
+        _logger.LogError("鉂?[FeishuCardKit] 鍝嶅簲涓病鏈?message_id");
         throw new InvalidOperationException("Failed to reply card message: invalid response");
     }
 
@@ -247,10 +250,10 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string? title = null,
         CancellationToken cancellationToken = default)
     {
-        // 1. 创建卡片
+        // 1. 鍒涘缓鍗＄墖
         var cardId = await CreateCardAsync(initialContent, title, cancellationToken);
 
-        // 2. 发送或回复卡片消息
+        // 2. 鍙戦€佹垨鍥炲鍗＄墖娑堟伅
         string messageId;
         if (!string.IsNullOrEmpty(replyMessageId))
         {
@@ -261,7 +264,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             messageId = await SendCardMessageAsync(chatId, cardId, cancellationToken);
         }
 
-        // 3. 创建流式句柄
+        // 3. 鍒涘缓娴佸紡鍙ユ焺
         return new FeishuStreamingHandle(
             cardId,
             messageId,
@@ -275,12 +278,12 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     private int Sequence => Interlocked.Increment(ref _sequence);
 
     /// <summary>
-    /// 获取或刷新访问令牌
-    /// 使用 SemaphoreSlim 实现异步安全的双重检查锁定
+    /// 鑾峰彇鎴栧埛鏂拌闂护鐗?
+    /// 浣跨敤 SemaphoreSlim 瀹炵幇寮傛瀹夊叏鐨勫弻閲嶆鏌ラ攣瀹?
     /// </summary>
     private async Task<string> EnsureTokenAsync(CancellationToken cancellationToken)
     {
-        // 快速路径：token 有效直接返回
+        // 蹇€熻矾寰勶細token 鏈夋晥鐩存帴杩斿洖
         if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiresAt)
         {
             return _accessToken;
@@ -289,7 +292,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         await _tokenLock.WaitAsync(cancellationToken);
         try
         {
-            // 双重检查
+            // 鍙岄噸妫€鏌?
             if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiresAt)
             {
                 return _accessToken;
@@ -313,7 +316,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to refresh access token");
-                // 回退：使用上次有效的 token（如果还有效）
+                // 鍥為€€锛氫娇鐢ㄤ笂娆℃湁鏁堢殑 token锛堝鏋滆繕鏈夋晥锛?
                 if (!string.IsNullOrEmpty(_lastValidToken))
                 {
                     _logger.LogWarning("Using fallback token due to refresh failure");
@@ -332,13 +335,13 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
                 _accessToken = newToken;
                 _tokenExpiresAt = DateTime.UtcNow.AddSeconds(expireSeconds - 60);
-                _lastValidToken = newToken; // 保存有效 token 用于回退
+                _lastValidToken = newToken; // 淇濆瓨鏈夋晥 token 鐢ㄤ簬鍥為€€
 
                 _logger.LogDebug("Access token refreshed, expires at {ExpiresAt}", _tokenExpiresAt);
                 return _accessToken;
             }
 
-            // 解析失败但可能还有旧 token 可用
+            // 瑙ｆ瀽澶辫触浣嗗彲鑳借繕鏈夋棫 token 鍙敤
             if (!string.IsNullOrEmpty(_lastValidToken))
             {
                 _logger.LogWarning("Token parse failed, using fallback token");
@@ -395,7 +398,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
     private async Task<JsonElement> ParseResponseAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string operationName = "API request")
     {
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
 
@@ -408,24 +412,59 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             throw new HttpRequestException($"API request failed: {response.StatusCode}");
         }
 
-        return JsonDocument.Parse(content).RootElement;
+        return EnsureBusinessSuccess(JsonDocument.Parse(content).RootElement, operationName);
     }
 
+    private JsonElement EnsureBusinessSuccess(JsonElement result, string operationName)
+    {
+        if (!result.TryGetProperty("code", out var codeProp) || !TryGetBusinessCode(codeProp, out var code) || code == 0)
+        {
+            return result;
+        }
+
+        var message = result.TryGetProperty("msg", out var msgProp)
+            ? msgProp.GetString() ?? "Unknown error"
+            : "Unknown error";
+
+        _logger.LogError(
+            "{Operation} failed: Code={Code}, Msg={Msg}, Response={Response}",
+            operationName,
+            code,
+            message,
+            result);
+
+        throw new InvalidOperationException($"{operationName} failed: {message} (code: {code})");
+    }
+
+    private static bool TryGetBusinessCode(JsonElement codeProp, out int code)
+    {
+        if (codeProp.ValueKind == JsonValueKind.Number)
+        {
+            return codeProp.TryGetInt32(out code);
+        }
+
+        if (codeProp.ValueKind == JsonValueKind.String)
+        {
+            return int.TryParse(codeProp.GetString(), out code);
+        }
+
+        code = default;
+        return false;
+    }
     /// <summary>
-    /// 发送原始JSON卡片消息（帮助功能专用）
-    /// 通过 CardKit 创建卡片，避免JSON格式问题
+    /// 发送原始 JSON 卡片消息（帮助功能专用）
+    /// 使用消息 API 直接发送，避免 card_id 引用在客户端回退成占位文本。
     /// </summary>
     public async Task<string> SendRawCardAsync(
         string chatId,
         string cardJson,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("📤 [FeishuCardKit] 通过CardKit发送卡片");
+        _logger.LogInformation("[FeishuCardKit] Create CardKit card then send message, ChatId={ChatId}", chatId);
+        _logger.LogDebug("[FeishuCardKit] Card JSON: {CardJson}", cardJson);
 
-        // 1. 先用 CardKit API 创建卡片
         var token = await EnsureTokenAsync(cancellationToken);
-
-        var createCardPayload = new
+        var createPayload = new
         {
             type = "card_json",
             data = cardJson
@@ -434,121 +473,137 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         var createResponse = await PostAsync(
             "/open-apis/cardkit/v1/cards",
             token,
-            createCardPayload,
+            createPayload,
             cancellationToken);
 
-        var createResult = await ParseResponseAsync(createResponse, cancellationToken);
+        var createResult = await ParseResponseAsync(createResponse, cancellationToken, "Create CardKit card");
+        var cardId = ExtractCardId(createResult, "Create CardKit card");
 
-        if (!createResult.TryGetProperty("data", out var createData) ||
-            !createData.TryGetProperty("card_id", out var cardIdProp))
+        var sendPayload = new
         {
-            throw new InvalidOperationException("Failed to create card via CardKit");
-        }
+            receive_id = chatId,
+            msg_type = "interactive",
+            content = JsonSerializer.Serialize(new
+            {
+                type = "card",
+                data = new
+                {
+                    card_id = cardId
+                }
+            })
+        };
 
-        var cardId = cardIdProp.GetString() ?? string.Empty;
-        _logger.LogInformation("📤 [FeishuCardKit] CardKit创建成功: CardId={CardId}", cardId);
+        var sendResponse = await PostAsync(
+            "/open-apis/im/v1/messages?receive_id_type=chat_id",
+            token,
+            sendPayload,
+            cancellationToken);
 
-        // 2. 再发送卡片消息
-        return await SendCardMessageAsync(chatId, cardId, cancellationToken);
+        var sendResult = await ParseResponseAsync(sendResponse, cancellationToken, "Send interactive card message");
+        return ExtractMessageId(sendResult, "Send interactive card message");
     }
 
     /// <summary>
-    /// 回复原始JSON卡片消息(帮助功能专用)
-    /// 参考 OpenCowork 实现:先创建卡片获取 card_id,再发送
+    /// 回复 V2 DTO 卡片消息（帮助功能专用）
+    /// </summary>
+    public Task<string> ReplyElementsCardAsync(
+        string replyMessageId,
+        ElementsCardV2Dto card,
+        CancellationToken cancellationToken = default)
+    {
+        var cardJson = SerializeElementsCard(card);
+        return ReplyRawCardAsync(replyMessageId, cardJson, cancellationToken);
+    }
+
+    /// <summary>
+    /// 回复原始 JSON 卡片消息（帮助功能专用）
+    /// 使用消息 API 直接回复交互卡片，并带上 uuid 做幂等去重。
     /// </summary>
     public async Task<string> ReplyRawCardAsync(
         string replyMessageId,
         string cardJson,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("📤 [FeishuCardKit] 回复交互式卡片, ReplyMessageId={ReplyMessageId}", replyMessageId);
-        _logger.LogDebug("📤 [FeishuCardKit] 卡片JSON: {CardJson}", cardJson);
+        _logger.LogInformation("[FeishuCardKit] Create CardKit card then reply, ReplyMessageId={ReplyMessageId}", replyMessageId);
+        _logger.LogDebug("[FeishuCardKit] Card JSON: {CardJson}", cardJson);
 
-        try
+        var token = await EnsureTokenAsync(cancellationToken);
+        var createPayload = new
         {
-            var token = await EnsureTokenAsync(cancellationToken);
+            type = "card_json",
+            data = cardJson
+        };
 
-            // 步骤1: 使用 CardKit API 创建卡片,获取 card_id
-            _logger.LogInformation("📤 [FeishuCardKit] 步骤1: 创建卡片...");
+        var createResponse = await PostAsync(
+            "/open-apis/cardkit/v1/cards",
+            token,
+            createPayload,
+            cancellationToken);
 
-            var createCardPayload = new
+        var createResult = await ParseResponseAsync(createResponse, cancellationToken, "Create CardKit card");
+        var cardId = ExtractCardId(createResult, "Create CardKit card");
+
+        var replyPayload = new
+        {
+            msg_type = "interactive",
+            content = JsonSerializer.Serialize(new
             {
-                type = "card_json",
-                data = cardJson  // cardJson 是字符串
-            };
-
-            var createResponse = await PostAsync(
-                "/open-apis/cardkit/v1/cards",
-                token,
-                createCardPayload,
-                cancellationToken);
-
-            var createContent = await createResponse.Content.ReadAsStringAsync(cancellationToken);
-            _logger.LogDebug("📤 [FeishuCardKit] 创建卡片响应: {Response}", createContent);
-
-            if (!createResponse.IsSuccessStatusCode)
-            {
-                _logger.LogError("❌ [FeishuCardKit] 创建卡片失败: {Content}", createContent);
-                throw new HttpRequestException($"Create card failed: {createResponse.StatusCode}");
-            }
-
-            var createResult = JsonDocument.Parse(createContent).RootElement;
-
-            if (!createResult.TryGetProperty("data", out var createData) ||
-                !createData.TryGetProperty("card_id", out var cardIdProp))
-            {
-                _logger.LogError("❌ [FeishuCardKit] 响应中没有 card_id");
-                throw new InvalidOperationException("Failed to get card_id from response");
-            }
-
-            var cardId = cardIdProp.GetString() ?? string.Empty;
-            _logger.LogInformation("📤 [FeishuCardKit] 步骤1: 卡片创建成功, CardId={CardId}", cardId);
-
-            // 步骤2: 使用消息 API 回复卡片(发送 card_id)
-            _logger.LogInformation("📤 [FeishuCardKit] 步骤2: 回复卡片消息...");
-
-            var replyPayload = new
-            {
-                msg_type = "interactive",
-                content = JsonSerializer.Serialize(new
+                type = "card",
+                data = new
                 {
-                    type = "card",
-                    data = new { card_id = cardId }
-                })
-            };
+                    card_id = cardId
+                }
+            })
+        };
 
-            var replyResponse = await PostAsync(
-                $"/open-apis/im/v1/messages/{replyMessageId}/reply",
-                token,
-                replyPayload,
-                cancellationToken);
+        var replyResponse = await PostAsync(
+            $"/open-apis/im/v1/messages/{replyMessageId}/reply",
+            token,
+            replyPayload,
+            cancellationToken);
 
-            var replyContent = await replyResponse.Content.ReadAsStringAsync(cancellationToken);
-            _logger.LogDebug("📤 [FeishuCardKit] 回复消息响应: {Response}", replyContent);
+        var replyResult = await ParseResponseAsync(replyResponse, cancellationToken, "Reply interactive card message");
+        return ExtractMessageId(replyResult, "Reply interactive card message");
+    }
 
-            if (!replyResponse.IsSuccessStatusCode)
-            {
-                _logger.LogError("❌ [FeishuCardKit] 回复消息失败: {Content}", replyContent);
-                throw new HttpRequestException($"Reply message failed: {replyResponse.StatusCode}");
-            }
-
-            var replyResult = JsonDocument.Parse(replyContent).RootElement;
-
-            if (replyResult.TryGetProperty("data", out var data) &&
-                data.TryGetProperty("message_id", out var messageIdProp))
-            {
-                var messageId = messageIdProp.GetString() ?? string.Empty;
-                _logger.LogInformation("✅ [FeishuCardKit] 卡片回复成功, MessageId={MessageId}", messageId);
-                return messageId;
-            }
-
-            _logger.LogError("❌ [FeishuCardKit] 响应中没有 message_id");
-            throw new InvalidOperationException("Failed to get message_id from response");
-        }
-        catch (Exception ex)
+    private static string ExtractMessageId(JsonElement result, string operationName)
+    {
+        if (result.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("message_id", out var messageIdProp))
         {
-            _logger.LogError(ex, "❌ [FeishuCardKit] ReplyRawCardAsync 失败");
-            throw;
+            return messageIdProp.GetString() ?? string.Empty;
         }
+
+        throw new InvalidOperationException($"{operationName} failed: missing message_id");
+    }
+
+    private static string ExtractCardId(JsonElement result, string operationName)
+    {
+        if (result.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("card_id", out var cardIdProp))
+        {
+            return cardIdProp.GetString() ?? string.Empty;
+        }
+
+        throw new InvalidOperationException($"{operationName} failed: missing card_id");
+    }
+
+    private static string SerializeElementsCard(ElementsCardV2Dto card)
+    {
+        var payload = new
+        {
+            schema = string.IsNullOrWhiteSpace(card.Schema) ? "2.0" : card.Schema,
+            config = card.Config,
+            header = card.Header,
+            card_link = card.CardLink,
+            body = card.Body
+        };
+
+        return JsonSerializer.Serialize(payload, new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        });
     }
 }
+
+

@@ -786,18 +786,40 @@ public class CliExecutorService : ICliExecutorService
         _logger.LogInformation("开始合并流输出");
         int chunkCount = 0;
     var fullOutput = new StringBuilder(); // 用于解析thread id
-        
+
         // 合并两个流的输出
-        await foreach (var chunk in MergeStreamsAsync(outputTask, errorTask, linkedCts.Token))
+        await using var mergedEnumerator = MergeStreamsAsync(outputTask, errorTask, linkedCts.Token).GetAsyncEnumerator();
+        while (true)
         {
+            StreamOutputChunk chunk;
+            try
+            {
+                if (!await mergedEnumerator.MoveNextAsync())
+                {
+                    break;
+                }
+
+                chunk = mergedEnumerator.Current;
+            }
+            catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
+            {
+                _logger.LogInformation(
+                    "流输出合并已取消，等待后续超时/取消收尾逻辑: Tool={Tool}, Session={Session}, TimeoutTriggered={TimeoutTriggered}, CallerCancelled={CallerCancelled}",
+                    tool.Name,
+                    sessionId,
+                    timeoutCts.IsCancellationRequested,
+                    cancellationToken.IsCancellationRequested);
+                break;
+            }
+
             chunkCount++;
-            
+
             // 收集输出用于后续解析session id
             if (!chunk.IsError && !string.IsNullOrEmpty(chunk.Content))
             {
                 fullOutput.Append(chunk.Content);
             }
-            
+
             yield return chunk;
         }
         

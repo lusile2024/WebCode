@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using FeishuNetSdk.Im.Events;
+using FeishuNetSdk.Im.Dtos;
 using FeishuNetSdk.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -36,7 +37,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     /// 已处理的消息 ID（去重）
     /// Key: MessageId, Value: 处理时间
     /// </summary>
-    private readonly ConcurrentDictionary<string, DateTime> _processedMessages = new();
+    private static readonly ConcurrentDictionary<string, DateTime> ProcessedMessages = new();
 
     /// <summary>
     /// 定时清理器（修复内存泄漏问题）
@@ -100,7 +101,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             message.ChatId, message.ChatType, message.MessageType, message.Content);
 
         // 去重检查 - 使用 MessageId 而非 EventId，原子操作避免并发重复处理
-        if (!_processedMessages.TryAdd(message.MessageId, DateTime.UtcNow))
+        if (!ProcessedMessages.TryAdd(message.MessageId, DateTime.UtcNow))
         {
             _logger.LogDebug("Duplicate message ignored: {MessageId}", message.MessageId);
             return;
@@ -171,7 +172,10 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             var keyword = trimmedContent.StartsWith("/", StringComparison.Ordinal)
                 ? trimmedContent.Substring("/feishuhelp".Length).Trim()
                 : trimmedContent.Substring("feishuhelp".Length).Trim();
-            await HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword);
+            EnqueueMessageWork(
+                "feishuhelp",
+                message.MessageId,
+                () => HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword));
             return;
         }
 
@@ -182,7 +186,10 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
              trimmedContent.StartsWith("/feishusession", StringComparison.OrdinalIgnoreCase)))
         {
             _logger.LogInformation("🔥 [Feishu] 检测到 feishusessions 命令!");
-            await HandleSessionsCommandAsync(message.ChatId, message.MessageId, boundWebUsername);
+            EnqueueMessageWork(
+                "feishusessions",
+                message.MessageId,
+                () => HandleSessionsCommandAsync(message.ChatId, message.MessageId, boundWebUsername));
             return;
         }
 
@@ -287,20 +294,20 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     private void CleanupOldMessages()
     {
         var expireTime = DateTime.UtcNow.AddMinutes(-15);
-        var keysToRemove = _processedMessages
+        var keysToRemove = ProcessedMessages
             .Where(kvp => kvp.Value < expireTime)
             .Select(kvp => kvp.Key)
             .ToList();
 
         foreach (var key in keysToRemove)
         {
-            _processedMessages.TryRemove(key, out _);
+            ProcessedMessages.TryRemove(key, out _);
         }
 
         // 额外保护：如果记录数超过 500，删除最旧的记录
-        if (_processedMessages.Count > 500)
+        if (ProcessedMessages.Count > 500)
         {
-            var oldestKeys = _processedMessages
+            var oldestKeys = ProcessedMessages
                 .OrderBy(kvp => kvp.Value)
                 .Take(100)
                 .Select(kvp => kvp.Key)
@@ -308,9 +315,26 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
             foreach (var key in oldestKeys)
             {
-                _processedMessages.TryRemove(key, out _);
+                ProcessedMessages.TryRemove(key, out _);
             }
         }
+    }
+
+    private void EnqueueMessageWork(string operationName, string messageId, Func<Task> work)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await work();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ [Feishu] 后台处理失败: Operation={Operation}, MessageId={MessageId}", operationName, messageId);
+            }
+        });
+
+        _logger.LogInformation("🔥 [Feishu] 已转后台处理: Operation={Operation}, MessageId={MessageId}", operationName, messageId);
     }
 
     /// <summary>
@@ -412,28 +436,25 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             _logger.LogInformation("✅ [FeishuHelp] 命令列表刷新完成");
 
             List<FeishuCommandCategory> categories;
-            string cardJson;
+            ElementsCardV2Dto card;
 
             _logger.LogInformation("🔥 [FeishuHelp] 开始获取命令列表...");
             if (string.IsNullOrEmpty(keyword))
             {
                 categories = await _commandService.GetCategorizedCommandsAsync(toolId);
                 _logger.LogInformation("🔥 [FeishuHelp] 获取到 {Count} 个分组", categories.Count);
-                cardJson = _cardBuilder.BuildCommandListCard(categories);
+                card = _cardBuilder.BuildCommandListCardV2(categories);
             }
             else
             {
                 categories = await _commandService.FilterCommandsAsync(keyword, toolId);
                 _logger.LogInformation("🔥 [FeishuHelp] 过滤后获取到 {Count} 个分组", categories.Count);
-                cardJson = _cardBuilder.BuildFilteredCard(categories, keyword);
+                card = _cardBuilder.BuildFilteredCardV2(categories, keyword);
             }
 
-            _logger.LogInformation("🔥 [FeishuHelp] 卡片JSON长度: {Length}", cardJson.Length);
-            _logger.LogDebug("🔥 [FeishuHelp] 卡片JSON内容: {CardJson}", cardJson);
-
-            // 使用 CardKit 发送原始JSON卡片
-            _logger.LogInformation("🔥 [FeishuHelp] 开始调用 ReplyRawCardAsync...");
-            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson);
+            _logger.LogDebug("🔥 [FeishuHelp] 帮助卡片DTO内容: {Card}", JsonSerializer.Serialize(card));
+            _logger.LogInformation("🔥 [FeishuHelp] 开始调用 ReplyElementsCardAsync...");
+            var messageId = await _cardKit.ReplyElementsCardAsync(replyToMessageId, card);
             _logger.LogInformation("✅ [FeishuHelp] 帮助卡片已发送, MessageId={MessageId}", messageId);
         }
         catch (Exception ex)

@@ -611,6 +611,15 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
 
+            try
+            {
+                await ReplyMessageAsync(messageId, "已完成");
+            }
+            catch (Exception notificationEx)
+            {
+                _logger.LogWarning(notificationEx, "发送完成通知失败: MessageId={MessageId}", messageId);
+            }
+
             await handle.FinishAsync(finalOutput);
 
             // 添加助手回复到会话
