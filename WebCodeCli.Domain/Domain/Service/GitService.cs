@@ -3,6 +3,7 @@ using LibGit2Sharp.Handlers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Text;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Domain.Model;
 
@@ -328,11 +329,16 @@ public class GitService : IGitService
                 }
                 Directory.CreateDirectory(localPath);
                 
+                var normalizedBranch = branch?.Trim() ?? string.Empty;
                 var cloneOptions = new CloneOptions
                 {
-                    BranchName = branch,
                     Checkout = true
                 };
+
+                if (!string.IsNullOrWhiteSpace(normalizedBranch))
+                {
+                    cloneOptions.BranchName = normalizedBranch;
+                }
                 
                 // 设置凭据提供器
                 if (credentials != null && credentials.AuthType != "none")
@@ -343,10 +349,17 @@ public class GitService : IGitService
                         tempSshKeyPath = CreateTempSshKeyFile(credentials.SshPrivateKey);
                         tempAskPassPath = CreateTempAskPassScript(credentials.SshPassphrase);
                         
+                        progress?.Invoke(new CloneProgress
+                        {
+                            Percentage = 10,
+                            Stage = "准备克隆",
+                            Details = gitUrl
+                        });
+
                         var workingDir = Path.GetDirectoryName(localPath) ?? Directory.GetCurrentDirectory();
                         var result = ExecuteGitCommand(
                             workingDir,
-                            $"clone --branch {branch} --single-branch \"{gitUrl}\" \"{localPath}\"",
+                            BuildCloneArguments(gitUrl, localPath, normalizedBranch),
                             tempSshKeyPath,
                             tempAskPassPath);
                         
@@ -367,7 +380,58 @@ public class GitService : IGitService
                             return (false, errorMessage);
                         }
                         
+                        progress?.Invoke(new CloneProgress
+                        {
+                            Percentage = 100,
+                            Stage = "克隆完成",
+                            Details = localPath
+                        });
+
                         _logger?.LogInformation("仓库克隆成功(SSH CLI): {LocalPath}", localPath);
+                        return (true, null);
+                    }
+                    else if (ShouldUseCliForHttpCredentials(credentials))
+                    {
+                        progress?.Invoke(new CloneProgress
+                        {
+                            Percentage = 10,
+                            Stage = "准备克隆",
+                            Details = gitUrl
+                        });
+
+                        var workingDir = Path.GetDirectoryName(localPath) ?? Directory.GetCurrentDirectory();
+                        var result = ExecuteHttpGitCommand(
+                            workingDir,
+                            gitUrl,
+                            BuildCloneArguments(gitUrl, localPath, normalizedBranch),
+                            credentials.HttpsUsername,
+                            credentials.HttpsToken ?? string.Empty);
+
+                        if (result.ExitCode != 0)
+                        {
+                            var errorMessage = $"Git 操作失败: {result.StdErr}";
+                            _logger?.LogError("克隆仓库失败(HTTP CLI): {GitUrl}, {Error}", gitUrl, result.StdErr);
+
+                            try
+                            {
+                                if (Directory.Exists(localPath))
+                                {
+                                    Directory.Delete(localPath, true);
+                                }
+                            }
+                            catch { }
+
+                            return (false, errorMessage);
+                        }
+
+                        progress?.Invoke(new CloneProgress
+                        {
+                            Percentage = 100,
+                            Stage = "克隆完成",
+                            Details = localPath
+                        });
+
+                        _logger?.LogInformation("仓库克隆成功(HTTP CLI): {LocalPath}", localPath);
                         return (true, null);
                     }
                     else
@@ -493,6 +557,31 @@ public class GitService : IGitService
                         _logger?.LogInformation("拉取更新成功(SSH CLI): {LocalPath}", localPath);
                         return (true, null);
                     }
+                    else if (ShouldUseCliForHttpCredentials(credentials))
+                    {
+                        var remoteUrl = repo.Network.Remotes["origin"]?.Url;
+                        if (string.IsNullOrWhiteSpace(remoteUrl))
+                        {
+                            return (false, "未找到 origin 远程仓库地址");
+                        }
+
+                        var result = ExecuteHttpGitCommand(
+                            localPath,
+                            remoteUrl,
+                            "pull",
+                            credentials.HttpsUsername,
+                            credentials.HttpsToken ?? string.Empty);
+
+                        if (result.ExitCode != 0)
+                        {
+                            var errorMessage = $"Git 操作失败: {result.StdErr}";
+                            _logger?.LogError("拉取更新失败(HTTP CLI): {LocalPath}, {Error}", localPath, result.StdErr);
+                            return (false, errorMessage);
+                        }
+
+                        _logger?.LogInformation("拉取更新成功(HTTP CLI): {LocalPath}", localPath);
+                        return (true, null);
+                    }
                     else
                     {
                         options.FetchOptions.CredentialsProvider = CreateCredentialsHandler(credentials, tempSshKeyPath);
@@ -548,37 +637,25 @@ public class GitService : IGitService
             {
                 _logger?.LogInformation("获取远程分支列表: {GitUrl}", gitUrl);
                 
-                if (credentials?.AuthType == "https" && !string.IsNullOrEmpty(credentials.HttpsToken))
+                if (ShouldUseCliForHttpCredentials(credentials))
                 {
-                    var authUrl = BuildHttpsUrlWithToken(gitUrl, credentials.HttpsUsername, credentials.HttpsToken);
-                    var result = ExecuteGitCommand(
+                    var result = ExecuteHttpGitCommand(
                         Directory.GetCurrentDirectory(),
-                        $"ls-remote --heads \"{authUrl}\"",
-                        null,
-                        null);
+                        gitUrl,
+                        $"ls-remote --heads \"{gitUrl}\"",
+                        credentials!.HttpsUsername,
+                        credentials.HttpsToken ?? string.Empty);
 
                     if (result.ExitCode != 0)
                     {
                         var errorMessage = $"获取分支列表失败: {result.StdErr}";
-                        _logger?.LogError("获取远程分支列表失败(HTTPS CLI): {GitUrl}, {Error}", gitUrl, result.StdErr);
+                        _logger?.LogError("获取远程分支列表失败(HTTP CLI): {GitUrl}, {Error}", gitUrl, result.StdErr);
                         return (branches, errorMessage);
                     }
 
-                    var lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var line in lines)
-                    {
-                        var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 2)
-                        {
-                            var refName = parts[^1];
-                            if (refName.StartsWith("refs/heads/"))
-                            {
-                                branches.Add(refName.Replace("refs/heads/", ""));
-                            }
-                        }
-                    }
+                    branches.AddRange(ParseRemoteBranches(result.StdOut));
 
-                    _logger?.LogInformation("获取到 {Count} 个分支(HTTPS CLI)", branches.Count);
+                    _logger?.LogInformation("获取到 {Count} 个分支(HTTP CLI)", branches.Count);
                     return (branches, null);
                 }
 
@@ -600,19 +677,7 @@ public class GitService : IGitService
                         return (branches, errorMessage);
                     }
                     
-                    var lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var line in lines)
-                    {
-                        var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 2)
-                        {
-                            var refName = parts[^1];
-                            if (refName.StartsWith("refs/heads/"))
-                            {
-                                branches.Add(refName.Replace("refs/heads/", ""));
-                            }
-                        }
-                    }
+                    branches.AddRange(ParseRemoteBranches(result.StdOut));
                     
                     _logger?.LogInformation("获取到 {Count} 个分支(SSH CLI)", branches.Count);
                     return (branches, null);
@@ -757,11 +822,13 @@ public class GitService : IGitService
         };
     }
 
-    private (int ExitCode, string StdOut, string StdErr) ExecuteGitCommand(
+    protected virtual (int ExitCode, string StdOut, string StdErr) ExecuteGitCommand(
         string workingDirectory,
         string arguments,
         string? sshKeyPath,
-        string? sshAskPassPath)
+        string? sshAskPassPath,
+        string? standardInput = null,
+        IReadOnlyDictionary<string, string>? additionalEnvironment = null)
     {
         try
         {
@@ -770,6 +837,7 @@ public class GitService : IGitService
                 FileName = "git",
                 Arguments = arguments,
                 WorkingDirectory = workingDirectory,
+                RedirectStandardInput = standardInput != null,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -786,6 +854,14 @@ public class GitService : IGitService
             {
                 startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
             }
+
+            if (additionalEnvironment != null)
+            {
+                foreach (var environmentEntry in additionalEnvironment)
+                {
+                    startInfo.Environment[environmentEntry.Key] = environmentEntry.Value;
+                }
+            }
             
             if (!string.IsNullOrEmpty(sshAskPassPath))
             {
@@ -798,6 +874,12 @@ public class GitService : IGitService
             if (process == null)
             {
                 return (-1, string.Empty, "无法启动 git 进程");
+            }
+
+            if (!string.IsNullOrEmpty(standardInput))
+            {
+                process.StandardInput.Write(standardInput);
+                process.StandardInput.Close();
             }
             
             var stdout = process.StandardOutput.ReadToEnd();
@@ -812,26 +894,60 @@ public class GitService : IGitService
         }
     }
 
-    private string BuildHttpsUrlWithToken(string gitUrl, string? username, string token)
+    private (int ExitCode, string StdOut, string StdErr) ExecuteHttpGitCommand(
+        string workingDirectory,
+        string gitUrl,
+        string commandArguments,
+        string? username,
+        string secret)
     {
+        string? credentialStorePath = null;
+
         try
         {
-            var uri = new Uri(gitUrl);
-            var user = string.IsNullOrWhiteSpace(username) ? "x-access-token" : username;
-            var escapedUser = Uri.EscapeDataString(user);
-            var escapedToken = Uri.EscapeDataString(token);
-            var builder = new UriBuilder(uri)
+            credentialStorePath = CreateTempCredentialStorePath();
+            var gitConfigPrefix = BuildTemporaryCredentialConfigArguments(credentialStorePath);
+            var environment = BuildNonInteractiveGitEnvironment();
+            var effectiveUsername = string.IsNullOrWhiteSpace(username) ? "x-access-token" : username.Trim();
+
+            _logger?.LogDebug(
+                "准备 HTTP Git 临时凭据: {GitUrl}, Username={Username}, SecretLength={SecretLength}",
+                gitUrl,
+                effectiveUsername,
+                secret?.Length ?? 0);
+
+            var approveResult = ExecuteGitCommand(
+                workingDirectory,
+                $"{gitConfigPrefix} credential approve",
+                null,
+                null,
+                BuildGitCredentialInput(gitUrl, username, secret),
+                environment);
+
+            if (approveResult.ExitCode != 0)
             {
-                UserName = escapedUser,
-                Password = escapedToken
-            };
-            return builder.Uri.ToString();
+                _logger?.LogError(
+                    "注入 HTTP Git 临时凭据失败: {GitUrl}, {Error}",
+                    gitUrl,
+                    approveResult.StdErr);
+                return approveResult;
+            }
+
+            _logger?.LogDebug("执行 HTTP Git 命令: {Arguments}", commandArguments);
+            return ExecuteGitCommand(
+                workingDirectory,
+                $"{gitConfigPrefix} {commandArguments}",
+                null,
+                null,
+                null,
+                environment);
         }
-        catch
+        finally
         {
-            // 回退：简单拼接（避免异常阻断）
-            var safeUser = string.IsNullOrWhiteSpace(username) ? "x-access-token" : username;
-            return gitUrl.Replace("https://", $"https://{safeUser}:{token}@");
+            if (!string.IsNullOrEmpty(credentialStorePath))
+            {
+                CleanupTempCredentialStoreFile(credentialStorePath);
+            }
         }
     }
 
@@ -839,6 +955,86 @@ public class GitService : IGitService
     {
         var escapedPath = sshKeyPath.Replace("\"", "\\\"");
         return $"ssh -i \"{escapedPath}\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
+    }
+
+    private static bool ShouldUseCliForHttpCredentials(GitCredentials? credentials)
+    {
+        return string.Equals(credentials?.AuthType, "https", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(credentials.HttpsToken);
+    }
+
+    private static string BuildCloneArguments(string gitUrl, string localPath, string branch)
+    {
+        return string.IsNullOrWhiteSpace(branch)
+            ? $"clone \"{gitUrl}\" \"{localPath}\""
+            : $"clone --branch \"{branch}\" --single-branch \"{gitUrl}\" \"{localPath}\"";
+    }
+
+    private static string BuildTemporaryCredentialConfigArguments(string credentialStorePath)
+    {
+        var normalizedCredentialStorePath = credentialStorePath.Replace("\\", "/");
+        return $"-c \"credential.helper=store --file={normalizedCredentialStorePath}\" -c credential.useHttpPath=true -c credential.interactive=false";
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildNonInteractiveGitEnvironment()
+    {
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["GIT_TERMINAL_PROMPT"] = "0",
+            ["GCM_INTERACTIVE"] = "never"
+        };
+    }
+
+    private static string BuildGitCredentialInput(string gitUrl, string? username, string secret)
+    {
+        var uri = new Uri(gitUrl);
+        var user = string.IsNullOrWhiteSpace(username) ? "x-access-token" : username.Trim();
+        var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+        var path = uri.AbsolutePath.TrimStart('/');
+        var builder = new StringBuilder()
+            .Append("protocol=").Append(uri.Scheme).AppendLine()
+            .Append("host=").Append(host).AppendLine();
+
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            builder.Append("path=").Append(path).AppendLine();
+        }
+
+        builder
+            .Append("username=").Append(user).AppendLine()
+            .Append("password=").Append(secret).AppendLine()
+            .AppendLine();
+
+        return builder.ToString();
+    }
+
+    private static string CreateTempCredentialStorePath()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "webcode-git-credentials");
+        Directory.CreateDirectory(tempDir);
+        return Path.Combine(tempDir, $"credentials_{Guid.NewGuid():N}.txt");
+    }
+
+    private static List<string> ParseRemoteBranches(string stdout)
+    {
+        var branches = new List<string>();
+        var lines = stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2)
+            {
+                continue;
+            }
+
+            var refName = parts[^1];
+            if (refName.StartsWith("refs/heads/", StringComparison.Ordinal))
+            {
+                branches.Add(refName.Replace("refs/heads/", string.Empty, StringComparison.Ordinal));
+            }
+        }
+
+        return branches;
     }
 
     private string? CreateTempAskPassScript(string? passphrase)
@@ -873,6 +1069,26 @@ public class GitService : IGitService
         }
         
         return tempFilePath;
+    }
+
+    private void CleanupTempCredentialStoreFile(string? credentialStorePath)
+    {
+        if (string.IsNullOrEmpty(credentialStorePath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(credentialStorePath))
+            {
+                File.Delete(credentialStorePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "清理临时 Git 凭据文件失败: {Path}", credentialStorePath);
+        }
     }
 
     private void CleanupTempAskPassScript(string? tempFilePath)

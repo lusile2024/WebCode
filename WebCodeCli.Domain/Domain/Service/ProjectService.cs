@@ -123,7 +123,7 @@ public class ProjectService : IProjectService
                 HttpsToken = EncryptIfNotEmpty(request.HttpsToken),
                 SshPrivateKey = EncryptIfNotEmpty(request.SshPrivateKey),
                 SshPassphrase = EncryptIfNotEmpty(request.SshPassphrase),
-                Branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch.Trim(),
+                Branch = request.Branch?.Trim() ?? string.Empty,
                 LocalPath = localPath,
                 Status = "pending",
                 CreatedAt = DateTime.Now,
@@ -367,7 +367,7 @@ public class ProjectService : IProjectService
                 entity.SshPassphrase = EncryptIfNotEmpty(request.SshPassphrase);
             }
             
-            if (!string.IsNullOrWhiteSpace(request.Branch))
+            if (request.Branch != null)
             {
                 entity.Branch = request.Branch.Trim();
             }
@@ -482,6 +482,7 @@ public class ProjectService : IProjectService
                 if (success)
                 {
                     entity.Status = "ready";
+                    entity.Branch = _gitService.GetCurrentBranch(entity.LocalPath) ?? entity.Branch;
                     entity.LastSyncAt = DateTime.Now;
                     entity.ErrorMessage = null;
                     _logger.LogInformation("项目克隆成功: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);

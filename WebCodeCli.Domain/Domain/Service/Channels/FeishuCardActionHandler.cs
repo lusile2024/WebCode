@@ -132,9 +132,15 @@ public class FeishuCardActionHandler : ICallbackHandler<
                 actionValue = eventDto.Action.Option;
             }
 
-            if (string.IsNullOrEmpty(actionValue) && eventDto.Action.Tag == "button" && eventDto.Action.Name == "bind_web_user_submit")
+            if (string.IsNullOrEmpty(actionValue) && eventDto.Action.Tag == "button" && !string.IsNullOrWhiteSpace(eventDto.Action.Name))
             {
-                actionValue = JsonSerializer.Serialize(new { action = "bind_web_user" });
+                actionValue = BuildFormSubmitActionValue(eventDto.Action.Name);
+                if (!string.IsNullOrEmpty(actionValue))
+                {
+                    _logger.LogInformation("🔥 [FeishuCard] 根据按钮名称回填 Action.Value: Name={ActionName}, ActionValue={ActionValue}",
+                        eventDto.Action.Name,
+                        actionValue);
+                }
             }
 
             if (string.IsNullOrEmpty(actionValue))
@@ -170,5 +176,45 @@ public class FeishuCardActionHandler : ICallbackHandler<
             _logger.LogError(ex, "❌ [FeishuCard] 处理卡片回调失败");
             return new CardActionTriggerResponseDto();
         }
+    }
+
+    private static string? BuildFormSubmitActionValue(string actionName)
+    {
+        if (string.Equals(actionName, "bind_web_user_submit", StringComparison.Ordinal))
+        {
+            return JsonSerializer.Serialize(new { action = "bind_web_user" });
+        }
+
+        if (string.Equals(actionName, "create_project_submit", StringComparison.Ordinal))
+        {
+            return JsonSerializer.Serialize(new { action = "create_project" });
+        }
+
+        if (string.Equals(actionName, "fetch_project_branches_submit", StringComparison.Ordinal))
+        {
+            return JsonSerializer.Serialize(new { action = "fetch_project_branches" });
+        }
+
+        if (actionName.StartsWith("update_project_submit__", StringComparison.Ordinal))
+        {
+            var projectId = actionName["update_project_submit__".Length..];
+            return JsonSerializer.Serialize(new
+            {
+                action = "update_project",
+                project_id = projectId
+            });
+        }
+
+        if (actionName.StartsWith("fetch_project_branches_submit__", StringComparison.Ordinal))
+        {
+            var projectId = actionName["fetch_project_branches_submit__".Length..];
+            return JsonSerializer.Serialize(new
+            {
+                action = "fetch_project_branches",
+                project_id = projectId
+            });
+        }
+
+        return null;
     }
 }

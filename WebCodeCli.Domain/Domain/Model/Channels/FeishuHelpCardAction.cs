@@ -40,6 +40,12 @@ public class FeishuHelpCardAction
     public string? SessionId { get; set; }
 
     /// <summary>
+    /// 项目ID（项目管理时使用）
+    /// </summary>
+    [JsonPropertyName("project_id")]
+    public string? ProjectId { get; set; }
+
+    /// <summary>
     /// 聊天Key（会话管理时使用，格式：feishu:{AppId}:{ChatId}）
     /// </summary>
     [JsonPropertyName("chat_key")]
@@ -62,4 +68,22 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("tool_id")]
     public string? ToolId { get; set; }
+
+    /// <summary>
+    /// 当前浏览的目录路径（相对于会话工作区根目录）
+    /// </summary>
+    [JsonPropertyName("directory_path")]
+    public string? DirectoryPath { get; set; }
+
+    /// <summary>
+    /// 当前浏览的文件路径（相对于会话工作区根目录）
+    /// </summary>
+    [JsonPropertyName("file_path")]
+    public string? FilePath { get; set; }
+
+    /// <summary>
+    /// 分页页码（从 0 开始）
+    /// </summary>
+    [JsonPropertyName("page")]
+    public int? Page { get; set; }
 }

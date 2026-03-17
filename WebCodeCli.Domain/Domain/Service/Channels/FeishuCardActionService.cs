@@ -9,6 +9,7 @@ using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
 using System.Text.Json.Nodes;
+using System.Text;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -29,6 +30,9 @@ public class FeishuCardActionService
 
     // 默认回退工具 ID，最终会按当前会话和可用工具解析
     private const string FallbackToolId = "claude-code";
+    private const int SessionDirectoryPageSize = 8;
+    private const int SessionFilePreviewLineLimit = 80;
+    private const int SessionFilePreviewCharacterLimit = 4000;
 
     // 会话映射（从 FeishuChannelService 复制）
     private readonly Dictionary<string, string> _sessionMappings = new();
@@ -119,6 +123,32 @@ public class FeishuCardActionService
                     return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId);
                 case "open_session_manager":
                     return await HandleOpenSessionManagerAsync(chatId, operatorUserId);
+                case "open_project_manager":
+                    return await HandleOpenProjectManagerAsync(action.ChatKey ?? chatId, operatorUserId);
+                case "show_create_project_form":
+                    return await HandleShowCreateProjectFormAsync(action.ChatKey ?? chatId);
+                case "show_edit_project_form":
+                    return await HandleShowEditProjectFormAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                case "create_project":
+                    return await HandleCreateProjectAsync(action.ChatKey ?? chatId, formValueElement, operatorUserId);
+                case "update_project":
+                    return await HandleUpdateProjectAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId);
+                case "clone_project":
+                    return await HandleCloneProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                case "pull_project":
+                    return await HandlePullProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                case "delete_project":
+                    return await HandleDeleteProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                case "fetch_project_branches":
+                    return await HandleFetchProjectBranchesAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId);
+                case "create_session_from_project":
+                    return await HandleCreateSessionFromProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                case "browse_current_session_directory":
+                    return await HandleBrowseCurrentSessionDirectoryAsync(action.ChatKey, chatId, operatorUserId);
+                case "browse_session_directory":
+                    return await HandleBrowseSessionDirectoryAsync(action.SessionId, action.ChatKey, action.DirectoryPath, action.Page, operatorUserId);
+                case "preview_session_file":
+                    return await HandlePreviewSessionFileAsync(action.SessionId, action.ChatKey, action.FilePath, action.DirectoryPath, action.Page, operatorUserId);
                 default:
                     return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未知动作", "error");
             }
@@ -165,6 +195,11 @@ public class FeishuCardActionService
         if (commandId == "feishusessions")
         {
             return await HandleOpenSessionManagerAsync(chatId, null);
+        }
+
+        if (commandId == "feishuprojects")
+        {
+            return await HandleOpenProjectManagerAsync(chatId, null);
         }
 
         var toolId = ResolveToolIdForChat(chatId);
@@ -1059,6 +1094,96 @@ public class FeishuCardActionService
         };
     }
 
+    private CreateProjectRequest BuildProjectRequestFromForm(JsonElement? formValue)
+    {
+        var authType = NormalizeProjectAuthType(GetFormStringValue(formValue, "project_auth_type"));
+        var request = new CreateProjectRequest
+        {
+            Name = GetFormStringValue(formValue, "project_name")?.Trim() ?? string.Empty,
+            GitUrl = GetFormStringValue(formValue, "project_git_url")?.Trim() ?? string.Empty,
+            AuthType = authType,
+            Branch = GetFormStringValue(formValue, "project_branch")?.Trim() ?? string.Empty
+        };
+
+        if (authType == "https")
+        {
+            request.HttpsUsername = GetFormStringValue(formValue, "project_https_username")?.Trim();
+            request.HttpsToken = NormalizeOptionalSecret(GetFormStringValue(formValue, "project_https_token"));
+        }
+
+        return request;
+    }
+
+    private UpdateProjectRequest BuildUpdateProjectRequestFromForm(JsonElement? formValue)
+    {
+        var authType = NormalizeProjectAuthType(GetFormStringValue(formValue, "project_auth_type"));
+        var request = new UpdateProjectRequest
+        {
+            Name = GetFormStringValue(formValue, "project_name")?.Trim(),
+            GitUrl = GetFormStringValue(formValue, "project_git_url")?.Trim(),
+            AuthType = authType,
+            Branch = GetFormStringValue(formValue, "project_branch")?.Trim() ?? string.Empty
+        };
+
+        if (authType == "https")
+        {
+            request.HttpsUsername = GetFormStringValue(formValue, "project_https_username")?.Trim();
+            request.HttpsToken = NormalizeOptionalSecret(GetFormStringValue(formValue, "project_https_token"));
+        }
+        else
+        {
+            request.HttpsUsername = string.Empty;
+            request.HttpsToken = string.Empty;
+        }
+
+        return request;
+    }
+
+    private static string NormalizeProjectAuthType(string? authType)
+    {
+        return (authType ?? "https").Trim().ToLowerInvariant() switch
+        {
+            "" => "https",
+            "http" => "https",
+            "basic" => "https",
+            "token" => "https",
+            "https" => "https",
+            "ssh" => "ssh",
+            _ => "none"
+        };
+    }
+
+    private static string? NormalizeOptionalSecret(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private ProjectServiceScopeContext? CreateProjectScopeContext(string chatKey, string? operatorUserId)
+    {
+        var username = ResolveFeishuUsername(chatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return null;
+        }
+
+        var scope = _serviceProvider.CreateScope();
+        var userContext = scope.ServiceProvider.GetRequiredService<IUserContextService>();
+        userContext.SetCurrentUsername(username);
+        var projectService = scope.ServiceProvider.GetRequiredService<IProjectService>();
+        return new ProjectServiceScopeContext(scope, projectService, username);
+    }
+
+    private static string GetProjectStatusLabel(ProjectInfo project)
+    {
+        return project.Status switch
+        {
+            "ready" => "✅",
+            "cloning" => "🔄",
+            "error" => "❌",
+            _ => "⏳"
+        };
+    }
+
     private ElementsCardV2Dto BuildCreateSessionFormCard(string chatKey, List<object> directories, List<CliToolConfig> availableTools, string? selectedToolId)
     {
         var effectiveToolId = NormalizeToolId(selectedToolId) ?? ResolveDefaultToolId();
@@ -1399,6 +1524,29 @@ public class FeishuCardActionService
 
             elements.Add(new { tag = "hr" });
 
+            if (!string.IsNullOrWhiteSpace(currentSessionId))
+            {
+                elements.Add(new
+                {
+                    tag = "button",
+                    text = new { tag = "plain_text", content = "📂 浏览当前会话目录" },
+                    type = "primary",
+                    behaviors = new[]
+                    {
+                        new
+                        {
+                            type = "callback",
+                            value = new
+                            {
+                                action = "browse_current_session_directory",
+                                chat_key = chatKey
+                            }
+                        }
+                    }
+                });
+                elements.Add(new { tag = "hr" });
+            }
+
             // 添加会话列表
             foreach (var session in sessionEntities.Take(10)) // 最多显示10个最近的会话
             {
@@ -1469,6 +1617,25 @@ public class FeishuCardActionService
 
             elements.Add(new { tag = "hr" });
 
+            elements.Add(new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "📁 项目管理" },
+                type = "default",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "open_project_manager",
+                            chat_key = chatKey
+                        }
+                    }
+                }
+            });
+
             // 添加底部操作按钮
             elements.Add(new
             {
@@ -1532,6 +1699,1329 @@ public class FeishuCardActionService
         {
             _logger.LogError(ex, "处理打开会话管理失败");
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话管理功能暂时不可用，请稍后重试。", "error");
+        }
+    }
+
+    public async Task<ElementsCardV2Dto> BuildProjectManagerCardAsync(string chatId, string? operatorUserId)
+    {
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId)
+            ?? throw new InvalidOperationException("请先绑定 Web 用户，再管理项目");
+        var projects = await projectScope.ProjectService.GetProjectsAsync();
+        return BuildProjectManagerCard(actualChatKey, projects);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleOpenProjectManagerAsync(string? chatId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法打开项目管理", "error");
+        }
+
+        try
+        {
+            var card = await BuildProjectManagerCardAsync(chatId, operatorUserId);
+            return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ {ex.Message}", "error");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "处理打开项目管理失败");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 项目管理功能暂时不可用，请稍后重试。", "error");
+        }
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleShowCreateProjectFormAsync(string? chatId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法打开项目表单", "error"));
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        var card = BuildProjectFormCard(actualChatKey, null, null, null, null);
+        return Task.FromResult(_cardBuilder.BuildCardActionResponseV2(card, string.Empty));
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleShowEditProjectFormAsync(string? chatId, string? projectId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法编辑项目", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+        if (projectScope == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
+        }
+
+        var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+        if (project == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 项目不存在或已被删除", "error");
+        }
+
+        var card = BuildProjectFormCard(actualChatKey, project, null, null, "密码或 Token 留空则保持现有值。");
+        return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleCreateProjectAsync(string? chatId, JsonElement? formValue, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，创建失败", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+        if (projectScope == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
+        }
+
+        var request = BuildProjectRequestFromForm(formValue);
+        if (request.AuthType == "ssh")
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 飞书端当前优先支持 HTTP/HTTPS 项目创建，SSH 项目请在 Web 端维护。", "warning");
+        }
+
+        var (project, errorMessage) = await projectScope.ProjectService.CreateProjectAsync(request);
+        if (project == null)
+        {
+            var card = BuildProjectFormCard(actualChatKey, null, request, null, errorMessage);
+            return _cardBuilder.BuildCardActionResponseV2(card, errorMessage ?? "创建项目失败", "error");
+        }
+
+        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
+        return _cardBuilder.BuildCardActionResponseV2(managerCard, "✅ 项目已保存，可继续克隆或创建会话", "success");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleUpdateProjectAsync(string? chatId, string? projectId, JsonElement? formValue, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，更新失败", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+        if (projectScope == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
+        }
+
+        var existingProject = await projectScope.ProjectService.GetProjectAsync(projectId);
+        if (existingProject == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 项目不存在或已被删除", "error");
+        }
+
+        var request = BuildUpdateProjectRequestFromForm(formValue);
+        var (success, errorMessage) = await projectScope.ProjectService.UpdateProjectAsync(projectId, request);
+        if (!success)
+        {
+            var requestState = BuildProjectRequestFromForm(formValue);
+            var card = BuildProjectFormCard(actualChatKey, existingProject, requestState, null, errorMessage ?? "更新项目失败");
+            return _cardBuilder.BuildCardActionResponseV2(card, errorMessage ?? "更新项目失败", "error");
+        }
+
+        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
+        return _cardBuilder.BuildCardActionResponseV2(managerCard, "✅ 项目配置已更新", "success");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleDeleteProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，删除失败", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+        if (projectScope == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
+        }
+
+        var (success, errorMessage) = await projectScope.ProjectService.DeleteProjectAsync(projectId);
+        if (!success)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ {errorMessage ?? "删除项目失败"}", "error");
+        }
+
+        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
+        return _cardBuilder.BuildCardActionResponseV2(managerCard, "🗑️ 项目已删除", "success");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleFetchProjectBranchesAsync(string? chatId, string? projectId, JsonElement? formValue, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法获取分支", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+        if (projectScope == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
+        }
+
+        var formState = BuildProjectRequestFromForm(formValue);
+        if (string.IsNullOrWhiteSpace(formState.GitUrl))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 请先填写 Git 仓库地址", "warning");
+        }
+
+        var project = string.IsNullOrWhiteSpace(projectId)
+            ? null
+            : await projectScope.ProjectService.GetProjectAsync(projectId);
+        var (branches, errorMessage) = await projectScope.ProjectService.GetBranchesAsync(new GetBranchesRequest
+        {
+            GitUrl = formState.GitUrl,
+            AuthType = formState.AuthType,
+            HttpsUsername = formState.HttpsUsername,
+            HttpsToken = formState.HttpsToken
+        });
+
+        var helperText = errorMessage;
+        if (string.IsNullOrWhiteSpace(helperText))
+        {
+            helperText = branches.Count == 0
+                ? "未读取到远程分支，分支留空时将使用远端默认分支。"
+                : $"已获取 {branches.Count} 个分支，可从下方列表复制后填写到分支字段。";
+        }
+
+        var card = BuildProjectFormCard(actualChatKey, project, formState, branches, helperText);
+        var toastType = string.IsNullOrWhiteSpace(errorMessage) ? "info" : "warning";
+        var toastMessage = string.IsNullOrWhiteSpace(errorMessage) ? "🔄 已刷新远程分支列表" : $"⚠️ {errorMessage}";
+        return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, toastType);
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleCloneProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法克隆项目", "error"));
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+                if (projectScope == null)
+                {
+                    return;
+                }
+
+                var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+                var projectName = project?.Name ?? projectId;
+                var (success, errorMessage) = await projectScope.ProjectService.CloneProjectAsync(projectId);
+                var message = success
+                    ? $"✅ 项目 {projectName} 克隆完成"
+                    : $"❌ 项目 {projectName} 克隆失败：{errorMessage ?? "未知错误"}";
+                await _feishuChannel.SendMessageAsync(actualChatKey, message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "后台克隆项目失败: ProjectId={ProjectId}", projectId);
+                await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 项目克隆失败：{ex.Message}");
+            }
+        });
+
+        return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台克隆项目，完成后会发送通知", "info"));
+    }
+
+    private Task<CardActionTriggerResponseDto> HandlePullProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法拉取项目", "error"));
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+                if (projectScope == null)
+                {
+                    return;
+                }
+
+                var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+                var projectName = project?.Name ?? projectId;
+                var (success, errorMessage) = await projectScope.ProjectService.PullProjectAsync(projectId);
+                var message = success
+                    ? $"✅ 项目 {projectName} 已拉取最新代码"
+                    : $"❌ 项目 {projectName} 拉取失败：{errorMessage ?? "未知错误"}";
+                await _feishuChannel.SendMessageAsync(actualChatKey, message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "后台拉取项目失败: ProjectId={ProjectId}", projectId);
+                await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 项目拉取失败：{ex.Message}");
+            }
+        });
+
+        return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台拉取项目，完成后会发送通知", "info"));
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleCreateSessionFromProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法基于项目创建会话", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
+        if (projectScope == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
+        }
+
+        var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+        if (project == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 项目不存在或已被删除", "error");
+        }
+
+        if (!string.Equals(project.Status, "ready", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(project.LocalPath) || !Directory.Exists(project.LocalPath))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 项目尚未就绪，请先完成克隆", "warning");
+        }
+
+        var toolId = ResolveToolIdForChat(actualChatKey, projectScope.Username);
+        var newSessionId = _feishuChannel.CreateNewSession(new FeishuIncomingMessage
+        {
+            ChatId = actualChatKey,
+            SenderName = projectScope.Username
+        }, project.LocalPath, toolId);
+
+        _feishuChannel.SwitchCurrentSession(actualChatKey, newSessionId, projectScope.Username);
+        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
+        return _cardBuilder.BuildCardActionResponseV2(
+            managerCard,
+            $"✅ 已基于项目 {project.Name} 创建并切换到新会话 {newSessionId[..8]}...",
+            "success");
+    }
+
+    private ElementsCardV2Dto BuildProjectManagerCard(string chatKey, List<ProjectInfo> projects)
+    {
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## 📁 项目管理\n当前共有 **{projects.Count}** 个项目。\n支持 Git/TFS 项目；`https` 认证表示 **HTTP/HTTPS 用户名 + 密码或 Token**。\n分支留空时将使用远端默认分支。"
+                }
+            },
+            new { tag = "hr" },
+            BuildActionButton(
+                "➕ 新建项目",
+                "primary",
+                new
+                {
+                    action = "show_create_project_form",
+                    chat_key = chatKey
+                })
+        };
+
+        if (projects.Count == 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "plain_text", content = "暂无项目，可先创建一个 Git/TFS 项目。" }
+            });
+        }
+        else
+        {
+            foreach (var project in projects.Take(12))
+            {
+                var branchDisplay = string.IsNullOrWhiteSpace(project.Branch) ? "远端默认分支" : project.Branch;
+                var lastSyncText = project.LastSyncAt.HasValue
+                    ? project.LastSyncAt.Value.ToString("yyyy-MM-dd HH:mm")
+                    : "未同步";
+                var gitUrlDisplay = string.IsNullOrWhiteSpace(project.GitUrl) ? "(ZIP 项目)" : project.GitUrl;
+
+                elements.Add(new { tag = "hr" });
+                elements.Add(new
+                {
+                    tag = "div",
+                    text = new
+                    {
+                        tag = "lark_md",
+                        content = $"### {GetProjectStatusLabel(project)} {project.Name}\n仓库: `{gitUrlDisplay}`\n分支: `{branchDisplay}`\n状态: `{project.Status}` · 最后同步: `{lastSyncText}`"
+                    }
+                });
+
+                if (!string.IsNullOrWhiteSpace(project.ErrorMessage))
+                {
+                    elements.Add(new
+                    {
+                        tag = "div",
+                        text = new
+                        {
+                            tag = "lark_md",
+                            content = $"**错误信息**\n{project.ErrorMessage}"
+                        }
+                    });
+                }
+
+                if (!string.IsNullOrWhiteSpace(project.GitUrl))
+                {
+                    elements.Add(BuildActionButton(
+                        string.Equals(project.Status, "ready", StringComparison.OrdinalIgnoreCase) ? "🔄 拉取最新代码" : "📥 克隆项目",
+                        "default",
+                        new
+                        {
+                            action = string.Equals(project.Status, "ready", StringComparison.OrdinalIgnoreCase) ? "pull_project" : "clone_project",
+                            chat_key = chatKey,
+                            project_id = project.ProjectId
+                        }));
+
+                    elements.Add(BuildActionButton(
+                        "✏️ 编辑项目",
+                        "default",
+                        new
+                        {
+                            action = "show_edit_project_form",
+                            chat_key = chatKey,
+                            project_id = project.ProjectId
+                        }));
+                }
+
+                if (string.Equals(project.Status, "ready", StringComparison.OrdinalIgnoreCase))
+                {
+                    elements.Add(BuildActionButton(
+                        "🆕 基于项目创建会话",
+                        "primary",
+                        new
+                        {
+                            action = "create_session_from_project",
+                            chat_key = chatKey,
+                            project_id = project.ProjectId
+                        }));
+                }
+
+                elements.Add(BuildActionButton(
+                    "🗑️ 删除项目",
+                    "danger",
+                    new
+                    {
+                        action = "delete_project",
+                        chat_key = chatKey,
+                        project_id = project.ProjectId
+                    }));
+            }
+        }
+
+        elements.Add(new { tag = "hr" });
+        elements.Add(BuildActionButton(
+            "📋 返回会话管理",
+            "default",
+            new
+            {
+                action = "open_session_manager"
+            }));
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "green",
+                Title = new HeaderTitleElement { Content = "📁 项目管理" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private ElementsCardV2Dto BuildProjectFormCard(
+        string chatKey,
+        ProjectInfo? project,
+        CreateProjectRequest? formState,
+        List<string>? branchSuggestions,
+        string? helperText)
+    {
+        var effectiveState = formState ?? new CreateProjectRequest
+        {
+            Name = project?.Name ?? string.Empty,
+            GitUrl = project?.GitUrl ?? string.Empty,
+            AuthType = project?.AuthType ?? "https",
+            Branch = project?.Branch ?? string.Empty
+        };
+
+        if (string.IsNullOrWhiteSpace(effectiveState.AuthType))
+        {
+            effectiveState.AuthType = "https";
+        }
+
+        var actionName = project == null ? "create_project" : "update_project";
+        var submitButtonName = project == null
+            ? "create_project_submit"
+            : $"update_project_submit__{project.ProjectId}";
+        var fetchBranchesButtonName = project == null
+            ? "fetch_project_branches_submit"
+            : $"fetch_project_branches_submit__{project.ProjectId}";
+        var title = project == null ? "📁 新建项目" : $"✏️ 编辑项目：{project.Name}";
+        var tips = new List<string>
+        {
+            "支持 `none` / `https` 两种常用模式；TFS 请填写 `https`。",
+            "`https` 表示 HTTP/HTTPS 用户名 + 密码或 Token。",
+            "分支留空时将使用远端默认分支。",
+            "如果你在此卡片里刷新了分支列表，提交前需要重新输入密码或 Token。"
+        };
+
+        if (!string.IsNullOrWhiteSpace(helperText))
+        {
+            tips.Add(helperText);
+        }
+
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## {title}\n{string.Join("\n", tips.Select(tip => $"- {tip}"))}"
+                }
+            },
+            new { tag = "hr" },
+            new
+            {
+                tag = "form",
+                name = project == null ? "create_project_form" : "update_project_form",
+                elements = new object[]
+                {
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "project_name",
+                        label = new { tag = "plain_text", content = "项目名称" },
+                        placeholder = new { tag = "plain_text", content = "例如：WmsServerV4" },
+                        default_value = effectiveState.Name
+                    },
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "project_git_url",
+                        label = new { tag = "plain_text", content = "Git 仓库地址" },
+                        placeholder = new { tag = "plain_text", content = "http://sql-for-tfs2017:8080/tfs/..." },
+                        default_value = effectiveState.GitUrl
+                    },
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "project_auth_type",
+                        label = new { tag = "plain_text", content = "认证方式" },
+                        placeholder = new { tag = "plain_text", content = "none 或 https" },
+                        default_value = effectiveState.AuthType
+                    },
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "project_https_username",
+                        label = new { tag = "plain_text", content = "HTTP/HTTPS 用户名" },
+                        placeholder = new { tag = "plain_text", content = "TFS 账号；Token 场景可留空" },
+                        default_value = effectiveState.HttpsUsername ?? string.Empty
+                    },
+                    new
+                    {
+                        tag = "input",
+                        input_type = "password",
+                        name = "project_https_token",
+                        label = new { tag = "plain_text", content = "密码或 Token" },
+                        placeholder = new { tag = "plain_text", content = "请输入密码或 Token" }
+                    },
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "project_branch",
+                        label = new { tag = "plain_text", content = "分支（可留空）" },
+                        placeholder = new { tag = "plain_text", content = "留空使用远端默认分支" },
+                        default_value = effectiveState.Branch ?? string.Empty
+                    },
+                    new
+                    {
+                        tag = "column_set",
+                        flex_mode = "none",
+                        background_style = "default",
+                        columns = new object[]
+                        {
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "button",
+                                        text = new { tag = "plain_text", content = "刷新远程分支" },
+                                        type = "default",
+                                        action_type = "form_submit",
+                                        name = fetchBranchesButtonName,
+                                        value = new
+                                        {
+                                            action = "fetch_project_branches",
+                                            chat_key = chatKey,
+                                            project_id = project?.ProjectId
+                                        }
+                                    }
+                                }
+                            },
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "button",
+                                        text = new { tag = "plain_text", content = project == null ? "保存项目" : "保存修改" },
+                                        type = "primary",
+                                        action_type = "form_submit",
+                                        name = submitButtonName,
+                                        value = new
+                                        {
+                                            action = actionName,
+                                            chat_key = chatKey,
+                                            project_id = project?.ProjectId
+                                        }
+                                    }
+                                }
+                            },
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "button",
+                                        text = new { tag = "plain_text", content = "返回项目列表" },
+                                        type = "default",
+                                        behaviors = new[]
+                                        {
+                                            new
+                                            {
+                                                type = "callback",
+                                                value = new
+                                                {
+                                                    action = "open_project_manager",
+                                                    chat_key = chatKey
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        if (branchSuggestions is { Count: > 0 })
+        {
+            elements.Add(new { tag = "hr" });
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"**远程分支**\n{string.Join("\n", branchSuggestions.Select(branch => $"- `{branch}`"))}"
+                }
+            });
+        }
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "orange",
+                Title = new HeaderTitleElement { Content = title }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleBrowseCurrentSessionDirectoryAsync(string? chatKey, string? chatId, string? operatorUserId)
+    {
+        var actualChatKey = !string.IsNullOrWhiteSpace(chatKey)
+            ? NormalizeChatKey(chatKey)
+            : (!string.IsNullOrWhiteSpace(chatId) ? NormalizeChatKey(chatId) : string.Empty);
+
+        if (string.IsNullOrWhiteSpace(actualChatKey))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法浏览当前会话目录", "error"));
+        }
+
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再浏览当前会话目录", "error"));
+        }
+
+        var currentSessionId = _feishuChannel.GetCurrentSession(actualChatKey, username);
+        if (string.IsNullOrWhiteSpace(currentSessionId))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前没有活跃会话，请先切换或创建会话", "warning"));
+        }
+
+        return HandleBrowseSessionDirectoryAsync(currentSessionId, actualChatKey, null, 0, operatorUserId);
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleBrowseSessionDirectoryAsync(string? sessionId, string? chatKey, string? directoryPath, int? page, string? operatorUserId)
+    {
+        if (!TryResolveActiveSessionContext(sessionId, chatKey, operatorUserId, out var actualChatKey, out var activeSessionId, out var errorResponse))
+        {
+            return Task.FromResult(errorResponse!);
+        }
+
+        try
+        {
+            var workspacePath = _cliExecutor.GetSessionWorkspacePath(activeSessionId);
+            if (!Directory.Exists(workspacePath))
+            {
+                return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 当前会话工作目录不存在或已失效", "error"));
+            }
+
+            var normalizedDirectoryPath = NormalizeWorkspaceRelativePath(directoryPath);
+            var fullDirectoryPath = ResolveWorkspaceFullPath(workspacePath, normalizedDirectoryPath);
+            if (!Directory.Exists(fullDirectoryPath))
+            {
+                return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 目录不存在或已被删除", "error"));
+            }
+
+            var entries = GetDirectoryEntries(workspacePath, fullDirectoryPath);
+            var totalPages = Math.Max(1, (int)Math.Ceiling(entries.Count / (double)SessionDirectoryPageSize));
+            var pageIndex = Math.Clamp(page ?? 0, 0, totalPages - 1);
+            var pagedEntries = entries
+                .Skip(pageIndex * SessionDirectoryPageSize)
+                .Take(SessionDirectoryPageSize)
+                .ToList();
+
+            var card = BuildSessionDirectoryCard(
+                actualChatKey,
+                activeSessionId,
+                workspacePath,
+                normalizedDirectoryPath,
+                pageIndex,
+                totalPages,
+                entries.Count,
+                pagedEntries);
+
+            return Task.FromResult(_cardBuilder.BuildCardActionResponseV2(card, string.Empty));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(ex, "[Feishu] 浏览会话目录被拒绝: SessionId={SessionId}, DirectoryPath={DirectoryPath}", activeSessionId, directoryPath);
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法访问该目录", "error"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Feishu] 浏览会话目录失败: SessionId={SessionId}, DirectoryPath={DirectoryPath}", activeSessionId, directoryPath);
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 目录浏览失败，请稍后重试", "error"));
+        }
+    }
+
+    private Task<CardActionTriggerResponseDto> HandlePreviewSessionFileAsync(string? sessionId, string? chatKey, string? filePath, string? directoryPath, int? page, string? operatorUserId)
+    {
+        if (!TryResolveActiveSessionContext(sessionId, chatKey, operatorUserId, out var actualChatKey, out var activeSessionId, out var errorResponse))
+        {
+            return Task.FromResult(errorResponse!);
+        }
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 文件路径不能为空", "error"));
+        }
+
+        try
+        {
+            var workspacePath = _cliExecutor.GetSessionWorkspacePath(activeSessionId);
+            if (!Directory.Exists(workspacePath))
+            {
+                return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 当前会话工作目录不存在或已失效", "error"));
+            }
+
+            var normalizedFilePath = NormalizeWorkspaceRelativePath(filePath);
+            var fullFilePath = ResolveWorkspaceFullPath(workspacePath, normalizedFilePath);
+            if (!File.Exists(fullFilePath))
+            {
+                return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 文件不存在或已被删除", "error"));
+            }
+
+            var fileBytes = _cliExecutor.GetWorkspaceFile(activeSessionId, normalizedFilePath);
+            if (fileBytes == null)
+            {
+                return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 文件读取失败，请稍后重试", "error"));
+            }
+
+            var card = BuildSessionFilePreviewCard(
+                actualChatKey,
+                activeSessionId,
+                workspacePath,
+                normalizedFilePath,
+                NormalizeWorkspaceRelativePath(directoryPath),
+                Math.Max(page ?? 0, 0),
+                fileBytes);
+
+            return Task.FromResult(_cardBuilder.BuildCardActionResponseV2(card, string.Empty));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(ex, "[Feishu] 预览会话文件被拒绝: SessionId={SessionId}, FilePath={FilePath}", activeSessionId, filePath);
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法访问该文件", "error"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Feishu] 预览会话文件失败: SessionId={SessionId}, FilePath={FilePath}", activeSessionId, filePath);
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 文件预览失败，请稍后重试", "error"));
+        }
+    }
+
+    private bool TryResolveActiveSessionContext(
+        string? sessionId,
+        string? chatKey,
+        string? operatorUserId,
+        out string actualChatKey,
+        out string activeSessionId,
+        out CardActionTriggerResponseDto? errorResponse)
+    {
+        actualChatKey = string.Empty;
+        activeSessionId = string.Empty;
+        errorResponse = null;
+
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
+        {
+            errorResponse = _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，请重新打开会话管理后再试", "error");
+            return false;
+        }
+
+        actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            errorResponse = _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再浏览会话目录", "error");
+            return false;
+        }
+
+        var currentSessionId = _feishuChannel.GetCurrentSession(actualChatKey, username);
+        if (string.IsNullOrWhiteSpace(currentSessionId))
+        {
+            errorResponse = _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前没有活跃会话，请先切换或创建会话", "warning");
+            return false;
+        }
+
+        if (!string.Equals(currentSessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+        {
+            errorResponse = _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已变化，请重新打开目录浏览", "warning");
+            return false;
+        }
+
+        activeSessionId = currentSessionId;
+        return true;
+    }
+
+    private ElementsCardV2Dto BuildSessionDirectoryCard(
+        string chatKey,
+        string sessionId,
+        string workspacePath,
+        string directoryPath,
+        int pageIndex,
+        int totalPages,
+        int totalEntries,
+        List<SessionDirectoryEntry> entries)
+    {
+        var displayPath = GetDirectoryDisplayPath(directoryPath);
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## 📂 当前会话目录\n会话: `{GetShortSessionLabel(sessionId)}`\n工作区: `{workspacePath}`\n当前位置: `{displayPath}`\n共 `{totalEntries}` 项，第 `{pageIndex + 1}/{totalPages}` 页"
+                }
+            },
+            new { tag = "hr" }
+        };
+
+        if (entries.Count == 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "plain_text", content = "当前目录为空" }
+            });
+        }
+        else
+        {
+            foreach (var entry in entries)
+            {
+                elements.Add(BuildSessionDirectoryEntryRow(entry, chatKey, sessionId, directoryPath, pageIndex));
+            }
+        }
+
+        var parentDirectoryPath = GetParentDirectoryPath(directoryPath);
+        if (!string.IsNullOrWhiteSpace(directoryPath))
+        {
+            elements.Add(BuildActionButton(
+                "⬆️ 返回上一级",
+                "default",
+                new
+                {
+                    action = "browse_session_directory",
+                    chat_key = chatKey,
+                    session_id = sessionId,
+                    directory_path = parentDirectoryPath,
+                    page = 0
+                }));
+        }
+
+        if (pageIndex > 0)
+        {
+            elements.Add(BuildActionButton(
+                "⬅️ 上一页",
+                "default",
+                new
+                {
+                    action = "browse_session_directory",
+                    chat_key = chatKey,
+                    session_id = sessionId,
+                    directory_path = directoryPath,
+                    page = pageIndex - 1
+                }));
+        }
+
+        if (pageIndex + 1 < totalPages)
+        {
+            elements.Add(BuildActionButton(
+                "➡️ 下一页",
+                "default",
+                new
+                {
+                    action = "browse_session_directory",
+                    chat_key = chatKey,
+                    session_id = sessionId,
+                    directory_path = directoryPath,
+                    page = pageIndex + 1
+                }));
+        }
+
+        elements.Add(BuildActionButton(
+            "📋 返回会话管理",
+            "primary",
+            new
+            {
+                action = "open_session_manager"
+            }));
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = "📂 当前会话目录" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private ElementsCardV2Dto BuildSessionFilePreviewCard(
+        string chatKey,
+        string sessionId,
+        string workspacePath,
+        string filePath,
+        string directoryPath,
+        int pageIndex,
+        byte[] fileBytes)
+    {
+        var fileName = Path.GetFileName(filePath);
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## 📄 文件预览\n会话: `{GetShortSessionLabel(sessionId)}`\n工作区: `{workspacePath}`\n文件: `{filePath}`\n大小: `{FormatFileSize(fileBytes.LongLength)}`"
+                }
+            },
+            new { tag = "hr" }
+        };
+
+        var preview = TryBuildTextPreview(fileBytes);
+        if (preview == null)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "当前文件不是可直接预览的文本文件，请在 Web 端查看完整内容。"
+                }
+            });
+        }
+        else
+        {
+            var notice = preview.Value.IsTruncated ? "\n\n_预览内容已截断_" : string.Empty;
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"### {fileName}\n```text\n{SanitizeCodeFence(preview.Value.Content)}\n```{notice}"
+                }
+            });
+        }
+
+        elements.Add(BuildActionButton(
+            "📂 返回目录",
+            "default",
+            new
+            {
+                action = "browse_session_directory",
+                chat_key = chatKey,
+                session_id = sessionId,
+                directory_path = directoryPath,
+                page = pageIndex
+            }));
+
+        elements.Add(BuildActionButton(
+            "📋 返回会话管理",
+            "primary",
+            new
+            {
+                action = "open_session_manager"
+            }));
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "turquoise",
+                Title = new HeaderTitleElement { Content = "📄 文件预览" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private List<SessionDirectoryEntry> GetDirectoryEntries(string workspacePath, string directoryPath)
+    {
+        var directories = Directory.GetDirectories(directoryPath)
+            .Select(path => new DirectoryInfo(path))
+            .Where(info => !info.Name.StartsWith(".", StringComparison.Ordinal))
+            .Select(info => new SessionDirectoryEntry(
+                info.Name,
+                Path.GetRelativePath(workspacePath, info.FullName).Replace("\\", "/"),
+                true,
+                0,
+                string.Empty))
+            .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
+
+        var files = Directory.GetFiles(directoryPath)
+            .Select(path => new FileInfo(path))
+            .Where(info => !info.Name.StartsWith(".", StringComparison.Ordinal))
+            .Select(info => new SessionDirectoryEntry(
+                info.Name,
+                Path.GetRelativePath(workspacePath, info.FullName).Replace("\\", "/"),
+                false,
+                info.Length,
+                info.Extension))
+            .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
+
+        return directories.Concat(files).ToList();
+    }
+
+    private object BuildSessionDirectoryEntryRow(
+        SessionDirectoryEntry entry,
+        string chatKey,
+        string sessionId,
+        string directoryPath,
+        int pageIndex)
+    {
+        var icon = entry.IsDirectory ? "📁" : "📄";
+        var meta = entry.IsDirectory
+            ? "目录"
+            : $"{FormatFileSize(entry.Size)}{(string.IsNullOrWhiteSpace(entry.Extension) ? string.Empty : $" · {entry.Extension}")}";
+
+        object callbackValue = entry.IsDirectory
+            ? new
+            {
+                action = "browse_session_directory",
+                chat_key = chatKey,
+                session_id = sessionId,
+                directory_path = entry.RelativePath,
+                page = 0
+            }
+            : new
+            {
+                action = "preview_session_file",
+                chat_key = chatKey,
+                session_id = sessionId,
+                file_path = entry.RelativePath,
+                directory_path = directoryPath,
+                page = pageIndex
+            };
+
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            background_style = "default",
+            columns = new object[]
+            {
+                new
+                {
+                    tag = "column",
+                    width = "weighted",
+                    weight = 5,
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "div",
+                            text = new
+                            {
+                                tag = "lark_md",
+                                content = $"**{icon} {entry.Name}**\n`{entry.RelativePath}`\n{meta}"
+                            }
+                        }
+                    }
+                },
+                new
+                {
+                    tag = "column",
+                    width = "auto",
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "button",
+                            text = new { tag = "plain_text", content = entry.IsDirectory ? "打开" : "查看" },
+                            type = entry.IsDirectory ? "primary" : "default",
+                            behaviors = new[]
+                            {
+                                new
+                                {
+                                    type = "callback",
+                                    value = callbackValue
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    private static object BuildActionButton(string text, string type, object value)
+    {
+        return new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = text },
+            type,
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value
+                }
+            }
+        };
+    }
+
+    private static string NormalizeWorkspaceRelativePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var normalized = path
+            .Replace("\\", "/")
+            .Trim()
+            .Trim('/');
+
+        return normalized == "." ? string.Empty : normalized;
+    }
+
+    private static string GetParentDirectoryPath(string directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath))
+        {
+            return string.Empty;
+        }
+
+        var segments = directoryPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length <= 1 ? string.Empty : string.Join("/", segments.Take(segments.Length - 1));
+    }
+
+    private static string GetDirectoryDisplayPath(string directoryPath)
+    {
+        return string.IsNullOrWhiteSpace(directoryPath) ? "/" : $"/{directoryPath}";
+    }
+
+    private static string GetShortSessionLabel(string sessionId)
+    {
+        return sessionId.Length <= 8 ? sessionId : $"{sessionId[..8]}...";
+    }
+
+    private static string ResolveWorkspaceFullPath(string workspacePath, string relativePath)
+    {
+        var fullPath = string.IsNullOrWhiteSpace(relativePath)
+            ? Path.GetFullPath(workspacePath)
+            : Path.GetFullPath(Path.Combine(workspacePath, relativePath.Replace("/", Path.DirectorySeparatorChar.ToString())));
+
+        if (!IsPathWithinRoot(workspacePath, fullPath))
+        {
+            throw new UnauthorizedAccessException($"超出工作区范围: {relativePath}");
+        }
+
+        return fullPath;
+    }
+
+    private static bool IsPathWithinRoot(string rootPath, string targetPath)
+    {
+        var normalizedRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedTarget = Path.GetFullPath(targetPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (string.Equals(normalizedRoot, normalizedTarget, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return normalizedTarget.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || normalizedTarget.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (string Content, bool IsTruncated)? TryBuildTextPreview(byte[] fileBytes)
+    {
+        if (fileBytes.Any(static b => b == 0))
+        {
+            return null;
+        }
+
+        var content = Encoding.UTF8.GetString(fileBytes);
+        var normalizedContent = content.Replace("\r\n", "\n");
+        var lines = normalizedContent.Split('\n');
+        var previewLines = lines.Take(SessionFilePreviewLineLimit).ToList();
+        var previewContent = string.Join("\n", previewLines);
+
+        var isTruncated = lines.Length > SessionFilePreviewLineLimit || previewContent.Length > SessionFilePreviewCharacterLimit;
+        if (previewContent.Length > SessionFilePreviewCharacterLimit)
+        {
+            previewContent = previewContent[..SessionFilePreviewCharacterLimit];
+        }
+
+        return (previewContent, isTruncated);
+    }
+
+    private static string SanitizeCodeFence(string content)
+    {
+        return content.Replace("```", "'''");
+    }
+
+    private static string FormatFileSize(long size)
+    {
+        var units = new[] { "B", "KB", "MB", "GB" };
+        double value = size;
+        var unitIndex = 0;
+
+        while (value >= 1024 && unitIndex < units.Length - 1)
+        {
+            value /= 1024;
+            unitIndex++;
+        }
+
+        return unitIndex == 0 ? $"{size} B" : $"{value:0.#} {units[unitIndex]}";
+    }
+
+    private sealed record SessionDirectoryEntry(
+        string Name,
+        string RelativePath,
+        bool IsDirectory,
+        long Size,
+        string Extension);
+
+    private sealed class ProjectServiceScopeContext(IServiceScope scope, IProjectService projectService, string username) : IDisposable
+    {
+        public IProjectService ProjectService { get; } = projectService;
+
+        public string Username { get; } = username;
+
+        public void Dispose()
+        {
+            scope.Dispose();
         }
     }
 

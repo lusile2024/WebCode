@@ -28,7 +28,7 @@ public class ProjectInfo
     /// <summary>
     /// 分支名称
     /// </summary>
-    public string Branch { get; set; } = "main";
+    public string Branch { get; set; } = string.Empty;
     
     /// <summary>
     /// 本地路径
@@ -87,12 +87,12 @@ public class CreateProjectRequest
     public string AuthType { get; set; } = "none";
     
     /// <summary>
-    /// HTTPS 用户名
+    /// HTTP/HTTPS 用户名
     /// </summary>
     public string? HttpsUsername { get; set; }
     
     /// <summary>
-    /// HTTPS Token
+    /// HTTP/HTTPS 密码或 Token
     /// </summary>
     public string? HttpsToken { get; set; }
     
@@ -109,7 +109,7 @@ public class CreateProjectRequest
     /// <summary>
     /// 分支名称
     /// </summary>
-    public string Branch { get; set; } = "main";
+    public string Branch { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -144,12 +144,12 @@ public class UpdateProjectRequest
     public string? AuthType { get; set; }
     
     /// <summary>
-    /// HTTPS 用户名
+    /// HTTP/HTTPS 用户名
     /// </summary>
     public string? HttpsUsername { get; set; }
     
     /// <summary>
-    /// HTTPS Token
+    /// HTTP/HTTPS 密码或 Token
     /// </summary>
     public string? HttpsToken { get; set; }
     
@@ -185,12 +185,12 @@ public class GetBranchesRequest
     public string AuthType { get; set; } = "none";
     
     /// <summary>
-    /// HTTPS 用户名
+    /// HTTP/HTTPS 用户名
     /// </summary>
     public string? HttpsUsername { get; set; }
     
     /// <summary>
-    /// HTTPS Token
+    /// HTTP/HTTPS 密码或 Token
     /// </summary>
     public string? HttpsToken { get; set; }
     
@@ -216,12 +216,12 @@ public class GitCredentials
     public string AuthType { get; set; } = "none";
     
     /// <summary>
-    /// HTTPS 用户名
+    /// HTTP/HTTPS 用户名
     /// </summary>
     public string? HttpsUsername { get; set; }
     
     /// <summary>
-    /// HTTPS Token
+    /// HTTP/HTTPS 密码或 Token
     /// </summary>
     public string? HttpsToken { get; set; }
     

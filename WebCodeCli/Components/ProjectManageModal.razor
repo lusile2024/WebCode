@@ -112,7 +112,7 @@
                                                 <div class="flex items-center gap-3 text-xs text-gray-400">
                                                     @if (!IsZipProject(project))
                                                     {
-                                                        <span>@T("project.branch"): @project.Branch</span>
+                                                        <span>@T("project.branch"): @(string.IsNullOrWhiteSpace(project.Branch) ? T("project.defaultBranch") : project.Branch)</span>
                                                     }
                                                     @if (project.LastSyncAt.HasValue)
                                                     {
@@ -526,7 +526,7 @@
     private string? _formHttpsToken = null;
     private string? _formSshPrivateKey = null;
     private string? _formSshPassphrase = null;
-    private string _formBranch = "main";
+    private string _formBranch = string.Empty;
     private string _formError = string.Empty;
     private bool _isSaving = false;
     
@@ -955,7 +955,7 @@
         _formHttpsToken = null;
         _formSshPrivateKey = null;
         _formSshPassphrase = null;
-        _formBranch = "main";
+        _formBranch = string.Empty;
         _formError = string.Empty;
         _availableBranches.Clear();
         _authTypeSelect?.CloseDropdown();

@@ -27,6 +27,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     private readonly IFeishuCardKitClient _cardKit;
     private readonly ICliExecutorService _cliExecutor;
     private readonly IFeishuChannelService _feishuChannel;
+    private readonly FeishuCardActionService _cardActionService;
 
     /// <summary>
     /// 静态消息收到事件（解决 SDK 创建不同实例的问题）
@@ -53,7 +54,8 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         FeishuHelpCardBuilder cardBuilder,
         IFeishuCardKitClient cardKit,
         ICliExecutorService cliExecutor,
-        IFeishuChannelService feishuChannel)
+        IFeishuChannelService feishuChannel,
+        FeishuCardActionService cardActionService)
     {
         _options = options.Value;
         _logger = logger;
@@ -63,6 +65,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         _cardKit = cardKit;
         _cliExecutor = cliExecutor;
         _feishuChannel = feishuChannel;
+        _cardActionService = cardActionService;
 
         // 启动定时清理器（每 5 分钟清理一次过期消息）
         _cleanupTimer = new System.Threading.Timer(
@@ -190,6 +193,20 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 "feishusessions",
                 message.MessageId,
                 () => HandleSessionsCommandAsync(message.ChatId, message.MessageId, boundWebUsername));
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(trimmedContent) &&
+            (trimmedContent.StartsWith("feishuprojects", StringComparison.OrdinalIgnoreCase) ||
+             trimmedContent.StartsWith("/feishuprojects", StringComparison.OrdinalIgnoreCase) ||
+             trimmedContent.StartsWith("feishuproject", StringComparison.OrdinalIgnoreCase) ||
+             trimmedContent.StartsWith("/feishuproject", StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogInformation("🔥 [Feishu] 检测到 feishuprojects 命令!");
+            EnqueueMessageWork(
+                "feishuprojects",
+                message.MessageId,
+                () => HandleProjectsCommandAsync(message.ChatId, message.MessageId, senderId));
             return;
         }
 
@@ -573,6 +590,25 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 tag = "hr"
             });
 
+            elements.Add(new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "📁 项目管理" },
+                type = "default",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "open_project_manager",
+                            chat_key = chatKey
+                        }
+                    }
+                }
+            });
+
             // 添加底部操作按钮
             elements.Add(new
             {
@@ -611,6 +647,24 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         {
             _logger.LogError(ex, "处理sessions命令失败");
             await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 会话管理功能暂时不可用，请稍后重试。");
+        }
+    }
+
+    /// <summary>
+    /// 处理 /feishuprojects 命令，返回项目管理卡片
+    /// </summary>
+    private async Task HandleProjectsCommandAsync(string chatId, string replyToMessageId, string operatorUserId)
+    {
+        try
+        {
+            var card = await _cardActionService.BuildProjectManagerCardAsync(chatId, operatorUserId);
+            var messageId = await _cardKit.ReplyElementsCardAsync(replyToMessageId, card);
+            _logger.LogInformation("✅ [Feishu] 项目管理卡片已发送, MessageId={MessageId}", messageId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "处理 feishuprojects 命令失败");
+            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 项目管理功能暂时不可用，请稍后重试。");
         }
     }
 

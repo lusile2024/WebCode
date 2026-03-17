@@ -220,6 +220,16 @@ public class FeishuCommandService
                 Usage = "/feishusessions",
                 ExecuteText = "/feishusessions",
                 Category = "feishu_builtin"
+            },
+            new()
+            {
+                ToolId = toolId,
+                Id = "feishuprojects",
+                Name = "/feishuprojects",
+                Description = "查看、创建、克隆、拉取和删除当前飞书聊天绑定的项目",
+                Usage = "/feishuprojects",
+                ExecuteText = "/feishuprojects",
+                Category = "feishu_builtin"
             }
         };
     }
