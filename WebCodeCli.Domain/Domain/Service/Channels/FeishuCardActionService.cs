@@ -117,6 +117,10 @@ public class FeishuCardActionService
                     return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId, action.ToolId);
                 case "create_session":
                     return await HandleCreateSessionAsync(action.ChatKey, chatId, formValueElement, operatorUserId, action.CreateMode, action.WorkspacePath, action.ToolId, inputValues);
+                case "browse_allowed_directory":
+                    return await HandleBrowseAllowedDirectoryAsync(action.ChatKey, chatId, action.WorkspacePath, action.Page, operatorUserId, action.ToolId);
+                case "copy_path_to_chat":
+                    return await HandleCopyPathToChatAsync(action.ChatKey ?? chatId, action.CopyPath ?? action.WorkspacePath, operatorUserId);
                 case "switch_tool":
                     return await HandleSwitchToolAsync(action.ToolId, action.ChatKey, operatorUserId);
                 case "bind_web_user":
@@ -1011,6 +1015,84 @@ public class FeishuCardActionService
         }
     }
 
+    private async Task<CardActionTriggerResponseDto> HandleBrowseAllowedDirectoryAsync(
+        string? chatKey,
+        string? chatId,
+        string? workspacePath,
+        int? page,
+        string? operatorUserId,
+        string? selectedToolId)
+    {
+        var actualChatKey = !string.IsNullOrWhiteSpace(chatKey)
+            ? NormalizeChatKey(chatKey)
+            : (!string.IsNullOrWhiteSpace(chatId) ? NormalizeChatKey(chatId) : string.Empty);
+
+        if (string.IsNullOrWhiteSpace(actualChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法浏览白名单目录", "error");
+        }
+
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再浏览白名单目录", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var sessionDirectoryService = scope.ServiceProvider.GetRequiredService<ISessionDirectoryService>();
+
+        try
+        {
+            var browseResult = await sessionDirectoryService.BrowseAllowedDirectoriesAsync(workspacePath);
+            var effectiveToolId = NormalizeToolId(selectedToolId) ?? ResolveToolIdForChat(actualChatKey, username);
+            var card = BuildAllowedDirectoryCard(actualChatKey, effectiveToolId, browseResult, Math.Max(page ?? 0, 0));
+            return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(ex, "[Feishu] 浏览白名单目录被拒绝: Path={Path}", workspacePath);
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法访问该白名单目录", "error");
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            _logger.LogWarning(ex, "[Feishu] 白名单目录不存在: Path={Path}", workspacePath);
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 白名单目录不存在或已被删除", "error");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Feishu] 浏览白名单目录失败: Path={Path}", workspacePath);
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 白名单目录浏览失败，请稍后重试", "error");
+        }
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleCopyPathToChatAsync(string? chatKey, string? path, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少聊天标识，无法发送路径", "error");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 路径为空，无法复制", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+
+        try
+        {
+            var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+            var prefix = string.IsNullOrWhiteSpace(username) ? "可复制路径" : $"{username} 的可复制路径";
+            await _feishuChannel.SendMessageAsync(actualChatKey, $"{prefix}:\n{path}");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("✅ 路径已发送到聊天，可长按复制", "success");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Feishu] 发送可复制路径失败: ChatKey={ChatKey}", actualChatKey);
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 路径发送失败，请稍后重试", "error");
+        }
+    }
+
     private string NormalizeChatKey(string chatKey)
     {
         var chatKeyParts = chatKey.Split(':');
@@ -1205,7 +1287,7 @@ public class FeishuCardActionService
                 text = new
                 {
                     tag = "lark_md",
-                    content = $"## 🆕 新建会话\n先选择 **CLI 工具**，再选择 **默认目录**、**已有目录/项目** 或 **自定义路径**。\n当前选择：**{GetToolDisplayName(effectiveToolId)}**"
+                    content = $"## 🆕 新建会话\n先选择 **CLI 工具**，再选择 **默认目录**、**已有目录/项目**、**白名单目录** 或 **自定义路径**。\n当前选择：**{GetToolDisplayName(effectiveToolId)}**"
                 }
             },
             new { tag = "hr" },
@@ -1346,7 +1428,36 @@ public class FeishuCardActionService
             text = new
             {
                 tag = "lark_md",
-                content = "### 3️⃣ 自定义路径\n在下方输入框输入绝对路径，按回车直接创建。"
+                content = "### 3️⃣ 浏览白名单目录\n仅显示配置在 `Workspace:AllowedRoots` 中的目录，可浏览文件并复制路径。"
+            }
+        });
+        elements.Add(new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = "浏览白名单目录" },
+            type = "default",
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "browse_allowed_directory",
+                        chat_key = chatKey,
+                        tool_id = effectiveToolId
+                    }
+                }
+            }
+        });
+        elements.Add(new { tag = "hr" });
+        elements.Add(new
+        {
+            tag = "div",
+            text = new
+            {
+                tag = "lark_md",
+                content = "### 4️⃣ 自定义路径\n在下方输入框输入绝对路径，按回车直接创建。"
             }
         });
         elements.Add(new
@@ -1439,6 +1550,25 @@ public class FeishuCardActionService
                 {
                     tag = "lark_md",
                     content = $"**{alias}**  `[type:{directoryType} permission:{permission}]`\n`{path}`"
+                }
+            },
+            new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "复制路径" },
+                type = "default",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "copy_path_to_chat",
+                            chat_key = chatKey,
+                            copy_path = path
+                        }
+                    }
                 }
             },
             new
@@ -2567,6 +2697,210 @@ public class FeishuCardActionService
         return true;
     }
 
+    private ElementsCardV2Dto BuildAllowedDirectoryCard(
+        string chatKey,
+        string toolId,
+        AllowedDirectoryBrowseResult browseResult,
+        int pageIndex)
+    {
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "## 📁 白名单目录浏览\n仅展示 `Workspace:AllowedRoots` 中配置的目录。"
+                }
+            },
+            new { tag = "hr" }
+        };
+
+        if (!browseResult.HasConfiguredRoots)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "当前还没有配置白名单目录，请先在服务端设置 `Workspace:AllowedRoots`。"
+                }
+            });
+        }
+        else if (string.IsNullOrWhiteSpace(browseResult.CurrentPath))
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"可浏览根目录数量：`{browseResult.Roots.Count}`"
+                }
+            });
+
+            if (browseResult.Roots.Count == 0)
+            {
+                elements.Add(new
+                {
+                    tag = "div",
+                    text = new { tag = "plain_text", content = "白名单已配置，但当前没有可浏览目录。" }
+                });
+            }
+            else
+            {
+                foreach (var root in browseResult.Roots)
+                {
+                    elements.Add(BuildAllowedDirectoryRootRow(root, chatKey, toolId));
+                }
+            }
+        }
+        else
+        {
+            var totalPages = Math.Max(1, (int)Math.Ceiling(browseResult.Entries.Count / (double)SessionDirectoryPageSize));
+            var clampedPageIndex = Math.Clamp(pageIndex, 0, totalPages - 1);
+            var pagedEntries = browseResult.Entries
+                .Skip(clampedPageIndex * SessionDirectoryPageSize)
+                .Take(SessionDirectoryPageSize)
+                .ToList();
+
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"当前目录: `{browseResult.CurrentPath}`\n根目录: `{browseResult.RootPath}`\n共 `{browseResult.Entries.Count}` 项，第 `{clampedPageIndex + 1}/{totalPages}` 页"
+                }
+            });
+
+            elements.Add(BuildActionButton(
+                "✅ 使用当前目录创建会话",
+                "primary",
+                new
+                {
+                    action = "create_session",
+                    create_mode = "existing",
+                    workspace_path = browseResult.CurrentPath,
+                    chat_key = chatKey,
+                    tool_id = toolId
+                }));
+
+            elements.Add(BuildActionButton(
+                "📋 发送当前目录路径",
+                "default",
+                new
+                {
+                    action = "copy_path_to_chat",
+                    chat_key = chatKey,
+                    copy_path = browseResult.CurrentPath
+                }));
+
+            if (pagedEntries.Count == 0)
+            {
+                elements.Add(new
+                {
+                    tag = "div",
+                    text = new { tag = "plain_text", content = "当前目录为空" }
+                });
+            }
+            else
+            {
+                foreach (var entry in pagedEntries)
+                {
+                    elements.Add(BuildAllowedDirectoryEntryRow(entry, chatKey, toolId));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(browseResult.ParentPath))
+            {
+                elements.Add(BuildActionButton(
+                    "⬆️ 返回上一级",
+                    "default",
+                    new
+                    {
+                        action = "browse_allowed_directory",
+                        chat_key = chatKey,
+                        workspace_path = browseResult.ParentPath,
+                        tool_id = toolId
+                    }));
+            }
+            else
+            {
+                elements.Add(BuildActionButton(
+                    "🏠 返回白名单根目录",
+                    "default",
+                    new
+                    {
+                        action = "browse_allowed_directory",
+                        chat_key = chatKey,
+                        tool_id = toolId
+                    }));
+            }
+
+            if (clampedPageIndex > 0)
+            {
+                elements.Add(BuildActionButton(
+                    "⬅️ 上一页",
+                    "default",
+                    new
+                    {
+                        action = "browse_allowed_directory",
+                        chat_key = chatKey,
+                        workspace_path = browseResult.CurrentPath,
+                        page = clampedPageIndex - 1,
+                        tool_id = toolId
+                    }));
+            }
+
+            if (clampedPageIndex + 1 < totalPages)
+            {
+                elements.Add(BuildActionButton(
+                    "➡️ 下一页",
+                    "default",
+                    new
+                    {
+                        action = "browse_allowed_directory",
+                        chat_key = chatKey,
+                        workspace_path = browseResult.CurrentPath,
+                        page = clampedPageIndex + 1,
+                        tool_id = toolId
+                    }));
+            }
+        }
+
+        elements.Add(new { tag = "hr" });
+        elements.Add(BuildActionButton(
+            "⬅️ 返回新建会话",
+            "default",
+            new
+            {
+                action = "show_create_session_form",
+                chat_key = chatKey,
+                tool_id = toolId
+            }));
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = "📁 白名单目录" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
     private ElementsCardV2Dto BuildSessionDirectoryCard(
         string chatKey,
         string sessionId,
@@ -2578,6 +2912,7 @@ public class FeishuCardActionService
         List<SessionDirectoryEntry> entries)
     {
         var displayPath = GetDirectoryDisplayPath(directoryPath);
+        var currentDirectoryFullPath = BuildWorkspaceEntryFullPath(workspacePath, directoryPath);
         var elements = new List<object>
         {
             new
@@ -2589,6 +2924,15 @@ public class FeishuCardActionService
                     content = $"## 📂 当前会话目录\n会话: `{GetShortSessionLabel(sessionId)}`\n工作区: `{workspacePath}`\n当前位置: `{displayPath}`\n共 `{totalEntries}` 项，第 `{pageIndex + 1}/{totalPages}` 页"
                 }
             },
+            BuildActionButton(
+                "📋 发送当前目录路径",
+                "default",
+                new
+                {
+                    action = "copy_path_to_chat",
+                    chat_key = chatKey,
+                    copy_path = currentDirectoryFullPath
+                }),
             new { tag = "hr" }
         };
 
@@ -2733,6 +3077,16 @@ public class FeishuCardActionService
         }
 
         elements.Add(BuildActionButton(
+            "📋 发送文件路径",
+            "default",
+            new
+            {
+                action = "copy_path_to_chat",
+                chat_key = chatKey,
+                copy_path = BuildWorkspaceEntryFullPath(workspacePath, filePath)
+            }));
+
+        elements.Add(BuildActionButton(
             "📂 返回目录",
             "default",
             new
@@ -2865,6 +3219,25 @@ public class FeishuCardActionService
                         new
                         {
                             tag = "button",
+                            text = new { tag = "plain_text", content = "复制路径" },
+                            type = "default",
+                            behaviors = new[]
+                            {
+                                new
+                                {
+                                    type = "callback",
+                                    value = new
+                                    {
+                                        action = "copy_path_to_chat",
+                                        chat_key = chatKey,
+                                        copy_path = BuildWorkspaceEntryFullPath(workspacePath: _cliExecutor.GetSessionWorkspacePath(sessionId), relativePath: entry.RelativePath)
+                                    }
+                                }
+                            }
+                        },
+                        new
+                        {
+                            tag = "button",
                             text = new { tag = "plain_text", content = entry.IsDirectory ? "打开" : "查看" },
                             type = entry.IsDirectory ? "primary" : "default",
                             behaviors = new[]
@@ -2877,6 +3250,136 @@ public class FeishuCardActionService
                             }
                         }
                     }
+                }
+            }
+        };
+    }
+
+    private object BuildAllowedDirectoryRootRow(AllowedDirectoryRootItem root, string chatKey, string toolId)
+    {
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            background_style = "default",
+            columns = new object[]
+            {
+                new
+                {
+                    tag = "column",
+                    width = "weighted",
+                    weight = 5,
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "div",
+                            text = new
+                            {
+                                tag = "lark_md",
+                                content = $"**📁 {root.Name}**\n`{root.Path}`"
+                            }
+                        }
+                    }
+                },
+                new
+                {
+                    tag = "column",
+                    width = "auto",
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        BuildActionButton(
+                            "复制路径",
+                            "default",
+                            new
+                            {
+                                action = "copy_path_to_chat",
+                                chat_key = chatKey,
+                                copy_path = root.Path
+                            }),
+                        BuildActionButton(
+                            "进入",
+                            "primary",
+                            new
+                            {
+                                action = "browse_allowed_directory",
+                                chat_key = chatKey,
+                                workspace_path = root.Path,
+                                tool_id = toolId
+                            })
+                    }
+                }
+            }
+        };
+    }
+
+    private object BuildAllowedDirectoryEntryRow(AllowedDirectoryBrowseEntry entry, string chatKey, string toolId)
+    {
+        var meta = entry.IsDirectory
+            ? "目录"
+            : $"{FormatFileSize(entry.Size)}{(string.IsNullOrWhiteSpace(entry.Extension) ? string.Empty : $" · {entry.Extension}")}";
+
+        var actions = new List<object>
+        {
+            BuildActionButton(
+                "复制路径",
+                "default",
+                new
+                {
+                    action = "copy_path_to_chat",
+                    chat_key = chatKey,
+                    copy_path = entry.Path
+                })
+        };
+
+        if (entry.IsDirectory)
+        {
+            actions.Add(BuildActionButton(
+                "进入",
+                "primary",
+                new
+                {
+                    action = "browse_allowed_directory",
+                    chat_key = chatKey,
+                    workspace_path = entry.Path,
+                    tool_id = toolId
+                }));
+        }
+
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            background_style = "default",
+            columns = new object[]
+            {
+                new
+                {
+                    tag = "column",
+                    width = "weighted",
+                    weight = 5,
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "div",
+                            text = new
+                            {
+                                tag = "lark_md",
+                                content = $"**{(entry.IsDirectory ? "📁" : "📄")} {entry.Name}**\n`{entry.Path}`\n{meta}"
+                            }
+                        }
+                    }
+                },
+                new
+                {
+                    tag = "column",
+                    width = "auto",
+                    vertical_align = "top",
+                    elements = actions.ToArray()
                 }
             }
         };
@@ -2898,6 +3401,13 @@ public class FeishuCardActionService
                 }
             }
         };
+    }
+
+    private static string BuildWorkspaceEntryFullPath(string workspacePath, string relativePath)
+    {
+        return Path.GetFullPath(Path.Combine(
+            workspacePath,
+            relativePath.Replace("/", Path.DirectorySeparatorChar.ToString())));
     }
 
     private static string NormalizeWorkspaceRelativePath(string? path)

@@ -23,6 +23,13 @@
     <ProjectReference Include="..\WebCodeCli.Domain\WebCodeCli.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Update="appsettings*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
   <!-- 编译时将 Resources\Localization 复制到 wwwroot\Resources\Localization -->
   <Target Name="CopyLocalizationFiles" BeforeTargets="Build">
     <ItemGroup>

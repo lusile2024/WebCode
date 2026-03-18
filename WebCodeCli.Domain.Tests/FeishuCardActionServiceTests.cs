@@ -119,6 +119,50 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_BrowseAllowedDirectory_ReturnsWhitelistBrowserCard()
+    {
+        const string chatId = "oc_allowed_chat";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"browse_allowed_directory","chat_key":"oc_allowed_chat","tool_id":"claude-code"}""",
+            chatId: chatId);
+
+        var payload = SerializeResponse(response);
+        Assert.Contains(@"D:\\VSWorkshop\\allowed", payload);
+        Assert.Contains("\"action\":\"copy_path_to_chat\"", payload);
+        Assert.Contains("\"action\":\"browse_allowed_directory\"", payload);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_CopyPathToChat_SendsCopyableMessage()
+    {
+        const string chatId = "oc_allowed_chat";
+        const string path = @"D:\VSWorkshop\allowed\README.md";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+        var actionJson = JsonSerializer.Serialize(new
+        {
+            action = "copy_path_to_chat",
+            chat_key = chatId,
+            copy_path = path
+        });
+
+        var response = await service.HandleCardActionAsync(
+            actionJson,
+            chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
+        Assert.Equal("oc_allowed_chat", feishuChannel.LastSentChatId);
+        Assert.Contains(path, feishuChannel.LastSentMessage);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_OpenProjectManager_ReturnsProjectListForBoundUser()
     {
         const string chatId = "oc_project_chat";
@@ -454,7 +498,16 @@ public class FeishuCardActionServiceTests
 
         public string? LastSwitchedSessionId { get; private set; }
 
-        public Task<string> SendMessageAsync(string chatId, string content) => Task.FromResult("notify-message");
+        public string? LastSentChatId { get; private set; }
+
+        public string? LastSentMessage { get; private set; }
+
+        public Task<string> SendMessageAsync(string chatId, string content)
+        {
+            LastSentChatId = chatId;
+            LastSentMessage = content;
+            return Task.FromResult("notify-message");
+        }
 
         public Task<string> ReplyMessageAsync(string messageId, string content) => Task.FromResult("reply-message");
 
@@ -558,6 +611,8 @@ public class FeishuCardActionServiceTests
 
     private sealed class StubSessionDirectoryService : ISessionDirectoryService
     {
+        private readonly string _allowedRoot = @"D:\VSWorkshop\allowed";
+
         public Task SetSessionWorkspaceAsync(string sessionId, string username, string directoryPath, bool isCustom = true) => Task.CompletedTask;
 
         public Task<string?> GetSessionWorkspaceAsync(string sessionId, string username) => Task.FromResult<string?>(null);
@@ -581,6 +636,66 @@ public class FeishuCardActionServiceTests
             };
 
             return Task.FromResult(directories);
+        }
+
+        public Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return Task.FromResult(new AllowedDirectoryBrowseResult
+                {
+                    HasConfiguredRoots = true,
+                    Roots =
+                    [
+                        new AllowedDirectoryRootItem
+                        {
+                            Name = "allowed",
+                            Path = _allowedRoot
+                        }
+                    ]
+                });
+            }
+
+            if (string.Equals(path, _allowedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new AllowedDirectoryBrowseResult
+                {
+                    HasConfiguredRoots = true,
+                    CurrentPath = _allowedRoot,
+                    RootPath = _allowedRoot,
+                    Entries =
+                    [
+                        new AllowedDirectoryBrowseEntry
+                        {
+                            Name = "src",
+                            Path = Path.Combine(_allowedRoot, "src"),
+                            IsDirectory = true
+                        },
+                        new AllowedDirectoryBrowseEntry
+                        {
+                            Name = "README.md",
+                            Path = Path.Combine(_allowedRoot, "README.md"),
+                            IsDirectory = false,
+                            Size = 42,
+                            Extension = ".md"
+                        }
+                    ]
+                });
+            }
+
+            if (string.Equals(path, Path.Combine(_allowedRoot, "src"), StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new AllowedDirectoryBrowseResult
+                {
+                    HasConfiguredRoots = true,
+                    CurrentPath = path,
+                    ParentPath = _allowedRoot,
+                    RootPath = _allowedRoot,
+                    Entries = []
+                });
+            }
+
+            throw new DirectoryNotFoundException(path);
         }
     }
 

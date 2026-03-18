@@ -1,13 +1,15 @@
 @using WebCodeCli.Domain.Domain.Model
+@using WebCodeCli.Domain.Domain.Service
 @using WebCodeCli.Models
 @inject HttpClient Http
 @inject IUserContextService UserContextService
+@inject IJSRuntime JSRuntime
+@implements IDisposable
 
 @if (Show)
 {
     <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col min-w-[300px]">
-            <!-- 头部 -->
             <div class="p-6 border-b border-gray-200 flex items-center justify-between">
                 <h3 class="text-xl font-bold text-gray-800">新建会话</h3>
                 <button @onclick="Close" class="p-2 hover:bg-gray-100 rounded-lg transition-colors">
@@ -17,23 +19,25 @@
                 </button>
             </div>
 
-            <!-- Tab导航 -->
             <div class="border-b border-gray-200">
                 <div class="flex">
                     <button @onclick='() => ActiveTab = "directories"'
-                            class='flex-1 py-4 px-6 text-sm font-medium transition-colors @(ActiveTab == "directories" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
+                            class='flex-1 py-4 px-4 text-sm font-medium transition-colors @(ActiveTab == "directories" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
                         选择已有目录
                     </button>
+                    <button @onclick='() => ActiveTab = "whitelist"'
+                            class='flex-1 py-4 px-4 text-sm font-medium transition-colors @(ActiveTab == "whitelist" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
+                        白名单目录
+                    </button>
                     <button @onclick='() => ActiveTab = "custom"'
-                            class='flex-1 py-4 px-6 text-sm font-medium transition-colors @(ActiveTab == "custom" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
+                            class='flex-1 py-4 px-4 text-sm font-medium transition-colors @(ActiveTab == "custom" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
                         自定义路径
                     </button>
                 </div>
             </div>
 
-            <!-- 内容区域 -->
             <div class="flex-1 overflow-y-auto p-6">
-                @if (IsLoading)
+                @if (IsCurrentTabLoading)
                 {
                     <div class="text-center py-12">
                         <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-blue-600 mb-4"></div>
@@ -45,7 +49,6 @@
                     if (Directories.Any())
                     {
                         <div class="space-y-4">
-                            <!-- 我的目录 -->
                             @if (MyDirectories.Any())
                             {
                                 <div>
@@ -60,7 +63,7 @@
                                         {
                                             <div @onclick='() => SelectDirectory(dir)'
                                                  class='p-4 border rounded-lg cursor-pointer transition-all @(SelectedDirectory?.Id == dir.Id ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50")'>
-                                                <div class="flex items-center gap-3">
+                                                <div class="flex items-start gap-3">
                                                     <div class="flex-shrink-0">
                                                         @GetDirectoryIcon(dir.Type)
                                                     </div>
@@ -71,16 +74,23 @@
                                                                 @GetDirectoryTypeText(dir.Type)
                                                             </span>
                                                         </div>
-                                                        <p class="text-xs text-gray-500 mt-1 truncate" title="@dir.Path">
+                                                        <p class="text-xs text-gray-500 mt-1 break-all" title="@dir.Path">
                                                             @dir.Path
                                                         </p>
                                                     </div>
-                                                    @if (SelectedDirectory?.Id == dir.Id)
-                                                    {
-                                                        <svg class="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                                        </svg>
-                                                    }
+                                                    <div class="flex items-center gap-2">
+                                                        <button @onclick:stopPropagation="true"
+                                                                @onclick='() => CopyPathAsync(dir.Path)'
+                                                                class="px-2 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-white transition-colors">
+                                                            @GetCopyLabel(dir.Path)
+                                                        </button>
+                                                        @if (SelectedDirectory?.Id == dir.Id)
+                                                        {
+                                                            <svg class="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                                            </svg>
+                                                        }
+                                                    </div>
                                                 </div>
                                             </div>
                                         }
@@ -88,7 +98,6 @@
                                 </div>
                             }
 
-                            <!-- 共享目录 -->
                             @if (SharedDirectories.Any())
                             {
                                 <div class="mt-6">
@@ -103,7 +112,7 @@
                                         {
                                             <div @onclick='() => SelectDirectory(dir)'
                                                  class='p-4 border rounded-lg cursor-pointer transition-all @(SelectedDirectory?.Id == dir.Id ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50")'>
-                                                <div class="flex items-center gap-3">
+                                                <div class="flex items-start gap-3">
                                                     <div class="flex-shrink-0">
                                                         @GetDirectoryIcon(dir.Type)
                                                     </div>
@@ -117,19 +126,26 @@
                                                                 @dir.Permission
                                                             </span>
                                                         </div>
-                                                        <p class="text-xs text-gray-500 mt-1 truncate" title="@dir.Path">
+                                                        <p class="text-xs text-gray-500 mt-1 break-all" title="@dir.Path">
                                                             @dir.Path
                                                         </p>
                                                         <p class="text-xs text-gray-500 mt-0.5">
                                                             所有者: @dir.GrantedBy
                                                         </p>
                                                     </div>
-                                                    @if (SelectedDirectory?.Id == dir.Id)
-                                                    {
-                                                        <svg class="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                                                        </svg>
-                                                    }
+                                                    <div class="flex items-center gap-2">
+                                                        <button @onclick:stopPropagation="true"
+                                                                @onclick='() => CopyPathAsync(dir.Path)'
+                                                                class="px-2 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-white transition-colors">
+                                                            @GetCopyLabel(dir.Path)
+                                                        </button>
+                                                        @if (SelectedDirectory?.Id == dir.Id)
+                                                        {
+                                                            <svg class="w-5 h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                                            </svg>
+                                                        }
+                                                    </div>
                                                 </div>
                                             </div>
                                         }
@@ -145,14 +161,177 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
                             </svg>
                             <p class="text-gray-500 mb-2">暂无可用目录</p>
-                            <p class="text-xs text-gray-400">您可以切换到"自定义路径"标签创建新会话</p>
+                            <p class="text-xs text-gray-400">您可以切换到“白名单目录”或“自定义路径”继续创建会话</p>
                         </div>
                     }
+                }
+                else if (ActiveTab == "whitelist")
+                {
+                    <div class="space-y-4">
+                        @if (!string.IsNullOrEmpty(AllowedDirectoryBrowserError))
+                        {
+                            <div class="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">
+                                @AllowedDirectoryBrowserError
+                            </div>
+                        }
+
+                        @if (AllowedDirectoryBrowser is null)
+                        {
+                            <div class="text-center py-12 text-gray-500">
+                                暂无白名单目录数据
+                            </div>
+                        }
+                        else if (!AllowedDirectoryBrowser.HasConfiguredRoots)
+                        {
+                            <div class="text-center py-12">
+                                <svg class="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                                </svg>
+                                <p class="text-gray-500 mb-2">当前未配置白名单目录</p>
+                                <p class="text-xs text-gray-400">请在配置文件中设置 <code>Workspace:AllowedRoots</code></p>
+                            </div>
+                        }
+                        else if (string.IsNullOrWhiteSpace(AllowedDirectoryBrowser.CurrentPath))
+                        {
+                            <div class="p-4 rounded-lg border border-blue-200 bg-blue-50">
+                                <p class="text-sm font-medium text-blue-800">白名单根目录</p>
+                                <p class="text-xs text-blue-700 mt-1">仅可浏览配置在 <code>Workspace:AllowedRoots</code> 中的目录。</p>
+                            </div>
+
+                            @if (AllowedDirectoryBrowser.Roots.Count == 0)
+                            {
+                                <div class="text-center py-12 text-gray-500">
+                                    白名单已配置，但当前没有可浏览的目录
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="space-y-2">
+                                    @foreach (var root in AllowedDirectoryBrowser.Roots)
+                                    {
+                                        <div class="p-4 border border-gray-200 rounded-lg">
+                                            <div class="flex items-start gap-3">
+                                                <div class="flex-shrink-0 text-blue-600">
+                                                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                                                    </svg>
+                                                </div>
+                                                <div class="flex-1 min-w-0">
+                                                    <h5 class="font-medium text-gray-800">@root.Name</h5>
+                                                    <p class="text-xs text-gray-500 mt-1 break-all">@root.Path</p>
+                                                </div>
+                                                <div class="flex items-center gap-2">
+                                                    <button @onclick='() => CopyPathAsync(root.Path)'
+                                                            class="px-2 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 transition-colors">
+                                                        @GetCopyLabel(root.Path)
+                                                    </button>
+                                                    <button @onclick='() => BrowseAllowedDirectoryAsync(root.Path)'
+                                                            class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">
+                                                        进入
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="p-4 rounded-lg border border-blue-200 bg-blue-50">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <p class="text-sm font-medium text-blue-800">当前位置</p>
+                                        <p class="text-xs text-blue-700 mt-1 break-all">@AllowedDirectoryBrowser.CurrentPath</p>
+                                        <p class="text-xs text-blue-700 mt-2">当前目录可直接作为新会话工作区。</p>
+                                    </div>
+                                    <div class="flex items-center gap-2 shrink-0">
+                                        <button @onclick='() => CopyPathAsync(AllowedDirectoryBrowser.CurrentPath)'
+                                                class="px-2 py-1 text-xs border border-blue-300 rounded-md text-blue-700 hover:bg-white transition-colors">
+                                            @GetCopyLabel(AllowedDirectoryBrowser.CurrentPath)
+                                        </button>
+                                        @if (!string.IsNullOrWhiteSpace(AllowedDirectoryBrowser.ParentPath))
+                                        {
+                                            <button @onclick='() => BrowseAllowedDirectoryAsync(AllowedDirectoryBrowser.ParentPath)'
+                                                    class="px-3 py-1.5 text-xs border border-blue-300 rounded-md text-blue-700 hover:bg-white transition-colors">
+                                                上一级
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button @onclick='() => BrowseAllowedDirectoryAsync(null)'
+                                                    class="px-3 py-1.5 text-xs border border-blue-300 rounded-md text-blue-700 hover:bg-white transition-colors">
+                                                根目录
+                                            </button>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+
+                            @if (AllowedDirectoryBrowser.Entries.Count == 0)
+                            {
+                                <div class="text-center py-12 text-gray-500">
+                                    当前目录为空
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="space-y-2">
+                                    @foreach (var entry in AllowedDirectoryBrowser.Entries)
+                                    {
+                                        <div class="p-4 border border-gray-200 rounded-lg hover:border-blue-300 transition-colors">
+                                            <div class="flex items-start gap-3">
+                                                <div class="flex-shrink-0 @(entry.IsDirectory ? "text-blue-600" : "text-gray-500")">
+                                                    @if (entry.IsDirectory)
+                                                    {
+                                                        <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                                                        </svg>
+                                                    }
+                                                    else
+                                                    {
+                                                        <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                                        </svg>
+                                                    }
+                                                </div>
+                                                <div class="flex-1 min-w-0">
+                                                    <div class="flex items-center gap-2">
+                                                        <h5 class="font-medium text-gray-800 truncate">@entry.Name</h5>
+                                                        <span class="px-2 py-0.5 text-xs rounded-full @(entry.IsDirectory ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600")">
+                                                            @(entry.IsDirectory ? "目录" : "文件")
+                                                        </span>
+                                                        @if (!entry.IsDirectory)
+                                                        {
+                                                            <span class="text-xs text-gray-400">@FormatFileSize(entry.Size)</span>
+                                                        }
+                                                    </div>
+                                                    <p class="text-xs text-gray-500 mt-1 break-all">@entry.Path</p>
+                                                </div>
+                                                <div class="flex items-center gap-2">
+                                                    <button @onclick='() => CopyPathAsync(entry.Path)'
+                                                            class="px-2 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 transition-colors">
+                                                        @GetCopyLabel(entry.Path)
+                                                    </button>
+                                                    @if (entry.IsDirectory)
+                                                    {
+                                                        <button @onclick='() => BrowseAllowedDirectoryAsync(entry.Path)'
+                                                                class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors">
+                                                            进入
+                                                        </button>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                    </div>
                 }
                 else if (ActiveTab == "custom")
                 {
                     <div class="space-y-6">
-                        <!-- 默认目录选项 -->
                         <div @onclick='() => UseDefaultDirectory()'
                              class='p-4 border rounded-lg cursor-pointer transition-all @(UseDefault ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50")'>
                             <div class="flex items-center gap-3">
@@ -174,7 +353,6 @@
                             </div>
                         </div>
 
-                        <!-- 自定义路径选项 -->
                         <div @onclick='() => UseCustomPath()'
                              class='p-4 border rounded-lg cursor-pointer transition-all @(!UseDefault ? "border-blue-500 bg-blue-50" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50")'>
                             <div class="flex items-center gap-3">
@@ -214,7 +392,6 @@
                 }
             </div>
 
-            <!-- 底部按钮 -->
             <div class="p-6 border-t border-gray-200 flex justify-end gap-3">
                 <button @onclick="Close" class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
                     取消
@@ -243,16 +420,28 @@
     [Parameter] public EventCallback OnClose { get; set; }
 
     private string ActiveTab { get; set; } = "directories";
-    private bool IsLoading { get; set; } = true;
-    private bool IsCreating { get; set; } = false;
+    private bool IsLoadingDirectories { get; set; } = true;
+    private bool IsLoadingAllowedDirectories { get; set; } = true;
+    private bool IsCreating { get; set; }
+    private bool HasLoadedData { get; set; }
     private List<AccessibleDirectoryDto> Directories { get; set; } = new();
     private AccessibleDirectoryDto? SelectedDirectory { get; set; }
+    private AllowedDirectoryBrowseResult? AllowedDirectoryBrowser { get; set; }
     private bool UseDefault { get; set; } = true;
     private string CustomPath { get; set; } = string.Empty;
     private string PathError { get; set; } = string.Empty;
+    private string AllowedDirectoryBrowserError { get; set; } = string.Empty;
+    private string? CopiedPath { get; set; }
+    private CancellationTokenSource? _copyFeedbackCts;
 
     private List<AccessibleDirectoryDto> MyDirectories => Directories.Where(d => d.Type == "owned").ToList();
     private List<AccessibleDirectoryDto> SharedDirectories => Directories.Where(d => d.Type == "authorized").ToList();
+    private bool IsCurrentTabLoading => ActiveTab switch
+    {
+        "directories" => IsLoadingDirectories,
+        "whitelist" => IsLoadingAllowedDirectories,
+        _ => false
+    };
 
     private bool CanCreate
     {
@@ -262,25 +451,38 @@
             {
                 return SelectedDirectory != null;
             }
-            else
+
+            if (ActiveTab == "whitelist")
             {
-                return UseDefault || !string.IsNullOrWhiteSpace(CustomPath);
+                return !string.IsNullOrWhiteSpace(AllowedDirectoryBrowser?.CurrentPath);
             }
+
+            return UseDefault || !string.IsNullOrWhiteSpace(CustomPath);
         }
     }
 
     protected override async Task OnParametersSetAsync()
     {
-        if (Show && !Directories.Any())
+        if (Show && !HasLoadedData)
         {
-            await LoadDirectoriesAsync();
+            await LoadInitialDataAsync();
         }
+    }
+
+    private async Task LoadInitialDataAsync()
+    {
+        await Task.WhenAll(
+            LoadDirectoriesAsync(),
+            BrowseAllowedDirectoryAsync(null));
+
+        HasLoadedData = true;
     }
 
     private async Task LoadDirectoriesAsync()
     {
-        IsLoading = true;
+        IsLoadingDirectories = true;
         PathError = string.Empty;
+
         try
         {
             var response = await Http.GetFromJsonAsync<ApiResponse<List<AccessibleDirectoryDto>>>("/api/workspace/my-accessible-directories");
@@ -293,7 +495,34 @@
         }
         finally
         {
-            IsLoading = false;
+            IsLoadingDirectories = false;
+        }
+    }
+
+    private async Task BrowseAllowedDirectoryAsync(string? path)
+    {
+        IsLoadingAllowedDirectories = true;
+        AllowedDirectoryBrowserError = string.Empty;
+
+        try
+        {
+            var requestUrl = "/api/workspace/allowed-directories/browse";
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                requestUrl += $"?path={Uri.EscapeDataString(path)}";
+            }
+
+            var response = await Http.GetFromJsonAsync<ApiResponse<AllowedDirectoryBrowseResult>>(requestUrl);
+            AllowedDirectoryBrowser = response?.Data ?? new AllowedDirectoryBrowseResult();
+        }
+        catch (Exception ex)
+        {
+            AllowedDirectoryBrowserError = $"加载白名单目录失败: {ex.Message}";
+            AllowedDirectoryBrowser ??= new AllowedDirectoryBrowseResult();
+        }
+        finally
+        {
+            IsLoadingAllowedDirectories = false;
         }
     }
 
@@ -315,9 +544,12 @@
         PathError = string.Empty;
     }
 
-    private async void ConfirmCreate()
+    private async Task ConfirmCreate()
     {
-        if (!CanCreate) return;
+        if (!CanCreate)
+        {
+            return;
+        }
 
         IsCreating = true;
         PathError = string.Empty;
@@ -331,7 +563,18 @@
                 options.WorkspacePath = SelectedDirectory.Path;
                 options.UseDefaultDirectory = false;
             }
-            else if (ActiveTab == "custom")
+            else if (ActiveTab == "whitelist")
+            {
+                if (string.IsNullOrWhiteSpace(AllowedDirectoryBrowser?.CurrentPath))
+                {
+                    AllowedDirectoryBrowserError = "请先进入一个白名单目录";
+                    return;
+                }
+
+                options.WorkspacePath = AllowedDirectoryBrowser.CurrentPath;
+                options.UseDefaultDirectory = false;
+            }
+            else
             {
                 if (UseDefault)
                 {
@@ -345,7 +588,6 @@
                         return;
                     }
 
-                    // 验证路径是否存在
                     try
                     {
                         if (!Directory.Exists(CustomPath))
@@ -378,30 +620,82 @@
         }
     }
 
-    /// <summary>
-    /// 显示对话框
-    /// </summary>
     public async Task ShowAsync()
     {
+        ResetState();
         Show = true;
-        SelectedDirectory = null;
-        UseDefault = true;
-        CustomPath = string.Empty;
-        PathError = string.Empty;
-        ActiveTab = "directories";
-        await LoadDirectoriesAsync();
+        await LoadInitialDataAsync();
         StateHasChanged();
     }
 
     private void Close()
     {
+        ResetState();
         Show = false;
+        OnClose.InvokeAsync();
+    }
+
+    private void ResetState()
+    {
+        _copyFeedbackCts?.Cancel();
+        _copyFeedbackCts?.Dispose();
+        _copyFeedbackCts = null;
+        CopiedPath = null;
         SelectedDirectory = null;
+        Directories = new();
+        AllowedDirectoryBrowser = null;
+        AllowedDirectoryBrowserError = string.Empty;
         UseDefault = true;
         CustomPath = string.Empty;
         PathError = string.Empty;
         ActiveTab = "directories";
-        OnClose.InvokeAsync();
+        IsLoadingDirectories = true;
+        IsLoadingAllowedDirectories = true;
+        IsCreating = false;
+        HasLoadedData = false;
+    }
+
+    private async Task CopyPathAsync(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        var success = await JSRuntime.InvokeAsync<bool>("clipboardCopy.copyText", path);
+        if (!success)
+        {
+            return;
+        }
+
+        _copyFeedbackCts?.Cancel();
+        _copyFeedbackCts?.Dispose();
+
+        CopiedPath = path;
+        StateHasChanged();
+
+        _copyFeedbackCts = new CancellationTokenSource();
+        var currentCts = _copyFeedbackCts;
+
+        try
+        {
+            await Task.Delay(1500, currentCts.Token);
+            if (_copyFeedbackCts == currentCts)
+            {
+                CopiedPath = null;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    private string GetCopyLabel(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path) && string.Equals(CopiedPath, path, StringComparison.OrdinalIgnoreCase)
+            ? "已复制"
+            : "复制路径";
     }
 
     private MarkupString GetDirectoryIcon(string directoryType)
@@ -434,5 +728,25 @@
             _ => "bg-gray-100 text-gray-700"
         };
     }
-}
 
+    private static string FormatFileSize(long size)
+    {
+        var units = new[] { "B", "KB", "MB", "GB" };
+        double value = size;
+        var unitIndex = 0;
+
+        while (value >= 1024 && unitIndex < units.Length - 1)
+        {
+            value /= 1024;
+            unitIndex++;
+        }
+
+        return unitIndex == 0 ? $"{size} B" : $"{value:0.#} {units[unitIndex]}";
+    }
+
+    public void Dispose()
+    {
+        _copyFeedbackCts?.Cancel();
+        _copyFeedbackCts?.Dispose();
+    }
+}
