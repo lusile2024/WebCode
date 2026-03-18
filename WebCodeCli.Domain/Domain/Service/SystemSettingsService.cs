@@ -7,6 +7,7 @@ using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Repositories.Base.CliToolEnv;
 using WebCodeCli.Domain.Repositories.Base.SystemSettings;
+using WebCodeCli.Domain.Repositories.Base.UserAccount;
 
 namespace WebCodeCli.Domain.Domain.Service;
 
@@ -170,6 +171,7 @@ public class SystemSettingsService : ISystemSettingsService
     private readonly CliToolsOption _cliOptions;
     private readonly AuthenticationOption _authOptions;
     private readonly ILocalCliConfigDetector _localConfigDetector;
+    private readonly IUserAccountService _userAccountService;
 
     public SystemSettingsService(
         ILogger<SystemSettingsService> logger,
@@ -177,7 +179,8 @@ public class SystemSettingsService : ISystemSettingsService
         ICliToolEnvironmentVariableRepository envRepository,
         IOptions<CliToolsOption> cliOptions,
         IOptions<AuthenticationOption> authOptions,
-        ILocalCliConfigDetector localConfigDetector)
+        ILocalCliConfigDetector localConfigDetector,
+        IUserAccountService userAccountService)
     {
         _logger = logger;
         _repository = repository;
@@ -185,6 +188,7 @@ public class SystemSettingsService : ISystemSettingsService
         _cliOptions = cliOptions.Value;
         _authOptions = authOptions.Value;
         _localConfigDetector = localConfigDetector;
+        _userAccountService = userAccountService;
     }
 
     /// <summary>
@@ -221,6 +225,13 @@ public class SystemSettingsService : ISystemSettingsService
                 var encryptedPassword = Convert.ToBase64String(
                     System.Text.Encoding.UTF8.GetBytes(config.AdminPassword));
                 await _repository.SetAsync(SystemSettingsKeys.AdminPassword, encryptedPassword, "管理员密码（加密）");
+                await _userAccountService.CreateOrUpdateAsync(new UserAccountEntity
+                {
+                    Username = config.AdminUsername.Trim(),
+                    DisplayName = config.AdminUsername.Trim(),
+                    Role = UserAccessConstants.AdminRole,
+                    Status = UserAccessConstants.EnabledStatus
+                }, config.AdminPassword, overwritePassword: true);
             }
 
             // 2. 保存认证设置
@@ -415,6 +426,13 @@ public class SystemSettingsService : ISystemSettingsService
             var encryptedPassword = Convert.ToBase64String(
                 System.Text.Encoding.UTF8.GetBytes(password));
             await _repository.SetAsync(SystemSettingsKeys.AdminPassword, encryptedPassword, "管理员密码（加密）");
+            await _userAccountService.CreateOrUpdateAsync(new UserAccountEntity
+            {
+                Username = username.Trim(),
+                DisplayName = username.Trim(),
+                Role = UserAccessConstants.AdminRole,
+                Status = UserAccessConstants.EnabledStatus
+            }, password, overwritePassword: true);
             return true;
         }
         catch (Exception ex)

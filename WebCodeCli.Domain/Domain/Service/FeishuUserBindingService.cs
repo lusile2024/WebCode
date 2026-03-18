@@ -11,17 +11,14 @@ namespace WebCodeCli.Domain.Domain.Service;
 public class FeishuUserBindingService : IFeishuUserBindingService
 {
     private readonly IFeishuUserBindingRepository _bindingRepository;
-    private readonly ISystemSettingsRepository _systemSettingsRepository;
-    private readonly AuthenticationOption _authenticationOption;
+    private readonly IUserAccountService _userAccountService;
 
     public FeishuUserBindingService(
         IFeishuUserBindingRepository bindingRepository,
-        ISystemSettingsRepository systemSettingsRepository,
-        IOptions<AuthenticationOption> authenticationOption)
+        IUserAccountService userAccountService)
     {
         _bindingRepository = bindingRepository;
-        _systemSettingsRepository = systemSettingsRepository;
-        _authenticationOption = authenticationOption.Value;
+        _userAccountService = userAccountService;
     }
 
     public async Task<string?> GetBoundWebUsernameAsync(string feishuUserId)
@@ -87,23 +84,7 @@ public class FeishuUserBindingService : IFeishuUserBindingService
 
     public async Task<List<string>> GetBindableWebUsernamesAsync()
     {
-        var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var user in _authenticationOption.Users)
-        {
-            if (!string.IsNullOrWhiteSpace(user.Username))
-            {
-                usernames.Add(user.Username.Trim());
-            }
-        }
-
-        var adminUsername = await _systemSettingsRepository.GetAsync(SystemSettingsKeys.AdminUsername);
-        if (!string.IsNullOrWhiteSpace(adminUsername))
-        {
-            usernames.Add(adminUsername.Trim());
-        }
-
-        return usernames.OrderBy(x => x).ToList();
+        return await _userAccountService.GetAllUsernamesAsync();
     }
 
     public async Task<HashSet<string>> GetAllBoundWebUsernamesAsync()

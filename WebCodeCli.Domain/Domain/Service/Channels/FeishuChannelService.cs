@@ -266,7 +266,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             catch (InvalidOperationException ex)
             {
                 // 没有会话时提示用户
-                await ReplyMessageAsync(message.MessageId, $"⚠️ {ex.Message}");
+                await ReplyMessageAsync(message.MessageId, $"⚠️ {ex.Message}", message.SenderName);
                 return;
             }
 
@@ -279,17 +279,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             });
 
             // 创建流式回复，立即显示"思考中"状态
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName);
             var handle = await SendStreamingMessageAsync(
                 message.ChatId,
-                _options.ThinkingMessage,
-                message.MessageId);
+                effectiveOptions.ThinkingMessage,
+                message.MessageId,
+                message.SenderName);
 
             _logger.LogInformation(
                 "🔥 [FeishuChannel] 流式句柄已创建: CardId={CardId}",
                 handle.CardId);
 
             // 执行 CLI 工具并流式更新卡片
-            await ExecuteCliAndStreamAsync(handle, sessionId, message.Content, message.MessageId);
+            await ExecuteCliAndStreamAsync(handle, sessionId, message.Content, message.MessageId, effectiveOptions.ThinkingMessage);
         }
         catch (Exception ex)
         {
@@ -481,7 +483,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         FeishuStreamingHandle handle,
         string sessionId,
         string userPrompt,
-        string messageId)
+        string messageId,
+        string thinkingMessage)
     {
         var outputBuilder = new StringBuilder();
         var assistantMessageBuilder = new StringBuilder();
@@ -533,7 +536,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                     // 如果没有助手消息，显示"思考中"
                     if (string.IsNullOrWhiteSpace(displayContent))
                     {
-                        displayContent = _options.ThinkingMessage;
+                        displayContent = thinkingMessage;
                     }
                 }
                 else
@@ -698,15 +701,16 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <summary>
     /// 发送文本消息
     /// </summary>
-    public async Task<string> SendMessageAsync(string chatId, string content)
+    public async Task<string> SendMessageAsync(string chatId, string content, string? username = null)
     {
         _logger.LogDebug("Sending message to chat {ChatId}: {Content}", chatId, content);
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId);
 
         // 创建卡片
-        var cardId = await _cardKit.CreateCardAsync(content, _options.DefaultCardTitle);
+        var cardId = await _cardKit.CreateCardAsync(content, effectiveOptions.DefaultCardTitle, optionsOverride: effectiveOptions);
 
         // 发送卡片消息
-        var messageId = await _cardKit.SendCardMessageAsync(chatId, cardId);
+        var messageId = await _cardKit.SendCardMessageAsync(chatId, cardId, optionsOverride: effectiveOptions);
 
         _logger.LogDebug(
             "Message sent: CardId={CardId}, MessageId={MessageId}",
@@ -719,15 +723,16 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <summary>
     /// 回复消息
     /// </summary>
-    public async Task<string> ReplyMessageAsync(string messageId, string content)
+    public async Task<string> ReplyMessageAsync(string messageId, string content, string? username = null)
     {
         _logger.LogDebug("Replying to message {MessageId}: {Content}", messageId, content);
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username);
 
         // 创建卡片
-        var cardId = await _cardKit.CreateCardAsync(content, _options.DefaultCardTitle);
+        var cardId = await _cardKit.CreateCardAsync(content, effectiveOptions.DefaultCardTitle, optionsOverride: effectiveOptions);
 
         // 回复卡片消息
-        var replyMessageId = await _cardKit.ReplyCardMessageAsync(messageId, cardId);
+        var replyMessageId = await _cardKit.ReplyCardMessageAsync(messageId, cardId, optionsOverride: effectiveOptions);
 
         _logger.LogDebug(
             "Reply sent: CardId={CardId}, MessageId={ReplyMessageId}",
@@ -744,19 +749,22 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     public async Task<FeishuStreamingHandle> SendStreamingMessageAsync(
         string chatId,
         string initialContent,
-        string? replyToMessageId = null)
+        string? replyToMessageId = null,
+        string? username = null)
     {
         _logger.LogDebug(
             "Creating streaming message for chat {ChatId} (reply to: {ReplyMessageId})",
             chatId,
             replyToMessageId ?? "none");
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId);
 
         // 通过 CardKit 客户端创建流式句柄
         var handle = await _cardKit.CreateStreamingHandleAsync(
             chatId,
             replyToMessageId,
             initialContent,
-            _options.DefaultCardTitle);
+            effectiveOptions.DefaultCardTitle,
+            optionsOverride: effectiveOptions);
 
         _logger.LogDebug(
             "Streaming handle created: CardId={CardId}, MessageId={MessageId}",
@@ -764,6 +772,29 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             handle.MessageId);
 
         return handle;
+    }
+
+    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username = null, string? chatId = null)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var resolvedUsername = username;
+
+        if (string.IsNullOrWhiteSpace(resolvedUsername) && !string.IsNullOrWhiteSpace(chatId))
+        {
+            resolvedUsername = GetSessionUsername(chatId.ToLowerInvariant());
+        }
+
+        if (string.IsNullOrWhiteSpace(resolvedUsername))
+        {
+            var userContext = scope.ServiceProvider.GetRequiredService<IUserContextService>();
+            if (userContext.IsAuthenticated())
+            {
+                resolvedUsername = userContext.GetCurrentUsername();
+            }
+        }
+
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+        return await userFeishuBotConfigService.GetEffectiveOptionsAsync(resolvedUsername);
     }
 
     /// <summary>

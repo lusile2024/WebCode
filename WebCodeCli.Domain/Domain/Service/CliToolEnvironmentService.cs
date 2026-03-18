@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Repositories.Base.CliToolEnv;
+using WebCodeCli.Domain.Repositories.Base.UserCliToolEnv;
 
 namespace WebCodeCli.Domain.Domain.Service;
 
@@ -15,22 +16,22 @@ public interface ICliToolEnvironmentService
     /// <summary>
     /// 获取指定工具的环境变量配置（优先从数据库读取,否则从appsettings读取）
     /// </summary>
-    Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId);
+    Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId, string? username = null);
 
     /// <summary>
     /// 保存指定工具的环境变量配置到数据库
     /// </summary>
-    Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars);
+    Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null);
 
     /// <summary>
     /// 删除指定工具的环境变量配置
     /// </summary>
-    Task<bool> DeleteEnvironmentVariablesAsync(string toolId);
+    Task<bool> DeleteEnvironmentVariablesAsync(string toolId, string? username = null);
 
     /// <summary>
     /// 重置为appsettings中的默认配置
     /// </summary>
-    Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId);
+    Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId, string? username = null);
 }
 
 /// <summary>
@@ -42,49 +43,58 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     private readonly ILogger<CliToolEnvironmentService> _logger;
     private readonly CliToolsOption _options;
     private readonly ICliToolEnvironmentVariableRepository _repository;
+    private readonly IUserCliToolEnvironmentVariableRepository _userRepository;
+    private readonly IUserContextService _userContextService;
 
     public CliToolEnvironmentService(
         ILogger<CliToolEnvironmentService> logger,
         IOptions<CliToolsOption> options,
-        ICliToolEnvironmentVariableRepository repository)
+        ICliToolEnvironmentVariableRepository repository,
+        IUserCliToolEnvironmentVariableRepository userRepository,
+        IUserContextService userContextService)
     {
         _logger = logger;
         _options = options.Value;
         _repository = repository;
+        _userRepository = userRepository;
+        _userContextService = userContextService;
     }
 
     /// <summary>
     /// 获取指定工具的环境变量配置（优先从数据库读取,否则从appsettings读取）
     /// </summary>
-    public async Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId)
+    public async Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId, string? username = null)
     {
         try
         {
-            // 尝试从数据库读取
-            var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
-            
-            // 如果数据库中有配置,则使用数据库配置（过滤空值）
-            if (dbEnvVars.Any())
-            {
-                _logger.LogInformation("从数据库加载工具 {ToolId} 的环境变量配置", toolId);
-                // 过滤掉空值的环境变量，避免空字符串覆盖系统默认配置
-                return dbEnvVars
-                    .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-            }
-
-            // 否则从appsettings读取
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
-            if (tool?.EnvironmentVariables != null && tool.EnvironmentVariables.Any())
+            if (tool?.EnvironmentVariables != null)
             {
-                _logger.LogInformation("从配置文件加载工具 {ToolId} 的环境变量配置", toolId);
-                // 同样过滤掉空值
-                return tool.EnvironmentVariables
-                    .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                foreach (var kvp in tool.EnvironmentVariables.Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value)))
+                {
+                    result[kvp.Key] = kvp.Value;
+                }
             }
 
-            return new Dictionary<string, string>();
+            var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
+            foreach (var kvp in dbEnvVars.Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value)))
+            {
+                result[kvp.Key] = kvp.Value;
+            }
+
+            var resolvedUsername = ResolveUsername(username);
+            if (!string.IsNullOrWhiteSpace(resolvedUsername))
+            {
+                var userEnvVars = await _userRepository.GetEnvironmentVariablesAsync(resolvedUsername, toolId);
+                foreach (var kvp in userEnvVars.Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value)))
+                {
+                    result[kvp.Key] = kvp.Value;
+                }
+            }
+
+            _logger.LogInformation("获取工具 {ToolId} 的环境变量配置，用户={Username}，最终 {Count} 个", toolId, resolvedUsername, result.Count);
+            return result;
         }
         catch (Exception ex)
         {
@@ -96,14 +106,20 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     /// <summary>
     /// 保存指定工具的环境变量配置到数据库
     /// </summary>
-    public async Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars)
+    public async Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
     {
         try
         {
-            var result = await _repository.SaveEnvironmentVariablesAsync(toolId, envVars);
+            var resolvedUsername = ResolveUsername(username);
+            if (string.IsNullOrWhiteSpace(resolvedUsername))
+            {
+                return false;
+            }
+
+            var result = await _userRepository.SaveEnvironmentVariablesAsync(resolvedUsername, toolId, envVars);
             if (result)
             {
-                _logger.LogInformation("成功保存工具 {ToolId} 的环境变量配置", toolId);
+                _logger.LogInformation("成功保存工具 {ToolId} 的用户环境变量配置，用户={Username}", toolId, resolvedUsername);
             }
             return result;
         }
@@ -117,14 +133,20 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     /// <summary>
     /// 删除指定工具的环境变量配置
     /// </summary>
-    public async Task<bool> DeleteEnvironmentVariablesAsync(string toolId)
+    public async Task<bool> DeleteEnvironmentVariablesAsync(string toolId, string? username = null)
     {
         try
         {
-            var result = await _repository.DeleteByToolIdAsync(toolId);
+            var resolvedUsername = ResolveUsername(username);
+            if (string.IsNullOrWhiteSpace(resolvedUsername))
+            {
+                return false;
+            }
+
+            var result = await _userRepository.DeleteByToolIdAsync(resolvedUsername, toolId);
             if (result)
             {
-                _logger.LogInformation("成功删除工具 {ToolId} 的环境变量配置", toolId);
+                _logger.LogInformation("成功删除工具 {ToolId} 的用户环境变量配置，用户={Username}", toolId, resolvedUsername);
             }
             return result;
         }
@@ -138,27 +160,24 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     /// <summary>
     /// 重置为appsettings中的默认配置
     /// </summary>
-    public async Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId)
+    public async Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId, string? username = null)
     {
         try
         {
-            // 删除数据库配置
-            await _repository.DeleteByToolIdAsync(toolId);
-
-            // 返回appsettings中的配置
-            var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
-            if (tool?.EnvironmentVariables != null && tool.EnvironmentVariables.Any())
-            {
-                _logger.LogInformation("重置工具 {ToolId} 的环境变量为默认配置", toolId);
-                return new Dictionary<string, string>(tool.EnvironmentVariables);
-            }
-
-            return new Dictionary<string, string>();
+            await DeleteEnvironmentVariablesAsync(toolId, username);
+            return await GetEnvironmentVariablesAsync(toolId, username);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "重置工具 {ToolId} 的环境变量失败", toolId);
             return new Dictionary<string, string>();
         }
+    }
+
+    private string ResolveUsername(string? username)
+    {
+        return string.IsNullOrWhiteSpace(username)
+            ? _userContextService.GetCurrentUsername()
+            : username.Trim();
     }
 }

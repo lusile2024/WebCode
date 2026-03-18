@@ -2167,7 +2167,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     {
         try
         {
-            _availableTools = CliExecutorService.GetAvailableTools();
+            _availableTools = CliExecutorService.GetAvailableTools(_currentUsername);
             if (_availableTools.Any() && string.IsNullOrEmpty(_selectedToolId))
             {
                 _selectedToolId = _availableTools.First().Id;
@@ -3068,11 +3068,16 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     {
         try
         {
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "isAuthenticated");
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "username");
-            NavigationManager.NavigateTo("/login");
+            await JSRuntime.InvokeVoidAsync("authHelper.logout");
+            NavigationManager.NavigateTo("/login", forceLoad: true);
         }
         catch { }
+    }
+
+    private sealed class ClientAuthState
+    {
+        public bool IsAuthenticated { get; set; }
+        public string? Username { get; set; }
     }
     
     #endregion
@@ -3126,14 +3131,14 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         {
             try
             {
-                var isAuthenticated = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "isAuthenticated");
-                if (isAuthenticated != "true")
+                var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+                if (!authState.IsAuthenticated || string.IsNullOrWhiteSpace(authState.Username))
                 {
                     NavigationManager.NavigateTo("/login");
                     return;
                 }
                 
-                _currentUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username") ?? "用户";
+                _currentUsername = authState.Username;
                 _showUserInfo = true;
             }
             catch
@@ -3147,13 +3152,12 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         // 无论认证是否启用，都需要设置用户上下文
         try
         {
-            // 尝试从 sessionStorage 获取用户名
-            var storedUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username");
-            if (!string.IsNullOrWhiteSpace(storedUsername))
+            var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+            if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
-                _currentUsername = storedUsername;
-                UserContextService.SetCurrentUsername(storedUsername);
-                Console.WriteLine($"[用户上下文] 从sessionStorage设置当前用户: {storedUsername}");
+                _currentUsername = authState.Username;
+                UserContextService.SetCurrentUsername(authState.Username);
+                Console.WriteLine($"[用户上下文] 从认证状态设置当前用户: {authState.Username}");
             }
             else
             {

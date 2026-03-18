@@ -18,7 +18,7 @@ public interface IFeishuChannelService
     /// <param name="chatId">会话 ID</param>
     /// <param name="content">消息内容</param>
     /// <returns>消息 ID</returns>
-    Task<string> SendMessageAsync(string chatId, string content);
+    Task<string> SendMessageAsync(string chatId, string content, string? username = null);
 
     /// <summary>
     /// 回复消息
@@ -26,7 +26,7 @@ public interface IFeishuChannelService
     /// <param name="messageId">要回复的消息 ID</param>
     /// <param name="content">回复内容</param>
     /// <returns>回复消息 ID</returns>
-    Task<string> ReplyMessageAsync(string messageId, string content);
+    Task<string> ReplyMessageAsync(string messageId, string content, string? username = null);
 
     /// <summary>
     /// 发送流式消息（核心方法）
@@ -38,7 +38,8 @@ public interface IFeishuChannelService
     Task<FeishuStreamingHandle> SendStreamingMessageAsync(
         string chatId,
         string initialContent,
-        string? replyToMessageId = null);
+        string? replyToMessageId = null,
+        string? username = null);
 
     /// <summary>
     /// 处理收到的消息（由 FeishuMessageHandler 调用）

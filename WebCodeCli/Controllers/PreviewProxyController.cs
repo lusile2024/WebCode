@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Diagnostics;
 using System.Net;
@@ -214,6 +215,7 @@ public class CustomPathTransformer : HttpTransformer
 /// </summary>
 [ApiController]
 [Route("api/preview")]
+[Authorize]
 public class PreviewProxyController : ControllerBase
 {
     private readonly IDevServerManager _devServerManager;

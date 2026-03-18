@@ -15,6 +15,7 @@ public class SessionDirectoryService : ISessionDirectoryService
     private readonly IWorkspaceRegistryService _registryService;
     private readonly IWorkspaceAuthorizationService _authorizationService;
     private readonly IProjectRepository _projectRepository;
+    private readonly IUserWorkspacePolicyService _userWorkspacePolicyService;
     private readonly bool _autoCreateMissingDirectories;
     private readonly string[] _allowedRoots;
 
@@ -23,12 +24,14 @@ public class SessionDirectoryService : ISessionDirectoryService
         IWorkspaceRegistryService registryService,
         IWorkspaceAuthorizationService authorizationService,
         IProjectRepository projectRepository,
+        IUserWorkspacePolicyService userWorkspacePolicyService,
         IConfiguration configuration)
     {
         _chatSessionRepository = chatSessionRepository;
         _registryService = registryService;
         _authorizationService = authorizationService;
         _projectRepository = projectRepository;
+        _userWorkspacePolicyService = userWorkspacePolicyService;
         _autoCreateMissingDirectories = configuration.GetValue<bool?>("Workspace:AutoCreateMissingDirectories") ?? true;
         _allowedRoots = configuration.GetSection("Workspace:AllowedRoots").Get<string[]>() ?? Array.Empty<string>();
     }
@@ -63,6 +66,11 @@ public class SessionDirectoryService : ISessionDirectoryService
                 {
                     throw new UnauthorizedAccessException($"目录不在允许范围内: {directoryPath}");
                 }
+            }
+
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, normalizedPath))
+            {
+                throw new UnauthorizedAccessException($"目录不在当前用户白名单内: {directoryPath}");
             }
 
             if (!Directory.Exists(normalizedPath))
@@ -148,6 +156,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         foreach (var dir in owned)
         {
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, dir.DirectoryPath))
+            {
+                continue;
+            }
+
             result.Add(new
             {
                 dir.Id,
@@ -165,6 +178,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         foreach (var project in projects.Where(x => !string.IsNullOrWhiteSpace(x.LocalPath) && Directory.Exists(x.LocalPath)))
         {
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, project.LocalPath!))
+            {
+                continue;
+            }
+
             if (!addedPaths.Add(project.LocalPath!))
             {
                 continue;
@@ -186,6 +204,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         foreach (var auth in authorized)
         {
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, auth.DirectoryPath))
+            {
+                continue;
+            }
+
             if (!addedPaths.Add(auth.DirectoryPath))
             {
                 continue;

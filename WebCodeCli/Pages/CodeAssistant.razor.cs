@@ -324,15 +324,14 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         {
             try
             {
-                var isAuthenticated = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "isAuthenticated");
-                if (isAuthenticated != "true")
+                var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+                if (!authState.IsAuthenticated || string.IsNullOrWhiteSpace(authState.Username))
                 {
                     NavigationManager.NavigateTo("/login");
                     return;
                 }
                 
-                // 获取当前用户名
-                _currentUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username") ?? "用户";
+                _currentUsername = authState.Username;
                 _showUserInfo = true;
             }
             catch
@@ -346,13 +345,12 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         // 无论认证是否启用，都需要设置用户上下文
         try
         {
-            // 尝试从 sessionStorage 获取用户名
-            var storedUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username");
-            if (!string.IsNullOrWhiteSpace(storedUsername))
+            var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+            if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
-                _currentUsername = storedUsername;
-                UserContextService.SetCurrentUsername(storedUsername);
-                Console.WriteLine($"[用户上下文] 从sessionStorage设置当前用户: {storedUsername}");
+                _currentUsername = authState.Username;
+                UserContextService.SetCurrentUsername(authState.Username);
+                Console.WriteLine($"[用户上下文] 从认证状态设置当前用户: {authState.Username}");
             }
             else
             {
@@ -555,7 +553,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         try
         {
             // 获取所有可用的 CLI 工具
-            _allTools = CliExecutorService.GetAvailableTools();
+            _allTools = CliExecutorService.GetAvailableTools(_currentUsername);
             
             // 获取启用的助手列表
             _enabledAssistants = await SystemSettingsService.GetEnabledAssistantsAsync();
@@ -3232,11 +3230,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     {
         try
         {
-            // 清除会话存储
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "isAuthenticated");
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "username");
-            
-            // 跳转到登录页
+            await JSRuntime.InvokeVoidAsync("authHelper.logout");
             NavigationManager.NavigateTo("/login", forceLoad: true);
         }
         catch (Exception ex)
@@ -3250,6 +3244,12 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     {
         _showUserDropdown = !_showUserDropdown;
         StateHasChanged();
+    }
+
+    private sealed class ClientAuthState
+    {
+        public bool IsAuthenticated { get; set; }
+        public string? Username { get; set; }
     }
     
     private void CloseUserDropdown()

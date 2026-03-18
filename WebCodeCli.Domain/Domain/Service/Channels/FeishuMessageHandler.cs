@@ -158,7 +158,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         if (string.IsNullOrWhiteSpace(boundWebUsername))
         {
             var cardJson = _cardBuilder.BuildBindWebUserCard((await bindingService.GetBindableWebUsernamesAsync()).ToArray());
-            await _cardKit.ReplyRawCardAsync(message.MessageId, cardJson);
+            await _cardKit.ReplyRawCardAsync(message.MessageId, cardJson, optionsOverride: await ResolveEffectiveOptionsAsync(null));
             return;
         }
 
@@ -171,7 +171,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             var keyword = trimmedContent.StartsWith("/", StringComparison.Ordinal)
                 ? trimmedContent.Substring("/feishuhelp".Length).Trim()
                 : trimmedContent.Substring("feishuhelp".Length).Trim();
-            await HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword);
+            await HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword, boundWebUsername);
             return;
         }
 
@@ -371,7 +371,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         var result = await bindingService.BindAsync(feishuUserId, webUsername);
         if (!result.Success)
         {
-            await _feishuChannel.ReplyMessageAsync(replyToMessageId, $"❌ 绑定失败：{result.ErrorMessage}");
+            await _feishuChannel.ReplyMessageAsync(replyToMessageId, $"❌ 绑定失败：{result.ErrorMessage}", result.WebUsername);
             return;
         }
 
@@ -382,21 +382,29 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             await chatSessionRepository.DeleteAsync(session);
         }
 
-        await _feishuChannel.ReplyMessageAsync(replyToMessageId, $"✅ 已绑定 Web 用户：{result.WebUsername}\n现在你发送的消息、会话、目录和项目都将与 Web 端共享。");
+        await _feishuChannel.ReplyMessageAsync(
+            replyToMessageId,
+            $"✅ 已绑定 Web 用户：{result.WebUsername}\n现在你发送的消息、会话、目录和项目都将与 Web 端共享。",
+            result.WebUsername);
+        return;
     }
 
     private async Task HandleUnbindCommandAsync(string replyToMessageId, string feishuUserId)
     {
         using var scope = _serviceProvider.CreateScope();
         var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+        var boundUsername = await bindingService.GetBoundWebUsernameAsync(feishuUserId);
         var success = await bindingService.UnbindAsync(feishuUserId);
-        await _feishuChannel.ReplyMessageAsync(replyToMessageId, success ? "✅ 已解绑 Web 用户。" : "⚠️ 当前未绑定 Web 用户。");
+        await _feishuChannel.ReplyMessageAsync(
+            replyToMessageId,
+            success ? "✅ 已解绑 Web 用户。" : "⚠️ 当前未绑定 Web 用户。",
+            boundUsername);
     }
 
     /// <summary>
     /// 处理 /feishuhelp 命令
     /// </summary>
-    private async Task HandleFeishuHelpAsync(string chatId, string replyToMessageId, string keyword)
+    private async Task HandleFeishuHelpAsync(string chatId, string replyToMessageId, string keyword, string? webUsername)
     {
         _logger.LogInformation("🔥 [FeishuHelp] 收到帮助请求: ChatId={ChatId}, ReplyToMessageId={ReplyToMessageId}, Keyword={Keyword}",
             chatId, replyToMessageId, keyword);
@@ -430,7 +438,8 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
             // 使用 CardKit 发送原始JSON卡片
             _logger.LogInformation("🔥 [FeishuHelp] 开始调用 ReplyRawCardAsync...");
-            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(webUsername);
+            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson, optionsOverride: effectiveOptions);
             _logger.LogInformation("✅ [FeishuHelp] 帮助卡片已发送, MessageId={MessageId}", messageId);
         }
         catch (Exception ex)
@@ -597,13 +606,21 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
             // 发送卡片
             var cardJson = JsonSerializer.Serialize(card);
-            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(webUsername);
+            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson, optionsOverride: effectiveOptions);
             _logger.LogInformation("✅ [Feishu] 会话管理卡片已发送, MessageId={MessageId}", messageId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "处理sessions命令失败");
-            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 会话管理功能暂时不可用，请稍后重试。");
+            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 会话管理功能暂时不可用，请稍后重试。", webUsername);
         }
+    }
+
+    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+        return await userFeishuBotConfigService.GetEffectiveOptionsAsync(username);
     }
 }

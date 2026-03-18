@@ -4,6 +4,7 @@ using FeishuNetSdk.Im.Dtos;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
@@ -101,7 +102,7 @@ public class FeishuCardActionService
                 case "back_to_list":
                     return await HandleBackToListAsync(chatId);
                 case "execute_command":
-                    return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, inputValues);
+                    return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues);
                 case "switch_session":
                     return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "close_session":
@@ -195,7 +196,12 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理执行命令
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleExecuteCommandAsync(JsonElement? formValue, string? commandFromAction, string? chatId, string? inputValues = null)
+    private async Task<CardActionTriggerResponseDto> HandleExecuteCommandAsync(
+        JsonElement? formValue,
+        string? commandFromAction,
+        string? chatId,
+        string? operatorUserId,
+        string? inputValues = null)
     {
         if (string.IsNullOrEmpty(chatId))
         {
@@ -240,6 +246,9 @@ public class FeishuCardActionService
         {
             try
             {
+                var username = ResolveFeishuUsername(chatId.ToLowerInvariant(), operatorUserId);
+                var effectiveOptions = await ResolveEffectiveOptionsAsync(username);
+
                 // 获取或创建会话
                 var sessionId = GetOrCreateSession(chatId);
 
@@ -255,15 +264,16 @@ public class FeishuCardActionService
                 var handle = await _cardKit.CreateStreamingHandleAsync(
                     chatId,
                     null,
-                    "思考中...",
-                    "AI 助手");
+                    effectiveOptions.ThinkingMessage,
+                    effectiveOptions.DefaultCardTitle,
+                    optionsOverride: effectiveOptions);
 
                 _logger.LogInformation(
                     "🔥 [FeishuHelp] 流式句柄已创建: CardId={CardId}",
                     handle.CardId);
 
                 // 执行 CLI 工具并流式更新卡片
-                await ExecuteCliAndStreamAsync(handle, sessionId, commandInput);
+                await ExecuteCliAndStreamAsync(handle, sessionId, commandInput, effectiveOptions.ThinkingMessage);
             }
             catch (Exception ex)
             {
@@ -304,7 +314,8 @@ public class FeishuCardActionService
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
         string sessionId,
-        string userPrompt)
+        string userPrompt,
+        string thinkingMessage)
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
@@ -350,7 +361,7 @@ public class FeishuCardActionService
 
                     if (string.IsNullOrWhiteSpace(displayContent))
                     {
-                        displayContent = "思考中...";
+                        displayContent = thinkingMessage;
                     }
                 }
                 else
@@ -658,7 +669,7 @@ public class FeishuCardActionService
 
                     // 直接发送Markdown内容，系统会自动包装成卡片
                     _logger.LogInformation("🔍 [会话历史] 开始发送消息到聊天 {ChatId}", actualChatKey);
-                    var messageId = await _feishuChannel.SendMessageAsync(actualChatKey, contentBuilder.ToString());
+                    var messageId = await _feishuChannel.SendMessageAsync(actualChatKey, contentBuilder.ToString(), username);
                     _logger.LogInformation("✅ [会话历史] 已发送会话 {SessionId} 历史到聊天 {ChatId}, MessageId={MessageId}", sessionId, actualChatKey, messageId);
                 }
                 catch (Exception ex)
@@ -668,7 +679,7 @@ public class FeishuCardActionService
                     // 尝试发送错误提示
                     try
                     {
-                        await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 历史消息加载失败: {ex.Message}");
+                        await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 历史消息加载失败: {ex.Message}", username);
                     }
                     catch { }
                 }
@@ -878,6 +889,13 @@ public class FeishuCardActionService
         }
 
         return _feishuChannel.GetSessionUsername(chatKey);
+    }
+
+    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+        return await userFeishuBotConfigService.GetEffectiveOptionsAsync(username);
     }
 
     private static string? GetFormStringValue(JsonElement? formValue, string key)

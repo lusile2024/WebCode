@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,34 +16,31 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IFeishuCardKitClient), ServiceLifetime.Scoped)]
 public class FeishuCardKitClient : IFeishuCardKitClient
 {
-    private readonly FeishuOptions _options;
+    private readonly FeishuOptions _defaultOptions;
     private readonly ILogger<FeishuCardKitClient> _logger;
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl = "https://open.feishu.cn";
-
-    // Token 缓存
-    private string _accessToken = string.Empty;
-    private DateTime _tokenExpiresAt = DateTime.MinValue;
-    private readonly SemaphoreSlim _tokenLock = new(1, 1); // 异步锁，修复并发安全问题
-    private string? _lastValidToken; // 上次有效的 token，用于失败回退
+    private readonly ConcurrentDictionary<string, TokenCacheEntry> _tokenCache = new(StringComparer.Ordinal);
 
     public FeishuCardKitClient(
         IOptions<FeishuOptions> options,
         ILogger<FeishuCardKitClient> logger,
         IHttpClientFactory httpClientFactory)
     {
-        _options = options.Value;
+        _defaultOptions = options.Value;
         _logger = logger;
         _httpClient = httpClientFactory.CreateClient("FeishuClient");
-        _httpClient.Timeout = TimeSpan.FromSeconds(_options.HttpTimeoutSeconds > 0 ? _options.HttpTimeoutSeconds : 30);
+        _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<string> CreateCardAsync(
         string initialContent,
         string? title = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
-        var token = await EnsureTokenAsync(cancellationToken);
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
         var cardData = new
         {
@@ -57,7 +55,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 title = new
                 {
                     tag = "plain_text",
-                    content = title ?? _options.DefaultCardTitle
+                    content = title ?? effectiveOptions.DefaultCardTitle
                 }
             },
             body = new
@@ -79,8 +77,9 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             data = JsonSerializer.Serialize(cardData)
         };
 
-        var response = await PostAsync("/open-apis/cardkit/v1/cards", token, payload, cancellationToken);
+        var response = await PostAsync("/open-apis/cardkit/v1/cards", token, payload, effectiveOptions, cancellationToken);
         var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Create CardKit card");
 
         if (result.TryGetProperty("data", out var data) &&
             data.TryGetProperty("card_id", out var cardIdProp))
@@ -95,11 +94,13 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string cardId,
         string content,
         int sequence,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
         try
         {
-            var token = await EnsureTokenAsync(cancellationToken);
+            var effectiveOptions = GetEffectiveOptions(optionsOverride);
+            var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
             var cardData = new
             {
@@ -132,8 +133,9 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 sequence
             };
 
-            var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, cancellationToken);
+            var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
             var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "Update CardKit card");
 
             if (result.TryGetProperty("code", out var codeProp))
             {
@@ -159,9 +161,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     public async Task<string> SendCardMessageAsync(
         string chatId,
         string cardId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
-        var token = await EnsureTokenAsync(cancellationToken);
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
         var payload = new
         {
@@ -181,9 +185,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             "/open-apis/im/v1/messages?receive_id_type=chat_id",
             token,
             payload,
+            effectiveOptions,
             cancellationToken);
 
         var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Send Feishu card message");
 
         if (result.TryGetProperty("data", out var data) &&
             data.TryGetProperty("message_id", out var messageIdProp))
@@ -197,12 +203,14 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     public async Task<string> ReplyCardMessageAsync(
         string replyMessageId,
         string cardId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
         _logger.LogInformation("📤 [FeishuCardKit] ReplyCardMessageAsync: ReplyMessageId={ReplyMessageId}, CardId={CardId}",
             replyMessageId, cardId);
 
-        var token = await EnsureTokenAsync(cancellationToken);
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
         var payload = new
         {
@@ -222,10 +230,12 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             $"/open-apis/im/v1/messages/{replyMessageId}/reply",
             token,
             payload,
+            effectiveOptions,
             cancellationToken);
 
         _logger.LogInformation("📤 [FeishuCardKit] 响应状态码: {StatusCode}", response.StatusCode);
         var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Reply Feishu card message");
         _logger.LogDebug("📤 [FeishuCardKit] 响应内容: {Response}", result);
 
         if (result.TryGetProperty("data", out var data) &&
@@ -245,29 +255,32 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string? replyMessageId,
         string initialContent,
         string? title = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+
         // 1. 创建卡片
-        var cardId = await CreateCardAsync(initialContent, title, cancellationToken);
+        var cardId = await CreateCardAsync(initialContent, title, cancellationToken, effectiveOptions);
 
         // 2. 发送或回复卡片消息
         string messageId;
         if (!string.IsNullOrEmpty(replyMessageId))
         {
-            messageId = await ReplyCardMessageAsync(replyMessageId, cardId, cancellationToken);
+            messageId = await ReplyCardMessageAsync(replyMessageId, cardId, cancellationToken, effectiveOptions);
         }
         else
         {
-            messageId = await SendCardMessageAsync(chatId, cardId, cancellationToken);
+            messageId = await SendCardMessageAsync(chatId, cardId, cancellationToken, effectiveOptions);
         }
 
         // 3. 创建流式句柄
         return new FeishuStreamingHandle(
             cardId,
             messageId,
-            content => UpdateCardAsync(cardId, content, Sequence, cancellationToken),
-            content => UpdateCardAsync(cardId, content, Sequence + 1, cancellationToken),
-            _options.StreamingThrottleMs
+            content => UpdateCardAsync(cardId, content, Sequence, cancellationToken, effectiveOptions),
+            content => UpdateCardAsync(cardId, content, Sequence + 1, cancellationToken, effectiveOptions),
+            effectiveOptions.StreamingThrottleMs
         );
     }
 
@@ -278,27 +291,29 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     /// 获取或刷新访问令牌
     /// 使用 SemaphoreSlim 实现异步安全的双重检查锁定
     /// </summary>
-    private async Task<string> EnsureTokenAsync(CancellationToken cancellationToken)
+    private async Task<string> EnsureTokenAsync(FeishuOptions options, CancellationToken cancellationToken)
     {
+        var cacheEntry = GetTokenCacheEntry(options);
+
         // 快速路径：token 有效直接返回
-        if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiresAt)
+        if (!string.IsNullOrEmpty(cacheEntry.AccessToken) && DateTime.UtcNow < cacheEntry.TokenExpiresAt)
         {
-            return _accessToken;
+            return cacheEntry.AccessToken;
         }
 
-        await _tokenLock.WaitAsync(cancellationToken);
+        await cacheEntry.TokenLock.WaitAsync(cancellationToken);
         try
         {
             // 双重检查
-            if (!string.IsNullOrEmpty(_accessToken) && DateTime.UtcNow < _tokenExpiresAt)
+            if (!string.IsNullOrEmpty(cacheEntry.AccessToken) && DateTime.UtcNow < cacheEntry.TokenExpiresAt)
             {
-                return _accessToken;
+                return cacheEntry.AccessToken;
             }
 
             var payload = new
             {
-                app_id = _options.AppId,
-                app_secret = _options.AppSecret
+                app_id = options.AppId,
+                app_secret = options.AppSecret
             };
 
             HttpResponseMessage response;
@@ -308,21 +323,23 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                     "/open-apis/auth/v3/tenant_access_token/internal",
                     string.Empty,
                     payload,
+                    options,
                     cancellationToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to refresh access token");
+                _logger.LogError(ex, "Failed to refresh access token for AppId={AppId}", options.AppId);
                 // 回退：使用上次有效的 token（如果还有效）
-                if (!string.IsNullOrEmpty(_lastValidToken))
+                if (!string.IsNullOrEmpty(cacheEntry.LastValidToken))
                 {
-                    _logger.LogWarning("Using fallback token due to refresh failure");
-                    return _lastValidToken;
+                    _logger.LogWarning("Using fallback token due to refresh failure for AppId={AppId}", options.AppId);
+                    return cacheEntry.LastValidToken;
                 }
                 throw;
             }
 
             var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "Refresh Feishu tenant token");
 
             if (result.TryGetProperty("tenant_access_token", out var tokenProp) &&
                 result.TryGetProperty("expire", out var expireProp))
@@ -330,26 +347,26 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 var newToken = tokenProp.GetString() ?? string.Empty;
                 var expireSeconds = expireProp.GetInt32();
 
-                _accessToken = newToken;
-                _tokenExpiresAt = DateTime.UtcNow.AddSeconds(expireSeconds - 60);
-                _lastValidToken = newToken; // 保存有效 token 用于回退
+                cacheEntry.AccessToken = newToken;
+                cacheEntry.TokenExpiresAt = DateTime.UtcNow.AddSeconds(expireSeconds - 60);
+                cacheEntry.LastValidToken = newToken;
 
-                _logger.LogDebug("Access token refreshed, expires at {ExpiresAt}", _tokenExpiresAt);
-                return _accessToken;
+                _logger.LogDebug("Access token refreshed for AppId={AppId}, expires at {ExpiresAt}", options.AppId, cacheEntry.TokenExpiresAt);
+                return cacheEntry.AccessToken;
             }
 
             // 解析失败但可能还有旧 token 可用
-            if (!string.IsNullOrEmpty(_lastValidToken))
+            if (!string.IsNullOrEmpty(cacheEntry.LastValidToken))
             {
-                _logger.LogWarning("Token parse failed, using fallback token");
-                return _lastValidToken;
+                _logger.LogWarning("Token parse failed, using fallback token for AppId={AppId}", options.AppId);
+                return cacheEntry.LastValidToken;
             }
 
             throw new InvalidOperationException("Failed to get access token: invalid response");
         }
         finally
         {
-            _tokenLock.Release();
+            cacheEntry.TokenLock.Release();
         }
     }
 
@@ -357,6 +374,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string path,
         string token,
         object payload,
+        FeishuOptions options,
         CancellationToken cancellationToken)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{path}");
@@ -370,13 +388,14 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             request.Headers.Add("Authorization", $"Bearer {token}");
         }
 
-        return await _httpClient.SendAsync(request, cancellationToken);
+        return await SendAsync(request, options, cancellationToken);
     }
 
     private async Task<HttpResponseMessage> PutAsync(
         string path,
         string token,
         object payload,
+        FeishuOptions options,
         CancellationToken cancellationToken)
     {
         var request = new HttpRequestMessage(HttpMethod.Put, $"{_baseUrl}{path}");
@@ -390,7 +409,22 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             request.Headers.Add("Authorization", $"Bearer {token}");
         }
 
-        return await _httpClient.SendAsync(request, cancellationToken);
+        return await SendAsync(request, options, cancellationToken);
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (options.HttpTimeoutSeconds <= 0)
+        {
+            return await _httpClient.SendAsync(request, cancellationToken);
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(options.HttpTimeoutSeconds));
+        return await _httpClient.SendAsync(request, timeoutCts.Token);
     }
 
     private async Task<JsonElement> ParseResponseAsync(
@@ -411,6 +445,37 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return JsonDocument.Parse(content).RootElement;
     }
 
+    private void EnsureBusinessSuccess(JsonElement result, string operationName)
+    {
+        if (!result.TryGetProperty("code", out var codeProp))
+        {
+            return;
+        }
+
+        var code = codeProp.GetInt32();
+        if (code == 0)
+        {
+            return;
+        }
+
+        var message = result.TryGetProperty("msg", out var msgProp)
+            ? msgProp.GetString()
+            : "Unknown error";
+
+        throw new InvalidOperationException($"{operationName} failed: {message} (code: {code})");
+    }
+
+    private FeishuOptions GetEffectiveOptions(FeishuOptions? optionsOverride)
+    {
+        return optionsOverride ?? _defaultOptions;
+    }
+
+    private TokenCacheEntry GetTokenCacheEntry(FeishuOptions options)
+    {
+        var cacheKey = $"{options.AppId}\n{options.AppSecret}";
+        return _tokenCache.GetOrAdd(cacheKey, _ => new TokenCacheEntry());
+    }
+
     /// <summary>
     /// 发送原始JSON卡片消息（帮助功能专用）
     /// 通过 CardKit 创建卡片，避免JSON格式问题
@@ -418,12 +483,14 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     public async Task<string> SendRawCardAsync(
         string chatId,
         string cardJson,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
         _logger.LogInformation("📤 [FeishuCardKit] 通过CardKit发送卡片");
 
         // 1. 先用 CardKit API 创建卡片
-        var token = await EnsureTokenAsync(cancellationToken);
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
         var createCardPayload = new
         {
@@ -435,9 +502,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             "/open-apis/cardkit/v1/cards",
             token,
             createCardPayload,
+            effectiveOptions,
             cancellationToken);
 
         var createResult = await ParseResponseAsync(createResponse, cancellationToken);
+        EnsureBusinessSuccess(createResult, "Create raw CardKit card");
 
         if (!createResult.TryGetProperty("data", out var createData) ||
             !createData.TryGetProperty("card_id", out var cardIdProp))
@@ -449,7 +518,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         _logger.LogInformation("📤 [FeishuCardKit] CardKit创建成功: CardId={CardId}", cardId);
 
         // 2. 再发送卡片消息
-        return await SendCardMessageAsync(chatId, cardId, cancellationToken);
+        return await SendCardMessageAsync(chatId, cardId, cancellationToken, effectiveOptions);
     }
 
     /// <summary>
@@ -459,14 +528,16 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     public async Task<string> ReplyRawCardAsync(
         string replyMessageId,
         string cardJson,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
     {
         _logger.LogInformation("📤 [FeishuCardKit] 回复交互式卡片, ReplyMessageId={ReplyMessageId}", replyMessageId);
         _logger.LogDebug("📤 [FeishuCardKit] 卡片JSON: {CardJson}", cardJson);
 
         try
         {
-            var token = await EnsureTokenAsync(cancellationToken);
+            var effectiveOptions = GetEffectiveOptions(optionsOverride);
+            var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
             // 步骤1: 使用 CardKit API 创建卡片,获取 card_id
             _logger.LogInformation("📤 [FeishuCardKit] 步骤1: 创建卡片...");
@@ -481,6 +552,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 "/open-apis/cardkit/v1/cards",
                 token,
                 createCardPayload,
+                effectiveOptions,
                 cancellationToken);
 
             var createContent = await createResponse.Content.ReadAsStringAsync(cancellationToken);
@@ -493,6 +565,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             }
 
             var createResult = JsonDocument.Parse(createContent).RootElement;
+            EnsureBusinessSuccess(createResult, "Create reply CardKit card");
 
             if (!createResult.TryGetProperty("data", out var createData) ||
                 !createData.TryGetProperty("card_id", out var cardIdProp))
@@ -521,6 +594,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 $"/open-apis/im/v1/messages/{replyMessageId}/reply",
                 token,
                 replyPayload,
+                effectiveOptions,
                 cancellationToken);
 
             var replyContent = await replyResponse.Content.ReadAsStringAsync(cancellationToken);
@@ -533,6 +607,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             }
 
             var replyResult = JsonDocument.Parse(replyContent).RootElement;
+            EnsureBusinessSuccess(replyResult, "Reply raw Feishu card message");
 
             if (replyResult.TryGetProperty("data", out var data) &&
                 data.TryGetProperty("message_id", out var messageIdProp))
@@ -550,5 +625,13 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             _logger.LogError(ex, "❌ [FeishuCardKit] ReplyRawCardAsync 失败");
             throw;
         }
+    }
+
+    private sealed class TokenCacheEntry
+    {
+        public string AccessToken { get; set; } = string.Empty;
+        public DateTime TokenExpiresAt { get; set; } = DateTime.MinValue;
+        public string? LastValidToken { get; set; }
+        public SemaphoreSlim TokenLock { get; } = new(1, 1);
     }
 }
