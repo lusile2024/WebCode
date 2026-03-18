@@ -151,6 +151,56 @@ public class ProjectServiceTests
         }
     }
 
+    [Fact]
+    public async Task SwitchProjectBranchAsync_UpdatesStoredBranchAndPassesCredentialsToGitService()
+    {
+        var repository = new InMemoryProjectRepository();
+        var tempPath = Path.Combine(Path.GetTempPath(), $"project-service-switch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempPath);
+
+        repository.Seed(new ProjectEntity
+        {
+            ProjectId = "project-switch",
+            Username = "tester",
+            Name = "Demo",
+            GitUrl = "http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4",
+            AuthType = "https",
+            HttpsUsername = "alice",
+            HttpsToken = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("secret")),
+            Branch = "main",
+            LocalPath = tempPath,
+            Status = "ready",
+            CreatedAt = DateTime.Now,
+            UpdatedAt = DateTime.Now
+        });
+
+        var gitService = new StubGitService
+        {
+            CurrentBranch = "release"
+        };
+        var service = CreateService(repository, gitService);
+
+        try
+        {
+            var (success, errorMessage) = await service.SwitchProjectBranchAsync("project-switch", "release");
+
+            Assert.True(success);
+            Assert.Null(errorMessage);
+            Assert.Equal("release", gitService.LastSwitchedBranch);
+            Assert.NotNull(gitService.LastSwitchCredentials);
+            Assert.Equal("alice", gitService.LastSwitchCredentials!.HttpsUsername);
+            Assert.Equal("secret", gitService.LastSwitchCredentials.HttpsToken);
+            Assert.Equal("release", repository.Entities.Single().Branch);
+        }
+        finally
+        {
+            if (Directory.Exists(tempPath))
+            {
+                Directory.Delete(tempPath, recursive: true);
+            }
+        }
+    }
+
     private static ProjectService CreateService(InMemoryProjectRepository repository, StubGitService? gitService = null)
     {
         return new ProjectService(
@@ -224,6 +274,10 @@ public class ProjectServiceTests
 
         public GitCredentials? LastCloneCredentials { get; private set; }
 
+        public string? LastSwitchedBranch { get; private set; }
+
+        public GitCredentials? LastSwitchCredentials { get; private set; }
+
         public bool IsGitRepository(string workspacePath) => true;
 
         public Task<List<GitCommit>> GetFileHistoryAsync(string workspacePath, string filePath, int maxCount = 50) => throw new NotSupportedException();
@@ -251,6 +305,14 @@ public class ProjectServiceTests
             => Task.FromResult<(List<string>, string?)>(([], null));
 
         public string? GetCurrentBranch(string localPath) => CurrentBranch;
+
+        public Task<(bool Success, string? ErrorMessage)> SwitchBranchAsync(string localPath, string branch, GitCredentials? credentials = null)
+        {
+            LastSwitchedBranch = branch;
+            LastSwitchCredentials = credentials;
+            CurrentBranch = branch;
+            return Task.FromResult((true, (string?)null));
+        }
     }
 
     private sealed class InMemoryProjectRepository : IProjectRepository

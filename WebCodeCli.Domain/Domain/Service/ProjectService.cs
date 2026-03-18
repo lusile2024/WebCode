@@ -631,6 +631,95 @@ public class ProjectService : IProjectService
     }
 
     /// <summary>
+    /// 获取已保存项目的远程分支列表
+    /// </summary>
+    public async Task<(List<string> Branches, string? ErrorMessage)> GetProjectBranchesAsync(string projectId)
+    {
+        try
+        {
+            var username = _userContextService.GetCurrentUsername();
+            var entity = await _projectRepository.GetByIdAndUsernameAsync(projectId, username);
+
+            if (entity == null)
+            {
+                return (new List<string>(), "项目不存在");
+            }
+
+            if (string.IsNullOrWhiteSpace(entity.GitUrl))
+            {
+                return (new List<string>(), "本地 ZIP 项目不支持分支切换");
+            }
+
+            var credentials = BuildCredentials(entity);
+            return await _gitService.ListRemoteBranchesAsync(entity.GitUrl, credentials);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取项目分支列表失败: {ProjectId}", projectId);
+            return (new List<string>(), $"获取项目分支列表失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 切换已克隆项目的当前分支
+    /// </summary>
+    public async Task<(bool Success, string? ErrorMessage)> SwitchProjectBranchAsync(string projectId, string branch)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(branch))
+            {
+                return (false, "分支不能为空");
+            }
+
+            var username = _userContextService.GetCurrentUsername();
+            var entity = await _projectRepository.GetByIdAndUsernameAsync(projectId, username);
+
+            if (entity == null)
+            {
+                return (false, "项目不存在");
+            }
+
+            if (string.IsNullOrWhiteSpace(entity.GitUrl))
+            {
+                return (false, "本地 ZIP 项目不支持分支切换");
+            }
+
+            if (!string.Equals(entity.Status, "ready", StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, "项目尚未就绪，请先完成克隆");
+            }
+
+            if (string.IsNullOrWhiteSpace(entity.LocalPath) || !Directory.Exists(entity.LocalPath))
+            {
+                return (false, "项目本地目录不存在，请重新克隆");
+            }
+
+            var credentials = BuildCredentials(entity);
+            var (success, errorMessage) = await _gitService.SwitchBranchAsync(entity.LocalPath, branch.Trim(), credentials);
+
+            if (!success)
+            {
+                _logger.LogWarning("项目切换分支失败: {ProjectId}, Branch={Branch}, Error={Error}", projectId, branch, errorMessage);
+                return (false, errorMessage);
+            }
+
+            entity.Branch = _gitService.GetCurrentBranch(entity.LocalPath) ?? branch.Trim();
+            entity.ErrorMessage = null;
+            entity.UpdatedAt = DateTime.Now;
+            await _projectRepository.UpdateAsync(entity);
+
+            _logger.LogInformation("项目切换分支成功: {ProjectId}, Branch={Branch}", projectId, entity.Branch);
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "项目切换分支失败: {ProjectId}, Branch={Branch}", projectId, branch);
+            return (false, $"切换分支失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// 获取项目的本地路径
     /// </summary>
     public string? GetProjectLocalPath(string projectId)

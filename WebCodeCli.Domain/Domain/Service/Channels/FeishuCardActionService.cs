@@ -10,6 +10,7 @@ using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
 using System.Text.Json.Nodes;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -33,6 +34,7 @@ public class FeishuCardActionService
     private const int SessionDirectoryPageSize = 8;
     private const int SessionFilePreviewLineLimit = 80;
     private const int SessionFilePreviewCharacterLimit = 4000;
+    private const int ProjectBranchPageSize = 12;
 
     // 会话映射（从 FeishuChannelService 复制）
     private readonly Dictionary<string, string> _sessionMappings = new();
@@ -141,6 +143,10 @@ public class FeishuCardActionService
                     return await HandleCloneProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
                 case "pull_project":
                     return await HandlePullProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                case "show_project_branch_switcher":
+                    return await HandleShowProjectBranchSwitcherAsync(action.ChatKey ?? chatId, action.ProjectId, action.Page, operatorUserId);
+                case "switch_project_branch":
+                    return await HandleSwitchProjectBranchAsync(action.ChatKey ?? chatId, action.ProjectId, action.Branch, action.Page, operatorUserId);
                 case "delete_project":
                     return await HandleDeleteProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
                 case "fetch_project_branches":
@@ -1964,28 +1970,16 @@ public class FeishuCardActionService
         return _cardBuilder.BuildCardActionResponseV2(managerCard, "✅ 项目配置已更新", "success");
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleDeleteProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandleDeleteProjectAsync(string? chatId, string? projectId, string? operatorUserId)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
-            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，删除失败", "error");
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，删除失败", "error"));
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
-        if (projectScope == null)
-        {
-            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理项目", "error");
-        }
-
-        var (success, errorMessage) = await projectScope.ProjectService.DeleteProjectAsync(projectId);
-        if (!success)
-        {
-            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ {errorMessage ?? "删除项目失败"}", "error");
-        }
-
-        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
-        return _cardBuilder.BuildCardActionResponseV2(managerCard, "🗑️ 项目已删除", "success");
+        _ = Task.Run(() => DeleteProjectInBackgroundAsync(actualChatKey, projectId, operatorUserId));
+        return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台删除项目，完成后会发送结果", "info"));
     }
 
     private async Task<CardActionTriggerResponseDto> HandleFetchProjectBranchesAsync(string? chatId, string? projectId, JsonElement? formValue, string? operatorUserId)
@@ -2103,6 +2097,149 @@ public class FeishuCardActionService
         });
 
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台拉取项目，完成后会发送通知", "info"));
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleShowProjectBranchSwitcherAsync(
+        string? chatId,
+        string? projectId,
+        int? page,
+        string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法选择项目分支", "error"));
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        _ = Task.Run(() => SendProjectBranchSwitcherCardAsync(actualChatKey, projectId, page, operatorUserId));
+        return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台加载分支列表，完成后会发送卡片", "info"));
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleSwitchProjectBranchAsync(
+        string? chatId,
+        string? projectId,
+        string? branch,
+        int? page,
+        string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(branch))
+        {
+            return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法切换项目分支", "error"));
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        _ = Task.Run(() => SwitchProjectBranchInBackgroundAsync(actualChatKey, projectId, branch, page, operatorUserId));
+        return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse($"🚀 已开始后台切换到分支 {branch}", "info"));
+    }
+
+    private async Task SendProjectBranchSwitcherCardAsync(string chatKey, string projectId, int? page, string? operatorUserId)
+    {
+        try
+        {
+            using var projectScope = CreateProjectScopeContext(chatKey, operatorUserId);
+            if (projectScope == null)
+            {
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目");
+                return;
+            }
+
+            var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+            if (project == null)
+            {
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 项目不存在或已被删除");
+                return;
+            }
+
+            var (branches, errorMessage) = await projectScope.ProjectService.GetProjectBranchesAsync(projectId);
+            var card = BuildProjectBranchSwitcherCard(chatKey, project, branches, errorMessage, page ?? 0);
+            await SendElementsCardToChatAsync(chatKey, card, "❌ 分支列表加载完成，但发送卡片失败");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "后台加载项目分支列表失败: ChatKey={ChatKey}, ProjectId={ProjectId}", chatKey, projectId);
+            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 加载项目分支列表失败：{ex.Message}");
+        }
+    }
+
+    private async Task SwitchProjectBranchInBackgroundAsync(
+        string chatKey,
+        string projectId,
+        string branch,
+        int? page,
+        string? operatorUserId)
+    {
+        try
+        {
+            using var projectScope = CreateProjectScopeContext(chatKey, operatorUserId);
+            if (projectScope == null)
+            {
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目");
+                return;
+            }
+
+            var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+            if (project == null)
+            {
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 项目不存在或已被删除");
+                return;
+            }
+
+            var (success, errorMessage) = await projectScope.ProjectService.SwitchProjectBranchAsync(projectId, branch);
+            if (!success)
+            {
+                var latestProject = await projectScope.ProjectService.GetProjectAsync(projectId) ?? project;
+                var (branches, branchErrorMessage) = await projectScope.ProjectService.GetProjectBranchesAsync(projectId);
+                var helperText = errorMessage;
+                if (!string.IsNullOrWhiteSpace(branchErrorMessage) && !string.Equals(branchErrorMessage, errorMessage, StringComparison.Ordinal))
+                {
+                    helperText = string.IsNullOrWhiteSpace(helperText)
+                        ? branchErrorMessage
+                        : $"{helperText}；{branchErrorMessage}";
+                }
+
+                var retryCard = BuildProjectBranchSwitcherCard(chatKey, latestProject, branches, helperText, page ?? 0);
+                await SendElementsCardToChatAsync(chatKey, retryCard, $"❌ 切换分支失败：{errorMessage ?? "未知错误"}");
+                return;
+            }
+
+            var managerCard = await BuildProjectManagerCardAsync(chatKey, operatorUserId);
+            await SendElementsCardToChatAsync(chatKey, managerCard, $"✅ 已切换到分支 {branch}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "后台切换项目分支失败: ChatKey={ChatKey}, ProjectId={ProjectId}, Branch={Branch}", chatKey, projectId, branch);
+            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 切换项目分支失败：{ex.Message}");
+        }
+    }
+
+    private async Task DeleteProjectInBackgroundAsync(string chatKey, string projectId, string? operatorUserId)
+    {
+        try
+        {
+            using var projectScope = CreateProjectScopeContext(chatKey, operatorUserId);
+            if (projectScope == null)
+            {
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目");
+                return;
+            }
+
+            var project = await projectScope.ProjectService.GetProjectAsync(projectId);
+            var projectName = project?.Name ?? projectId;
+            var (success, errorMessage) = await projectScope.ProjectService.DeleteProjectAsync(projectId);
+            if (!success)
+            {
+                await _feishuChannel.SendMessageAsync(chatKey, $"❌ 项目 {projectName} 删除失败：{errorMessage ?? "未知错误"}");
+                return;
+            }
+
+            var managerCard = await BuildProjectManagerCardAsync(chatKey, operatorUserId);
+            await SendElementsCardToChatAsync(chatKey, managerCard, $"🗑️ 项目 {projectName} 已删除");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "后台删除项目失败: ChatKey={ChatKey}, ProjectId={ProjectId}", chatKey, projectId);
+            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 项目删除失败：{ex.Message}");
+        }
     }
 
     private async Task<CardActionTriggerResponseDto> HandleCreateSessionFromProjectAsync(string? chatId, string? projectId, string? operatorUserId)
@@ -2223,6 +2360,19 @@ public class FeishuCardActionService
                             project_id = project.ProjectId
                         }));
 
+                    if (string.Equals(project.Status, "ready", StringComparison.OrdinalIgnoreCase))
+                    {
+                        elements.Add(BuildActionButton(
+                            "🌿 切换分支",
+                            "default",
+                            new
+                            {
+                                action = "show_project_branch_switcher",
+                                chat_key = chatKey,
+                                project_id = project.ProjectId
+                            }));
+                    }
+
                     elements.Add(BuildActionButton(
                         "✏️ 编辑项目",
                         "default",
@@ -2274,6 +2424,253 @@ public class FeishuCardActionService
             {
                 Template = "green",
                 Title = new HeaderTitleElement { Content = "📁 项目管理" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private ElementsCardV2Dto BuildProjectBranchSwitcherCard(
+        string chatKey,
+        ProjectInfo project,
+        List<string> branches,
+        string? helperText,
+        int pageIndex)
+    {
+        var normalizedBranches = branches
+            .Where(branch => !string.IsNullOrWhiteSpace(branch))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var totalPages = Math.Max(1, (int)Math.Ceiling(normalizedBranches.Count / (double)ProjectBranchPageSize));
+        var safePageIndex = Math.Clamp(pageIndex, 0, totalPages - 1);
+        var pagedBranches = normalizedBranches
+            .Skip(safePageIndex * ProjectBranchPageSize)
+            .Take(ProjectBranchPageSize)
+            .ToList();
+        var branchDisplay = string.IsNullOrWhiteSpace(project.Branch) ? "远端默认分支" : project.Branch;
+        var gitUrlDisplay = string.IsNullOrWhiteSpace(project.GitUrl) ? "(ZIP 项目)" : project.GitUrl;
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## 🌿 切换项目分支\n项目: **{project.Name}**\n仓库: `{gitUrlDisplay}`\n当前分支: `{branchDisplay}`\n远程分支: **{normalizedBranches.Count}** 个，第 **{safePageIndex + 1}/{totalPages}** 页\n点击目标分支后会直接执行切换。"
+                }
+            }
+        };
+
+        if (!string.IsNullOrWhiteSpace(helperText))
+        {
+            elements.Add(new { tag = "hr" });
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"**提示**\n{helperText}"
+                }
+            });
+        }
+
+        elements.Add(new { tag = "hr" });
+
+        if (pagedBranches.Count == 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "当前没有可展示的远程分支。"
+                }
+            });
+        }
+        else
+        {
+            foreach (var branch in pagedBranches)
+            {
+                var isCurrentBranch = string.Equals(project.Branch, branch, StringComparison.OrdinalIgnoreCase);
+                elements.Add(new
+                {
+                    tag = "column_set",
+                    flex_mode = "none",
+                    background_style = "default",
+                    columns = new object[]
+                    {
+                        new
+                        {
+                            tag = "column",
+                            width = "weighted",
+                            weight = 5,
+                            vertical_align = "top",
+                            elements = new object[]
+                            {
+                                new
+                                {
+                                    tag = "div",
+                                    text = new
+                                    {
+                                        tag = "lark_md",
+                                        content = isCurrentBranch
+                                            ? $"**`{branch}`**\n当前所在分支"
+                                            : $"**`{branch}`**"
+                                    }
+                                }
+                            }
+                        },
+                        new
+                        {
+                            tag = "column",
+                            width = "auto",
+                            vertical_align = "top",
+                            elements = isCurrentBranch
+                                ? new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "div",
+                                        text = new { tag = "plain_text", content = "当前分支" }
+                                    }
+                                }
+                                : new object[]
+                                {
+                                    BuildActionButton(
+                                        "切换到此分支",
+                                        "primary",
+                                        new
+                                        {
+                                            action = "switch_project_branch",
+                                            chat_key = chatKey,
+                                            project_id = project.ProjectId,
+                                            branch,
+                                            page = safePageIndex
+                                        })
+                                }
+                        }
+                    }
+                });
+            }
+        }
+
+        if (totalPages > 1)
+        {
+            elements.Add(new { tag = "hr" });
+            elements.Add(new
+            {
+                tag = "column_set",
+                flex_mode = "none",
+                background_style = "default",
+                columns = new object[]
+                {
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 2,
+                        vertical_align = "top",
+                        elements = safePageIndex > 0
+                            ? new object[]
+                            {
+                                BuildActionButton(
+                                    "⬅️ 上一页",
+                                    "default",
+                                    new
+                                    {
+                                        action = "show_project_branch_switcher",
+                                        chat_key = chatKey,
+                                        project_id = project.ProjectId,
+                                        page = safePageIndex - 1
+                                    })
+                            }
+                            : new object[]
+                            {
+                                new
+                                {
+                                    tag = "div",
+                                    text = new { tag = "plain_text", content = string.Empty }
+                                }
+                            }
+                    },
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 3,
+                        vertical_align = "top",
+                        elements = new object[]
+                        {
+                            new
+                            {
+                                tag = "div",
+                                text = new
+                                {
+                                    tag = "lark_md",
+                                    content = $"当前第 **{safePageIndex + 1}/{totalPages}** 页"
+                                }
+                            }
+                        }
+                    },
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 2,
+                        vertical_align = "top",
+                        elements = safePageIndex < totalPages - 1
+                            ? new object[]
+                            {
+                                BuildActionButton(
+                                    "下一页 ➡️",
+                                    "default",
+                                    new
+                                    {
+                                        action = "show_project_branch_switcher",
+                                        chat_key = chatKey,
+                                        project_id = project.ProjectId,
+                                        page = safePageIndex + 1
+                                    })
+                            }
+                            : new object[]
+                            {
+                                new
+                                {
+                                    tag = "div",
+                                    text = new { tag = "plain_text", content = string.Empty }
+                                }
+                            }
+                    }
+                }
+            });
+        }
+
+        elements.Add(new { tag = "hr" });
+        elements.Add(BuildActionButton(
+            "📁 返回项目列表",
+            "default",
+            new
+            {
+                action = "open_project_manager",
+                chat_key = chatKey
+            }));
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "green",
+                Title = new HeaderTitleElement { Content = $"🌿 切换分支：{project.Name}" }
             },
             Config = new ElementsCardV2Dto.ConfigSuffix
             {
@@ -3401,6 +3798,23 @@ public class FeishuCardActionService
                 }
             }
         };
+    }
+
+    private async Task SendElementsCardToChatAsync(string chatId, ElementsCardV2Dto card, string fallbackMessage)
+    {
+        try
+        {
+            var cardJson = JsonSerializer.Serialize(card, new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            });
+            await _cardKit.SendRawCardAsync(chatId, cardJson);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "发送飞书卡片失败: ChatId={ChatId}", chatId);
+            await _feishuChannel.SendMessageAsync(chatId, fallbackMessage);
+        }
     }
 
     private static string BuildWorkspaceEntryFullPath(string workspacePath, string relativePath)

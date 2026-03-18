@@ -46,6 +46,12 @@ public class FeishuHelpCardAction
     public string? ProjectId { get; set; }
 
     /// <summary>
+    /// 分支名称（项目分支切换时使用）
+    /// </summary>
+    [JsonPropertyName("branch")]
+    public string? Branch { get; set; }
+
+    /// <summary>
     /// 聊天Key（会话管理时使用，格式：feishu:{AppId}:{ChatId}）
     /// </summary>
     [JsonPropertyName("chat_key")]

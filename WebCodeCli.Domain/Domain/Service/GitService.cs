@@ -619,6 +619,167 @@ public class GitService : IGitService
             }
         });
     }
+
+    /// <summary>
+    /// 切换本地仓库分支
+    /// </summary>
+    public async Task<(bool Success, string? ErrorMessage)> SwitchBranchAsync(
+        string localPath,
+        string branch,
+        GitCredentials? credentials = null)
+    {
+        return await Task.Run(() =>
+        {
+            string? tempSshKeyPath = null;
+            string? tempAskPassPath = null;
+
+            try
+            {
+                if (!IsGitRepository(localPath))
+                {
+                    return (false, "指定路径不是有效的 Git 仓库");
+                }
+
+                var normalizedBranch = branch?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(normalizedBranch))
+                {
+                    return (false, "分支不能为空");
+                }
+
+                _logger?.LogInformation("开始切换分支: {LocalPath} -> {Branch}", localPath, normalizedBranch);
+                string? remoteUrl;
+                bool localBranchExists;
+                using (var repo = new Repository(localPath))
+                {
+                    remoteUrl = repo.Network.Remotes["origin"]?.Url;
+                    localBranchExists = repo.Branches[normalizedBranch] != null;
+                }
+
+                var fetchRefSpec = BuildFetchBranchRefSpec(normalizedBranch);
+                if (ShouldUseCliForBranchSwitch(credentials))
+                {
+                    var fetchResult = ExecuteSwitchBranchCliCommand(
+                        localPath,
+                        remoteUrl,
+                        $"{BuildLongPathConfigArguments()} fetch origin \"{fetchRefSpec}\"",
+                        credentials,
+                        ref tempSshKeyPath,
+                        ref tempAskPassPath);
+
+                    if (fetchResult.ExitCode != 0)
+                    {
+                        var errorMessage = $"Git 操作失败: {fetchResult.StdErr}";
+                        _logger?.LogError("切换分支前拉取远端分支失败(CLI): {LocalPath}, {Error}", localPath, fetchResult.StdErr);
+                        return (false, errorMessage);
+                    }
+
+                    var checkoutArguments = localBranchExists
+                        ? $"{BuildLongPathConfigArguments()} checkout \"{normalizedBranch}\""
+                        : $"{BuildLongPathConfigArguments()} checkout -b \"{normalizedBranch}\" --track \"origin/{normalizedBranch}\"";
+
+                    var checkoutResult = ExecuteSwitchBranchCliCommand(
+                        localPath,
+                        remoteUrl,
+                        checkoutArguments,
+                        credentials,
+                        ref tempSshKeyPath,
+                        ref tempAskPassPath);
+
+                    if (checkoutResult.ExitCode != 0)
+                    {
+                        var errorMessage = $"Git 操作失败: {checkoutResult.StdErr}";
+                        _logger?.LogError("切换分支失败(CLI checkout): {LocalPath}, Branch={Branch}, Error={Error}", localPath, normalizedBranch, checkoutResult.StdErr);
+                        return (false, errorMessage);
+                    }
+
+                    if (localBranchExists)
+                    {
+                        var upstreamResult = ExecuteSwitchBranchCliCommand(
+                            localPath,
+                            remoteUrl,
+                            $"{BuildLongPathConfigArguments()} branch --set-upstream-to \"origin/{normalizedBranch}\" \"{normalizedBranch}\"",
+                            credentials,
+                            ref tempSshKeyPath,
+                            ref tempAskPassPath);
+
+                        if (upstreamResult.ExitCode != 0)
+                        {
+                            var errorMessage = $"Git 操作失败: {upstreamResult.StdErr}";
+                            _logger?.LogError("设置分支跟踪关系失败(CLI): {LocalPath}, Branch={Branch}, Error={Error}", localPath, normalizedBranch, upstreamResult.StdErr);
+                            return (false, errorMessage);
+                        }
+                    }
+
+                    _logger?.LogInformation("切换分支成功(CLI): {LocalPath} -> {Branch}", localPath, normalizedBranch);
+                    return (true, null);
+                }
+
+                using var libGitRepo = new Repository(localPath);
+                if (credentials != null && credentials.AuthType != "none")
+                {
+                    var fetchOptions = new FetchOptions
+                    {
+                        CredentialsProvider = CreateCredentialsHandler(credentials, tempSshKeyPath)
+                    };
+                    Commands.Fetch(libGitRepo, "origin", [fetchRefSpec], fetchOptions, null);
+                }
+                else
+                {
+                    Commands.Fetch(libGitRepo, "origin", [fetchRefSpec], new FetchOptions(), null);
+                }
+
+                var localBranch = libGitRepo.Branches[normalizedBranch];
+                var remoteBranch = libGitRepo.Branches[$"origin/{normalizedBranch}"];
+
+                if (localBranch == null)
+                {
+                    if (remoteBranch?.Tip == null)
+                    {
+                        return (false, $"未找到分支: {normalizedBranch}");
+                    }
+
+                    localBranch = libGitRepo.CreateBranch(normalizedBranch, remoteBranch.Tip);
+                }
+
+                if (remoteBranch != null)
+                {
+                    libGitRepo.Branches.Update(localBranch, updater =>
+                    {
+                        updater.Remote = "origin";
+                        updater.TrackedBranch = remoteBranch.CanonicalName;
+                    });
+                }
+
+                Commands.Checkout(libGitRepo, localBranch);
+
+                _logger?.LogInformation("切换分支成功: {LocalPath} -> {Branch}", localPath, normalizedBranch);
+                return (true, null);
+            }
+            catch (CheckoutConflictException ex)
+            {
+                var errorMessage = $"切换分支失败，工作区存在未提交冲突: {ex.Message}";
+                _logger?.LogError(ex, "切换分支失败: {LocalPath}, Branch={Branch}", localPath, branch);
+                return (false, errorMessage);
+            }
+            catch (LibGit2SharpException ex)
+            {
+                var errorMessage = $"Git 操作失败: {ex.Message}";
+                _logger?.LogError(ex, "切换分支失败: {LocalPath}, Branch={Branch}", localPath, branch);
+                return (false, errorMessage);
+            }
+            catch (Exception ex)
+            {
+                var errorMessage = $"切换分支失败: {ex.Message}";
+                _logger?.LogError(ex, "切换分支失败: {LocalPath}, Branch={Branch}", localPath, branch);
+                return (false, errorMessage);
+            }
+            finally
+            {
+                CleanupTempSshKeyFile(tempSshKeyPath);
+                CleanupTempAskPassScript(tempAskPassPath);
+            }
+        });
+    }
     
     /// <summary>
     /// 获取远程仓库的分支列表
@@ -881,10 +1042,14 @@ public class GitService : IGitService
                 process.StandardInput.Write(standardInput);
                 process.StandardInput.Close();
             }
-            
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            Task.WaitAll(stdoutTask, stderrTask);
             process.WaitForExit();
+
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
             
             return (process.ExitCode, stdout, stderr);
         }
@@ -951,6 +1116,42 @@ public class GitService : IGitService
         }
     }
 
+    private (int ExitCode, string StdOut, string StdErr) ExecuteSwitchBranchCliCommand(
+        string localPath,
+        string? remoteUrl,
+        string commandArguments,
+        GitCredentials? credentials,
+        ref string? tempSshKeyPath,
+        ref string? tempAskPassPath)
+    {
+        if (credentials != null && credentials.AuthType != "none")
+        {
+            if (credentials.AuthType == "ssh" && !string.IsNullOrEmpty(credentials.SshPrivateKey))
+            {
+                tempSshKeyPath ??= CreateTempSshKeyFile(credentials.SshPrivateKey);
+                tempAskPassPath ??= CreateTempAskPassScript(credentials.SshPassphrase);
+                return ExecuteGitCommand(localPath, commandArguments, tempSshKeyPath, tempAskPassPath);
+            }
+
+            if (ShouldUseCliForHttpCredentials(credentials))
+            {
+                if (string.IsNullOrWhiteSpace(remoteUrl))
+                {
+                    return (-1, string.Empty, "未找到 origin 远程仓库地址");
+                }
+
+                return ExecuteHttpGitCommand(
+                    localPath,
+                    remoteUrl,
+                    commandArguments,
+                    credentials.HttpsUsername,
+                    credentials.HttpsToken ?? string.Empty);
+            }
+        }
+
+        return ExecuteGitCommand(localPath, commandArguments, null, null);
+    }
+
     private string BuildGitSshCommand(string sshKeyPath)
     {
         var escapedPath = sshKeyPath.Replace("\"", "\\\"");
@@ -963,11 +1164,29 @@ public class GitService : IGitService
             && !string.IsNullOrWhiteSpace(credentials.HttpsToken);
     }
 
+    private static bool ShouldUseCliForBranchSwitch(GitCredentials? credentials)
+    {
+        return OperatingSystem.IsWindows()
+            || ShouldUseCliForHttpCredentials(credentials)
+            || (string.Equals(credentials?.AuthType, "ssh", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(credentials?.SshPrivateKey));
+    }
+
+    private static string BuildLongPathConfigArguments()
+    {
+        return "-c core.longpaths=true";
+    }
+
     private static string BuildCloneArguments(string gitUrl, string localPath, string branch)
     {
         return string.IsNullOrWhiteSpace(branch)
             ? $"clone \"{gitUrl}\" \"{localPath}\""
             : $"clone --branch \"{branch}\" --single-branch \"{gitUrl}\" \"{localPath}\"";
+    }
+
+    private static string BuildFetchBranchRefSpec(string branch)
+    {
+        return $"refs/heads/{branch}:refs/remotes/origin/{branch}";
     }
 
     private static string BuildTemporaryCredentialConfigArguments(string credentialStorePath)

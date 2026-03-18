@@ -206,6 +206,17 @@ public class GetBranchesRequest
 }
 
 /// <summary>
+/// 切换项目分支请求
+/// </summary>
+public class SwitchProjectBranchRequest
+{
+    /// <summary>
+    /// 目标分支名称
+    /// </summary>
+    public string Branch { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Git 凭据信息
 /// </summary>
 public class GitCredentials

@@ -134,6 +134,100 @@ public class GitServiceTests
         }
     }
 
+    [Fact]
+    public async Task SwitchBranchAsync_HttpCredentials_UsesCliCheckoutWithLongPathSupport()
+    {
+        var repoPath = Path.Combine(Path.GetTempPath(), $"git-switch-{Guid.NewGuid():N}");
+        Repository.Init(repoPath);
+
+        try
+        {
+            using (var repo = new Repository(repoPath))
+            {
+                repo.Network.Remotes.Add("origin", "http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4");
+            }
+
+            var service = new InspectableGitService();
+            var (success, errorMessage) = await service.SwitchBranchAsync(
+                repoPath,
+                "release",
+                new GitCredentials
+                {
+                    AuthType = "https",
+                    HttpsUsername = "alice",
+                    HttpsToken = "secret"
+                });
+
+            Assert.True(success);
+            Assert.Null(errorMessage);
+            Assert.Collection(
+                service.Calls,
+                approveFetchCall => Assert.Contains("credential approve", approveFetchCall.Arguments),
+                fetchCall =>
+                {
+                    Assert.Contains("-c core.longpaths=true", fetchCall.Arguments);
+                    Assert.EndsWith(
+                        "fetch origin \"refs/heads/release:refs/remotes/origin/release\"",
+                        fetchCall.Arguments,
+                        StringComparison.Ordinal);
+                },
+                approveCheckoutCall => Assert.Contains("credential approve", approveCheckoutCall.Arguments),
+                checkoutCall =>
+                {
+                    Assert.Contains("-c core.longpaths=true", checkoutCall.Arguments);
+                    Assert.EndsWith(
+                        "checkout -b \"release\" --track \"origin/release\"",
+                        checkoutCall.Arguments,
+                        StringComparison.Ordinal);
+                });
+        }
+        finally
+        {
+            if (Directory.Exists(repoPath))
+            {
+                Directory.Delete(repoPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteGitCommand_WhenCommandWritesLargeStdErr_CompletesWithoutDeadlock()
+    {
+        var repoPath = Path.Combine(Path.GetTempPath(), $"git-exec-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoPath);
+        Repository.Init(repoPath);
+        var gitSpamPath = Path.Combine(repoPath, "spam.cmd");
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                gitSpamPath,
+                "@echo off\r\nfor /L %%i in (1,1,20000) do @echo err 1>&2\r\necho ok");
+
+            var escapedScriptPath = gitSpamPath.Replace("\\", "\\\\");
+            using (var repo = new Repository(repoPath))
+            {
+                repo.Config.Set("alias.spam", $"!cmd //c call {escapedScriptPath}");
+            }
+
+            var service = new InspectableGitService();
+            var result = await Task.Run(() => service.InvokeExecuteGitCommand(
+                repoPath,
+                "spam")).WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("ok", result.StdOut);
+            Assert.Contains("err", result.StdErr);
+        }
+        finally
+        {
+            if (Directory.Exists(repoPath))
+            {
+                Directory.Delete(repoPath, recursive: true);
+            }
+        }
+    }
+
     private sealed class InspectableGitService : GitService
     {
         public InspectableGitService()
@@ -144,6 +238,23 @@ public class GitServiceTests
         public List<GitCommandCall> Calls { get; } = [];
 
         public Queue<(int ExitCode, string StdOut, string StdErr)> Results { get; } = [];
+
+        public (int ExitCode, string StdOut, string StdErr) InvokeExecuteGitCommand(
+            string workingDirectory,
+            string arguments,
+            string? sshKeyPath = null,
+            string? sshAskPassPath = null,
+            string? standardInput = null,
+            IReadOnlyDictionary<string, string>? additionalEnvironment = null)
+        {
+            return base.ExecuteGitCommand(
+                workingDirectory,
+                arguments,
+                sshKeyPath,
+                sshAskPassPath,
+                standardInput,
+                additionalEnvironment);
+        }
 
         protected override (int ExitCode, string StdOut, string StdErr) ExecuteGitCommand(
             string workingDirectory,

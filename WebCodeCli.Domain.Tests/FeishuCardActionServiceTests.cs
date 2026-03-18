@@ -193,7 +193,177 @@ public class FeishuCardActionServiceTests
         var payload = SerializeResponse(response);
         Assert.Contains("WmsServerV4", payload);
         Assert.Contains("create_session_from_project", payload);
+        Assert.Contains("show_project_branch_switcher", payload);
         Assert.Equal("luhaiyan", projectService.LastUsernameSeen);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ShowProjectBranchSwitcher_ReturnsImmediateToastAndSendsBranchCardAsync()
+    {
+        const string chatId = "oc_project_chat";
+        var userContext = new TestUserContextService();
+        var projectService = new TestProjectService(userContext, [
+            new ProjectInfo
+            {
+                ProjectId = "project-1",
+                Name = "WmsServerV4",
+                GitUrl = "http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4",
+                AuthType = "https",
+                Branch = "main",
+                Status = "ready",
+                LocalPath = @"D:\repos\WmsServerV4",
+                UpdatedAt = DateTime.Now
+            }
+        ]);
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var serviceProvider = new TestServiceProvider(userContext, projectService);
+        projectService.GetProjectBranchesDelay = TimeSpan.FromSeconds(2);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider, cardKit);
+
+        var startedAt = DateTime.UtcNow;
+        var response = await service.HandleCardActionAsync(
+            """{"action":"show_project_branch_switcher","chat_key":"oc_project_chat","project_id":"project-1"}""",
+            chatId: chatId);
+        var elapsed = DateTime.UtcNow - startedAt;
+
+        Assert.True(elapsed < TimeSpan.FromSeconds(1), $"Expected immediate callback response, actual: {elapsed}");
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+
+        var (_, cardJson) = await cardKit.WaitForRawCardSentAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("switch_project_branch", cardJson);
+        Assert.Contains("release", cardJson);
+        Assert.Contains("main", cardJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ShowProjectBranchSwitcher_PaginatesLargeBranchListAsync()
+    {
+        const string chatId = "oc_project_chat";
+        var userContext = new TestUserContextService();
+        var projectService = new TestProjectService(userContext, [
+            new ProjectInfo
+            {
+                ProjectId = "project-1",
+                Name = "WmsServerV4",
+                GitUrl = "http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4",
+                AuthType = "https",
+                Branch = "branch-01",
+                Status = "ready",
+                LocalPath = @"D:\repos\WmsServerV4",
+                UpdatedAt = DateTime.Now
+            }
+        ])
+        {
+            ProjectBranches = Enumerable.Range(1, 25)
+                .Select(index => $"branch-{index:00}")
+                .ToList()
+        };
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var serviceProvider = new TestServiceProvider(userContext, projectService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider, cardKit);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"show_project_branch_switcher","chat_key":"oc_project_chat","project_id":"project-1"}""",
+            chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+
+        var (_, cardJson) = await cardKit.WaitForRawCardSentAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("branch-01", cardJson);
+        Assert.Contains("branch-12", cardJson);
+        Assert.DoesNotContain("branch-13", cardJson);
+        Assert.Contains("1/3", cardJson);
+        Assert.Contains("\"action\":\"show_project_branch_switcher\"", cardJson);
+        Assert.Contains("\"page\":1", cardJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SwitchProjectBranch_ReturnsImmediateToastAndSendsUpdatedManagerCardAsync()
+    {
+        const string chatId = "oc_project_chat";
+        var userContext = new TestUserContextService();
+        var projectService = new TestProjectService(userContext, [
+            new ProjectInfo
+            {
+                ProjectId = "project-1",
+                Name = "WmsServerV4",
+                GitUrl = "http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4",
+                AuthType = "https",
+                Branch = "main",
+                Status = "ready",
+                LocalPath = @"D:\repos\WmsServerV4",
+                UpdatedAt = DateTime.Now
+            }
+        ]);
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var serviceProvider = new TestServiceProvider(userContext, projectService);
+        projectService.SwitchProjectBranchDelay = TimeSpan.FromSeconds(2);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider, cardKit);
+
+        var startedAt = DateTime.UtcNow;
+        var response = await service.HandleCardActionAsync(
+            """{"action":"switch_project_branch","chat_key":"oc_project_chat","project_id":"project-1","branch":"release"}""",
+            chatId: chatId);
+        var elapsed = DateTime.UtcNow - startedAt;
+
+        Assert.True(elapsed < TimeSpan.FromSeconds(1), $"Expected immediate callback response, actual: {elapsed}");
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+
+        var (_, cardJson) = await cardKit.WaitForRawCardSentAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("project-1", projectService.LastSwitchedProjectId);
+        Assert.Equal("release", projectService.LastSwitchedBranch);
+        Assert.Contains("show_project_branch_switcher", cardJson);
+        Assert.Contains("release", cardJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_DeleteProject_ReturnsImmediateToastAndSendsUpdatedManagerCardAsync()
+    {
+        const string chatId = "oc_project_chat";
+        var userContext = new TestUserContextService();
+        var projectService = new TestProjectService(userContext, [
+            new ProjectInfo
+            {
+                ProjectId = "project-1",
+                Name = "WmsServerV4",
+                GitUrl = "http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4",
+                AuthType = "https",
+                Branch = "main",
+                Status = "ready",
+                LocalPath = @"D:\repos\WmsServerV4",
+                UpdatedAt = DateTime.Now
+            }
+        ]);
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var serviceProvider = new TestServiceProvider(userContext, projectService);
+        projectService.DeleteProjectDelay = TimeSpan.FromSeconds(2);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider, cardKit);
+
+        var startedAt = DateTime.UtcNow;
+        var response = await service.HandleCardActionAsync(
+            """{"action":"delete_project","chat_key":"oc_project_chat","project_id":"project-1"}""",
+            chatId: chatId);
+        var elapsed = DateTime.UtcNow - startedAt;
+
+        Assert.True(elapsed < TimeSpan.FromSeconds(1), $"Expected immediate callback response, actual: {elapsed}");
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+
+        var (_, cardJson) = await cardKit.WaitForRawCardSentAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("project-1", projectService.LastDeletedProjectId);
+        Assert.DoesNotContain("WmsServerV4", cardJson);
+        Assert.Contains("show_create_project_form", cardJson);
     }
 
     [Fact]
@@ -336,7 +506,8 @@ public class FeishuCardActionServiceTests
     private static FeishuCardActionService CreateService(
         RecordingCliExecutorService cliExecutor,
         StubFeishuChannelService feishuChannel,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        StubFeishuCardKitClient? cardKit = null)
     {
         var commandService = new FeishuCommandService(
             NullLogger<FeishuCommandService>.Instance,
@@ -345,7 +516,7 @@ public class FeishuCardActionServiceTests
         return new FeishuCardActionService(
             commandService,
             new FeishuHelpCardBuilder(),
-            new StubFeishuCardKitClient(),
+            cardKit ?? new StubFeishuCardKitClient(),
             cliExecutor,
             new StubChatSessionService(),
             feishuChannel,
@@ -463,6 +634,8 @@ public class FeishuCardActionServiceTests
 
     private sealed class StubFeishuCardKitClient : IFeishuCardKitClient
     {
+        private readonly TaskCompletionSource<(string ChatId, string CardJson)> _rawCardSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default) => Task.FromResult(true);
@@ -481,11 +654,22 @@ public class FeishuCardActionServiceTests
                 throttleMs: 0));
         }
 
-        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default)
+        {
+            _rawCardSent.TrySetResult((chatId, cardJson));
+            return Task.FromResult("raw-card-message");
+        }
 
         public Task<string> ReplyElementsCardAsync(string replyMessageId, ElementsCardV2Dto card, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async Task<(string ChatId, string CardJson)> WaitForRawCardSentAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _rawCardSent.TrySetCanceled(cts.Token));
+            return await _rawCardSent.Task;
+        }
     }
 
     private sealed class StubFeishuChannelService(string? currentSessionId) : IFeishuChannelService
@@ -723,9 +907,23 @@ public class FeishuCardActionServiceTests
                 .ToDictionary(project => project.ProjectId, project => project, StringComparer.OrdinalIgnoreCase);
         }
 
+        public List<string> ProjectBranches { get; set; } = ["main", "release"];
+
         public string? LastUsernameSeen { get; private set; }
 
         public CreateProjectRequest? LastCreatedRequest { get; private set; }
+
+        public string? LastSwitchedProjectId { get; private set; }
+
+        public string? LastSwitchedBranch { get; private set; }
+
+        public string? LastDeletedProjectId { get; private set; }
+
+        public TimeSpan GetProjectBranchesDelay { get; set; }
+
+        public TimeSpan SwitchProjectBranchDelay { get; set; }
+
+        public TimeSpan DeleteProjectDelay { get; set; }
 
         public Task<List<ProjectInfo>> GetProjectsAsync()
         {
@@ -782,7 +980,19 @@ public class FeishuCardActionServiceTests
         public Task<(bool Success, string? ErrorMessage)> DeleteProjectAsync(string projectId)
         {
             LastUsernameSeen = _userContextService.GetCurrentUsername();
+            LastDeletedProjectId = projectId;
+            if (DeleteProjectDelay > TimeSpan.Zero)
+            {
+                return WaitAndDeleteAsync();
+            }
+
             return Task.FromResult((_projects.Remove(projectId), (string?)null));
+
+            async Task<(bool Success, string? ErrorMessage)> WaitAndDeleteAsync()
+            {
+                await Task.Delay(DeleteProjectDelay);
+                return (_projects.Remove(projectId), (string?)null);
+            }
         }
 
         public Task<(bool Success, string? ErrorMessage)> CloneProjectAsync(string projectId, Action<CloneProgress>? progress = null)
@@ -792,7 +1002,45 @@ public class FeishuCardActionServiceTests
             => Task.FromResult((true, (string?)null));
 
         public Task<(List<string> Branches, string? ErrorMessage)> GetBranchesAsync(GetBranchesRequest request)
-            => Task.FromResult<(List<string>, string?)>((["main", "release"], null));
+            => Task.FromResult<(List<string>, string?)>((ProjectBranches.ToList(), null));
+
+        public Task<(List<string> Branches, string? ErrorMessage)> GetProjectBranchesAsync(string projectId)
+        {
+            LastUsernameSeen = _userContextService.GetCurrentUsername();
+            if (GetProjectBranchesDelay > TimeSpan.Zero)
+            {
+                return WaitAndReturnBranchesAsync();
+            }
+
+            return Task.FromResult<(List<string>, string?)>((ProjectBranches.ToList(), null));
+
+            async Task<(List<string> Branches, string? ErrorMessage)> WaitAndReturnBranchesAsync()
+            {
+                await Task.Delay(GetProjectBranchesDelay);
+                return (ProjectBranches.ToList(), null);
+            }
+        }
+
+        public async Task<(bool Success, string? ErrorMessage)> SwitchProjectBranchAsync(string projectId, string branch)
+        {
+            LastUsernameSeen = _userContextService.GetCurrentUsername();
+            LastSwitchedProjectId = projectId;
+            LastSwitchedBranch = branch;
+
+            if (SwitchProjectBranchDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(SwitchProjectBranchDelay);
+            }
+
+            if (!_projects.TryGetValue(projectId, out var project))
+            {
+                return (false, (string?)"项目不存在");
+            }
+
+            project.Branch = branch;
+            project.UpdatedAt = DateTime.Now;
+            return (true, (string?)null);
+        }
 
         public string? GetProjectLocalPath(string projectId)
         {
