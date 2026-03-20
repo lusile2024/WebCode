@@ -85,7 +85,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         _logger.LogInformation("🔥 [Feishu] 收到事件: EventId={EventId}, EventType={EventType}", input.EventId, input.Header?.EventType);
         try
         {
-            await HandleMessageReceiveAsync(input.Event);
+            await HandleMessageReceiveAsync(input);
         }
         catch (Exception ex)
         {
@@ -96,9 +96,11 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     /// <summary>
     /// 处理收到的消息事件（内部方法）
     /// </summary>
-    /// <param name="eventDto">飞书事件 DTO</param>
-    private async Task HandleMessageReceiveAsync(ImMessageReceiveV1EventBodyDto eventDto)
+    /// <param name="input">飞书事件 DTO</param>
+    private async Task HandleMessageReceiveAsync(EventV2Dto<ImMessageReceiveV1EventBodyDto> input)
     {
+        var appId = input.Header?.AppId;
+        var eventDto = input.Event;
         var message = eventDto.Message;
         _logger.LogInformation("🔥 [Feishu] 消息详情: ChatId={ChatId}, ChatType={ChatType}, MessageType={MessageType}, Content={Content}",
             message.ChatId, message.ChatType, message.MessageType, message.Content);
@@ -123,7 +125,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             ?? string.Empty;
 
         // 检测是否 @ 了机器人
-        var isBotMentioned = CheckBotMention(message);
+        var isBotMentioned = await CheckBotMentionAsync(message, appId);
 
         // 群聊过滤：只有 @ 机器人才处理
         if (message.ChatType == "group" && !isBotMentioned)
@@ -148,21 +150,22 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
         if (TryParseBindCommand(trimmedContent, out var webUsername))
         {
-            await HandleBindCommandAsync(message.ChatId, message.MessageId, senderId, webUsername);
+            await HandleBindCommandAsync(message.ChatId, message.MessageId, senderId, webUsername, appId);
             return;
         }
 
         if (IsUnbindCommand(trimmedContent))
         {
-            await HandleUnbindCommandAsync(message.MessageId, senderId);
+            await HandleUnbindCommandAsync(message.MessageId, senderId, appId);
             return;
         }
 
         var boundWebUsername = await bindingService.GetBoundWebUsernameAsync(senderId);
         if (string.IsNullOrWhiteSpace(boundWebUsername))
         {
-            var cardJson = _cardBuilder.BuildBindWebUserCard((await bindingService.GetBindableWebUsernamesAsync()).ToArray());
-            await _cardKit.ReplyRawCardAsync(message.MessageId, cardJson);
+            var cardJson = _cardBuilder.BuildBindWebUserCard((await bindingService.GetBindableWebUsernamesAsync(appId)).ToArray());
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(null, appId);
+            await _cardKit.ReplyRawCardAsync(message.MessageId, cardJson, optionsOverride: effectiveOptions);
             return;
         }
 
@@ -178,7 +181,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             EnqueueMessageWork(
                 "feishuhelp",
                 message.MessageId,
-                () => HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword));
+                () => HandleFeishuHelpAsync(message.ChatId, message.MessageId, keyword, boundWebUsername, appId));
             return;
         }
 
@@ -192,7 +195,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             EnqueueMessageWork(
                 "feishusessions",
                 message.MessageId,
-                () => HandleSessionsCommandAsync(message.ChatId, message.MessageId, boundWebUsername));
+                () => HandleSessionsCommandAsync(message.ChatId, message.MessageId, boundWebUsername, appId));
             return;
         }
 
@@ -206,7 +209,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             EnqueueMessageWork(
                 "feishuprojects",
                 message.MessageId,
-                () => HandleProjectsCommandAsync(message.ChatId, message.MessageId, senderId));
+                () => HandleProjectsCommandAsync(message.ChatId, message.MessageId, senderId, boundWebUsername, appId));
             return;
         }
 
@@ -215,6 +218,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             MessageId = message.MessageId,
             ChatId = message.ChatId,
             ChatType = message.ChatType,
+            AppId = appId,
             Content = content,
             SenderId = senderId,
             SenderName = boundWebUsername,
@@ -275,30 +279,37 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     /// </summary>
     /// <param name="message">消息对象</param>
     /// <returns>是否 @ 了机器人</returns>
-    private bool CheckBotMention(ImMessageReceiveV1EventBodyDto.EventMessage message)
+    private async Task<bool> CheckBotMentionAsync(ImMessageReceiveV1EventBodyDto.EventMessage message, string? appId)
     {
-        // P2P 消息始终视为需要响应
         if (message.ChatType == "p2p")
+        {
             return true;
+        }
 
-        // 没有任何提及
         if (message.Mentions == null || message.Mentions.Length == 0)
+        {
             return false;
+        }
 
-        // 检查是否有 @_all 或机器人的 open_id
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(null, appId);
+
         foreach (var mention in message.Mentions)
         {
-            // @所有人
             if (mention.Key == "@_all")
+            {
                 return true;
+            }
 
-            // @机器人（通过 open_id 匹配）
             if (mention.Id?.OpenId == _options.AppId)
+            {
                 return true;
+            }
 
-            // @机器人（通过名称匹配 - 作为后备方案）
-            if (mention.Id == null && mention.Name == _options.DefaultCardTitle)
+            if (!string.IsNullOrWhiteSpace(effectiveOptions.DefaultCardTitle)
+                && string.Equals(mention.Name, effectiveOptions.DefaultCardTitle, StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -403,16 +414,16 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             || string.Equals(content, "/unbind", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task HandleBindCommandAsync(string chatId, string replyToMessageId, string feishuUserId, string webUsername)
+    private async Task HandleBindCommandAsync(string chatId, string replyToMessageId, string feishuUserId, string webUsername, string? appId)
     {
         using var scope = _serviceProvider.CreateScope();
         var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
         var chatSessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
 
-        var result = await bindingService.BindAsync(feishuUserId, webUsername);
+        var result = await bindingService.BindAsync(feishuUserId, webUsername, appId);
         if (!result.Success)
         {
-            await _feishuChannel.ReplyMessageAsync(replyToMessageId, $"❌ 绑定失败：{result.ErrorMessage}");
+            await _feishuChannel.ReplyMessageAsync(replyToMessageId, $"❌ 绑定失败：{result.ErrorMessage}", result.WebUsername, appId);
             return;
         }
 
@@ -423,21 +434,30 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             await chatSessionRepository.DeleteAsync(session);
         }
 
-        await _feishuChannel.ReplyMessageAsync(replyToMessageId, $"✅ 已绑定 Web 用户：{result.WebUsername}\n现在你发送的消息、会话、目录和项目都将与 Web 端共享。");
+        await _feishuChannel.ReplyMessageAsync(
+            replyToMessageId,
+            $"✅ 已绑定 Web 用户：{result.WebUsername}\n现在你发送的消息、会话、目录和项目都将与 Web 端共享。",
+            result.WebUsername,
+            appId);
     }
 
-    private async Task HandleUnbindCommandAsync(string replyToMessageId, string feishuUserId)
+    private async Task HandleUnbindCommandAsync(string replyToMessageId, string feishuUserId, string? appId)
     {
         using var scope = _serviceProvider.CreateScope();
         var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+        var boundUsername = await bindingService.GetBoundWebUsernameAsync(feishuUserId);
         var success = await bindingService.UnbindAsync(feishuUserId);
-        await _feishuChannel.ReplyMessageAsync(replyToMessageId, success ? "✅ 已解绑 Web 用户。" : "⚠️ 当前未绑定 Web 用户。");
+        await _feishuChannel.ReplyMessageAsync(
+            replyToMessageId,
+            success ? "✅ 已解绑 Web 用户。" : "⚠️ 当前未绑定 Web 用户。",
+            boundUsername,
+            appId);
     }
 
     /// <summary>
     /// 处理 /feishuhelp 命令
     /// </summary>
-    private async Task HandleFeishuHelpAsync(string chatId, string replyToMessageId, string keyword)
+    private async Task HandleFeishuHelpAsync(string chatId, string replyToMessageId, string keyword, string? webUsername, string? appId)
     {
         _logger.LogInformation("🔥 [FeishuHelp] 收到帮助请求: ChatId={ChatId}, ReplyToMessageId={ReplyToMessageId}, Keyword={Keyword}",
             chatId, replyToMessageId, keyword);
@@ -471,17 +491,18 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
             _logger.LogDebug("🔥 [FeishuHelp] 帮助卡片DTO内容: {Card}", JsonSerializer.Serialize(card));
             _logger.LogInformation("🔥 [FeishuHelp] 开始调用 ReplyElementsCardAsync...");
-            var messageId = await _cardKit.ReplyElementsCardAsync(replyToMessageId, card);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(webUsername, appId);
+            var messageId = await _cardKit.ReplyElementsCardAsync(replyToMessageId, card, optionsOverride: effectiveOptions);
             _logger.LogInformation("✅ [FeishuHelp] 帮助卡片已发送, MessageId={MessageId}", messageId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "❌ [FeishuHelp] 发送帮助卡片失败");
 
-            // 降级到简单文本
             try
             {
                 _logger.LogInformation("🔥 [FeishuHelp] 尝试发送降级提示...");
+                await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 帮助卡片发送失败，请稍后重试。", webUsername, appId);
             }
             catch (Exception innerEx)
             {
@@ -493,7 +514,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
     /// <summary>
     /// 处理/sessions命令，返回会话管理卡片
     /// </summary>
-    private async Task HandleSessionsCommandAsync(string chatId, string replyToMessageId, string webUsername)
+    private async Task HandleSessionsCommandAsync(string chatId, string replyToMessageId, string webUsername, string? appId)
     {
         try
         {
@@ -640,32 +661,51 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
             // 发送卡片
             var cardJson = JsonSerializer.Serialize(card);
-            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(webUsername, appId);
+            var messageId = await _cardKit.ReplyRawCardAsync(replyToMessageId, cardJson, optionsOverride: effectiveOptions);
             _logger.LogInformation("✅ [Feishu] 会话管理卡片已发送, MessageId={MessageId}", messageId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "处理sessions命令失败");
-            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 会话管理功能暂时不可用，请稍后重试。");
+            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 会话管理功能暂时不可用，请稍后重试。", webUsername, appId);
         }
     }
 
     /// <summary>
     /// 处理 /feishuprojects 命令，返回项目管理卡片
     /// </summary>
-    private async Task HandleProjectsCommandAsync(string chatId, string replyToMessageId, string operatorUserId)
+    private async Task HandleProjectsCommandAsync(string chatId, string replyToMessageId, string operatorUserId, string? webUsername, string? appId)
     {
         try
         {
             var card = await _cardActionService.BuildProjectManagerCardAsync(chatId, operatorUserId);
-            var messageId = await _cardKit.ReplyElementsCardAsync(replyToMessageId, card);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(webUsername, appId);
+            var messageId = await _cardKit.ReplyElementsCardAsync(replyToMessageId, card, optionsOverride: effectiveOptions);
             _logger.LogInformation("✅ [Feishu] 项目管理卡片已发送, MessageId={MessageId}", messageId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "处理 feishuprojects 命令失败");
-            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 项目管理功能暂时不可用，请稍后重试。");
+            await _feishuChannel.ReplyMessageAsync(replyToMessageId, "❌ 项目管理功能暂时不可用，请稍后重试。", webUsername, appId);
         }
+    }
+
+    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username, string? appId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+
+        if (!string.IsNullOrWhiteSpace(appId))
+        {
+            var appOptions = await userFeishuBotConfigService.GetEffectiveOptionsByAppIdAsync(appId);
+            if (appOptions != null)
+            {
+                return appOptions;
+            }
+        }
+
+        return await userFeishuBotConfigService.GetEffectiveOptionsAsync(username);
     }
 
     private async Task<List<ChatSessionEntity>> GetChatSessionEntitiesAsync(string chatKey, string username)

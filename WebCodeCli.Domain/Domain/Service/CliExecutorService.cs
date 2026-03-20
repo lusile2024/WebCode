@@ -201,14 +201,15 @@ public class CliExecutorService : ICliExecutorService
         string userPrompt,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var tool = GetTool(toolId);
+        var username = ResolveUsernameForToolOperation(null, sessionId);
+        var tool = GetTool(toolId, username);
         if (tool == null)
         {
             yield return new StreamOutputChunk
             {
                 IsError = true,
                 IsCompleted = true,
-                ErrorMessage = $"CLI 工具 '{toolId}' 不存在"
+                ErrorMessage = $"CLI 工具 '{toolId}' 不存在或当前用户无权使用"
             };
             yield break;
         }
@@ -1030,19 +1031,51 @@ public class CliExecutorService : ICliExecutorService
         }
     }
 
-    public List<CliToolConfig> GetAvailableTools()
+    public List<CliToolConfig> GetAvailableTools(string? username = null)
     {
-        return _options.Tools.Where(t => t.Enabled).ToList();
+        var enabledTools = _options.Tools.Where(t => t.Enabled).ToList();
+        var resolvedUsername = ResolveUsernameForToolOperation(username);
+        if (string.IsNullOrWhiteSpace(resolvedUsername))
+        {
+            return enabledTools;
+        }
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var userAccountService = scope.ServiceProvider.GetRequiredService<IUserAccountService>();
+            var account = userAccountService.GetByUsernameAsync(resolvedUsername).GetAwaiter().GetResult();
+            if (account != null && !string.Equals(account.Status, UserAccessConstants.EnabledStatus, StringComparison.OrdinalIgnoreCase))
+            {
+                return new List<CliToolConfig>();
+            }
+
+            var policyService = scope.ServiceProvider.GetRequiredService<IUserToolPolicyService>();
+            var allowedToolIds = policyService
+                .GetAllowedToolIdsAsync(resolvedUsername, enabledTools.Select(t => t.Id))
+                .GetAwaiter()
+                .GetResult();
+
+            return enabledTools
+                .Where(t => allowedToolIds.Contains(t.Id))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "按用户过滤 CLI 工具失败，回退到全局工具列表");
+            return enabledTools;
+        }
     }
 
-    public CliToolConfig? GetTool(string toolId)
+    public CliToolConfig? GetTool(string toolId, string? username = null)
     {
-        return _options.Tools.FirstOrDefault(t => t.Id == toolId);
+        return GetAvailableTools(username)
+            .FirstOrDefault(t => string.Equals(t.Id, toolId, StringComparison.OrdinalIgnoreCase));
     }
 
-    public bool ValidateTool(string toolId)
+    public bool ValidateTool(string toolId, string? username = null)
     {
-        var tool = GetTool(toolId);
+        var tool = GetTool(toolId, username);
         if (tool == null || !tool.Enabled)
         {
             return false;
@@ -1691,13 +1724,14 @@ public class CliExecutorService : ICliExecutorService
     /// <summary>
     /// 获取指定工具的环境变量配置（智能合并：当数据库API key与本地配置一致时，优先使用本地完整配置）
     /// </summary>
-    public async Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId)
+    public async Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
     {
         try
         {
+            var resolvedUsername = ResolveUsernameForToolOperation(username);
             using var scope = _serviceProvider.CreateScope();
             var envService = scope.ServiceProvider.GetRequiredService<ICliToolEnvironmentService>();
-            var dbEnvVars = await envService.GetEnvironmentVariablesAsync(toolId);
+            var dbEnvVars = await envService.GetEnvironmentVariablesAsync(toolId, resolvedUsername);
 
             // 智能配置合并：检测本地CLI配置
             var localConfig = await GetLocalCliConfigAsync(toolId);
@@ -1746,7 +1780,7 @@ public class CliExecutorService : ICliExecutorService
             _logger.LogError(ex, "获取工具 {ToolId} 的环境变量失败", toolId);
 
             // 降级到appsettings配置
-            var tool = GetTool(toolId);
+            var tool = GetTool(toolId, username);
             return tool?.EnvironmentVariables ?? new Dictionary<string, string>();
         }
     }
@@ -1928,18 +1962,48 @@ public class CliExecutorService : ICliExecutorService
     /// <summary>
     /// 保存指定工具的环境变量配置到数据库
     /// </summary>
-    public async Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars)
+    public async Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
     {
         try
         {
+            var resolvedUsername = ResolveUsernameForToolOperation(username);
             using var scope = _serviceProvider.CreateScope();
             var envService = scope.ServiceProvider.GetRequiredService<ICliToolEnvironmentService>();
-            return await envService.SaveEnvironmentVariablesAsync(toolId, envVars);
+            return await envService.SaveEnvironmentVariablesAsync(toolId, envVars, resolvedUsername);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "保存工具 {ToolId} 的环境变量失败", toolId);
             return false;
+        }
+    }
+
+    private string? ResolveUsernameForToolOperation(string? username, string? sessionId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            return username.Trim();
+        }
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                var sessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+                var session = sessionRepository.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+                if (!string.IsNullOrWhiteSpace(session?.Username))
+                {
+                    return session.Username;
+                }
+            }
+
+            var userContextService = scope.ServiceProvider.GetService<IUserContextService>();
+            return userContextService?.GetCurrentUsername();
+        }
+        catch
+        {
+            return username;
         }
     }
 

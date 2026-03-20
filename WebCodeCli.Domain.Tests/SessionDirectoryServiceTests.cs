@@ -39,6 +39,7 @@ public class SessionDirectoryServiceTests
             new StubWorkspaceRegistryService(),
             CreateProxy<IWorkspaceAuthorizationService>(),
             CreateProxy<IProjectRepository>(),
+            new StubUserWorkspacePolicyService(),
             configuration);
     }
 
@@ -67,6 +68,15 @@ public class SessionDirectoryServiceTests
         public Task<bool> UpdateDirectoryInfoAsync(string directoryPath, string? alias = null, bool? isTrusted = null) => Task.FromResult(true);
 
         public Task<bool> DeleteDirectoryAsync(string directoryPath) => Task.FromResult(true);
+    }
+
+    private sealed class StubUserWorkspacePolicyService : IUserWorkspacePolicyService
+    {
+        public Task<List<string>> GetAllowedDirectoriesAsync(string username) => Task.FromResult(new List<string>());
+
+        public Task<bool> IsPathAllowedAsync(string username, string directoryPath) => Task.FromResult(true);
+
+        public Task<bool> SaveAllowedDirectoriesAsync(string username, IEnumerable<string> allowedDirectories) => Task.FromResult(true);
     }
 
     private class DefaultInterfaceProxy<T> : DispatchProxy

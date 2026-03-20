@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
+using WebCodeCli.Helpers;
 using Serilog;
 using Log = Serilog.Log;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(CreateBuilderOptions(args));
 
 // 配置 Kestrel 服务器限制
 builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -39,10 +41,35 @@ builder.Services.AddServerSideBlazor(options =>
     options.HandshakeTimeout = TimeSpan.FromMinutes(1);
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
 });
-builder.Services.AddScoped(sp => new HttpClient
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/login";
+        options.LogoutPath = "/login";
+        options.AccessDeniedPath = "/login";
+        options.SlidingExpiration = true;
+        options.ExpireTimeSpan = TimeSpan.FromDays(7);
+        options.Cookie.Name = "WebCode.Auth";
+    });
+builder.Services.AddAuthorization();
+builder.Services.AddScoped(sp =>
 {
-    BaseAddress = new Uri(sp.GetService<NavigationManager>()!.BaseUri),
-    Timeout = TimeSpan.FromMinutes(10) // 增加到 10 分钟，支持长时间运行的 CLI 工具
+    var navigationManager = sp.GetRequiredService<NavigationManager>();
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    var client = new HttpClient
+    {
+        BaseAddress = new Uri(navigationManager.BaseUri),
+        Timeout = TimeSpan.FromMinutes(10)
+    };
+
+    var cookieHeader = httpContextAccessor.HttpContext?.Request.Headers.Cookie.ToString();
+    if (!string.IsNullOrWhiteSpace(cookieHeader))
+    {
+        client.DefaultRequestHeaders.Add("Cookie", cookieHeader);
+    }
+
+    return client;
 });
 builder.Services.Configure<CliToolsOption>(builder.Configuration.GetSection("CliTools"));
 builder.Services.Configure<WebCodeCli.Domain.Common.Options.AuthenticationOption>(builder.Configuration.GetSection("Authentication"));
@@ -167,15 +194,33 @@ if (app.Environment.IsDevelopment())
 app.UseStaticFiles();
 
 app.UseRouting();
-
-app.MapBlazorHub();
-
-app.MapFallbackToPage("/_Host");
-
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapBlazorHub();
+app.MapFallbackToPage("/_Host");
 
 app.CodeFirst();
 
+using (var scope = app.Services.CreateScope())
+{
+    var userAccountService = scope.ServiceProvider.GetRequiredService<IUserAccountService>();
+    userAccountService.EnsureSeedDataAsync().GetAwaiter().GetResult();
+}
+
 app.Run();
+
+static WebApplicationOptions CreateBuilderOptions(string[] args)
+{
+    var resolvedWebRoot = WebRootPathResolver.Resolve(
+        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"),
+        Directory.GetCurrentDirectory(),
+        AppContext.BaseDirectory);
+
+    return new WebApplicationOptions
+    {
+        Args = args,
+        WebRootPath = resolvedWebRoot
+    };
+}

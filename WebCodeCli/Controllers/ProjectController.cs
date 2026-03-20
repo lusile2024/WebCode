@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
@@ -9,6 +10,7 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/project")]
+[Authorize]
 public class ProjectController : ControllerBase
 {
     private readonly IProjectService _projectService;

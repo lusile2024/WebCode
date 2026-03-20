@@ -48,7 +48,6 @@ public partial class Login : ComponentBase
         var (isAuthenticated, username) = await CheckAuthenticationAsync();
         if (isAuthenticated && !string.IsNullOrEmpty(username))
         {
-            // 已登录用户，设置用户名到上下文
             UserContextService.SetCurrentUsername(username);
             NavigationManager.NavigateTo("/code-assistant");
         }
@@ -101,23 +100,17 @@ public partial class Login : ComponentBase
 
         try
         {
-            // 验证用户名和密码
-            bool isValid = AuthenticationService.ValidateUser(_username, _password);
-
-            if (isValid)
+            var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.login", _username, _password);
+            if (authState.Success && authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
-                // 登录成功，保存认证状态到 SessionStorage
-                await SaveAuthentication(_username);
-
-                // 设置当前登录用户名到上下文，后续所有操作都使用这个用户名
-                UserContextService.SetCurrentUsername(_username);
-
-                // 跳转到主页
+                UserContextService.SetCurrentUsername(authState.Username);
                 NavigationManager.NavigateTo("/code-assistant", forceLoad: true);
             }
             else
             {
-                _errorMessage = T("login.error.invalidCredentials");
+                _errorMessage = !string.IsNullOrWhiteSpace(authState.ErrorMessage)
+                    ? authState.ErrorMessage
+                    : T("login.error.invalidCredentials");
                 _password = string.Empty; // 清空密码
             }
         }
@@ -146,28 +139,14 @@ public partial class Login : ComponentBase
         _showPassword = !_showPassword;
     }
 
-    private async Task SaveAuthentication(string username)
-    {
-        try
-        {
-            await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "isAuthenticated", "true");
-            await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "username", username);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"保存认证状态失败: {ex.Message}");
-        }
-    }
-
     private async Task<(bool IsAuthenticated, string? Username)> CheckAuthenticationAsync()
     {
         try
         {
-            var isAuthenticated = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "isAuthenticated");
-            if (isAuthenticated == "true")
+            var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+            if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
-                var username = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username");
-                return (true, username);
+                return (true, authState.Username);
             }
             return (false, null);
         }
@@ -253,6 +232,14 @@ public partial class Login : ComponentBase
             text = text.Replace($"{{{name}}}", value);
         }
         return text;
+    }
+
+    private sealed class ClientAuthState
+    {
+        public bool Success { get; set; }
+        public bool IsAuthenticated { get; set; }
+        public string? Username { get; set; }
+        public string? ErrorMessage { get; set; }
     }
 
     #endregion

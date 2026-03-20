@@ -1,3 +1,4 @@
+using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using FeishuNetSdk.Im.Dtos;
 
@@ -15,7 +16,11 @@ public interface IFeishuCardKitClient
     /// <param name="title">卡片标题</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>卡片 ID</returns>
-    Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default);
+    Task<string> CreateCardAsync(
+        string initialContent,
+        string? title = null,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 更新流式卡片
@@ -25,7 +30,12 @@ public interface IFeishuCardKitClient
     /// <param name="sequence">序列号（必须递增）</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>更新是否成功</returns>
-    Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default);
+    Task<bool> UpdateCardAsync(
+        string cardId,
+        string content,
+        int sequence,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 发送卡片消息
@@ -34,7 +44,11 @@ public interface IFeishuCardKitClient
     /// <param name="cardId">卡片 ID</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>消息 ID</returns>
-    Task<string> SendCardMessageAsync(string chatId, string cardId, CancellationToken cancellationToken = default);
+    Task<string> SendCardMessageAsync(
+        string chatId,
+        string cardId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 回复卡片消息
@@ -43,7 +57,11 @@ public interface IFeishuCardKitClient
     /// <param name="cardId">卡片 ID</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>回复消息 ID</returns>
-    Task<string> ReplyCardMessageAsync(string replyMessageId, string cardId, CancellationToken cancellationToken = default);
+    Task<string> ReplyCardMessageAsync(
+        string replyMessageId,
+        string cardId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 创建流式回复句柄
@@ -59,7 +77,8 @@ public interface IFeishuCardKitClient
         string? replyMessageId,
         string initialContent,
         string? title = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 发送原始JSON卡片消息（帮助功能专用）
@@ -68,7 +87,11 @@ public interface IFeishuCardKitClient
     /// <param name="cardJson">卡片JSON字符串</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>消息 ID</returns>
-    Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default);
+    Task<string> SendRawCardAsync(
+        string chatId,
+        string cardJson,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 回复 V2 DTO 卡片消息（帮助功能专用）
@@ -77,7 +100,11 @@ public interface IFeishuCardKitClient
     /// <param name="card">V2 卡片 DTO</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>回复消息 ID</returns>
-    Task<string> ReplyElementsCardAsync(string replyMessageId, ElementsCardV2Dto card, CancellationToken cancellationToken = default);
+    Task<string> ReplyElementsCardAsync(
+        string replyMessageId,
+        ElementsCardV2Dto card,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 
     /// <summary>
     /// 回复原始JSON卡片消息（帮助功能专用）
@@ -86,5 +113,9 @@ public interface IFeishuCardKitClient
     /// <param name="cardJson">卡片JSON字符串</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>回复消息 ID</returns>
-    Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default);
+    Task<string> ReplyRawCardAsync(
+        string replyMessageId,
+        string cardJson,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 }

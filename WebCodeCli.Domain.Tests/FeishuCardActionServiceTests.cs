@@ -3,11 +3,13 @@ using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
+using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Domain.Service.Channels;
+using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 
 namespace WebCodeCli.Domain.Tests;
 
@@ -570,11 +572,11 @@ public class FeishuCardActionServiceTests
             await Task.CompletedTask;
         }
 
-        public List<CliToolConfig> GetAvailableTools() => [_tool];
+        public List<CliToolConfig> GetAvailableTools(string? username = null) => [_tool];
 
-        public CliToolConfig? GetTool(string toolId) => toolId == _tool.Id ? _tool : null;
+        public CliToolConfig? GetTool(string toolId, string? username = null) => toolId == _tool.Id ? _tool : null;
 
-        public bool ValidateTool(string toolId) => toolId == _tool.Id;
+        public bool ValidateTool(string toolId, string? username = null) => toolId == _tool.Id;
 
         public void CleanupSessionWorkspace(string sessionId) { }
 
@@ -587,9 +589,11 @@ public class FeishuCardActionServiceTests
                 : sessionId;
         }
 
-        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId) => Task.FromResult(new Dictionary<string, string>());
+        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
+            => Task.FromResult(new Dictionary<string, string>());
 
-        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars) => Task.FromResult(true);
+        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
+            => Task.FromResult(true);
 
         public byte[]? GetWorkspaceFile(string sessionId, string relativePath)
         {
@@ -636,15 +640,19 @@ public class FeishuCardActionServiceTests
     {
         private readonly TaskCompletionSource<(string ChatId, string CardJson)> _rawCardSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
-        public Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => Task.FromResult(true);
 
-        public Task<string> SendCardMessageAsync(string chatId, string cardId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> SendCardMessageAsync(string chatId, string cardId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
-        public Task<string> ReplyCardMessageAsync(string replyMessageId, string cardId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> ReplyCardMessageAsync(string replyMessageId, string cardId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
-        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default)
+        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
         {
             return Task.FromResult(new FeishuStreamingHandle(
                 "card-1",
@@ -654,15 +662,17 @@ public class FeishuCardActionServiceTests
                 throttleMs: 0));
         }
 
-        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default)
+        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
         {
             _rawCardSent.TrySetResult((chatId, cardJson));
             return Task.FromResult("raw-card-message");
         }
 
-        public Task<string> ReplyElementsCardAsync(string replyMessageId, ElementsCardV2Dto card, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> ReplyElementsCardAsync(string replyMessageId, ElementsCardV2Dto card, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
-        public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
         public async Task<(string ChatId, string CardJson)> WaitForRawCardSentAsync(TimeSpan timeout)
         {
@@ -686,16 +696,18 @@ public class FeishuCardActionServiceTests
 
         public string? LastSentMessage { get; private set; }
 
-        public Task<string> SendMessageAsync(string chatId, string content)
+        public Task<string> SendMessageAsync(string chatId, string content, string? username = null, string? appId = null)
         {
             LastSentChatId = chatId;
             LastSentMessage = content;
             return Task.FromResult("notify-message");
         }
 
-        public Task<string> ReplyMessageAsync(string messageId, string content) => Task.FromResult("reply-message");
+        public Task<string> ReplyMessageAsync(string messageId, string content, string? username = null, string? appId = null)
+            => Task.FromResult("reply-message");
 
-        public Task<FeishuStreamingHandle> SendStreamingMessageAsync(string chatId, string initialContent, string? replyToMessageId = null) => throw new NotSupportedException();
+        public Task<FeishuStreamingHandle> SendStreamingMessageAsync(string chatId, string initialContent, string? replyToMessageId = null, string? username = null, string? appId = null)
+            => throw new NotSupportedException();
 
         public Task HandleIncomingMessageAsync(FeishuIncomingMessage message) => throw new NotSupportedException();
 
@@ -728,6 +740,7 @@ public class FeishuCardActionServiceTests
     private sealed class TestServiceProvider : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly StubFeishuUserBindingService _bindingService = new();
+        private readonly StubUserFeishuBotConfigService _feishuBotConfigService = new();
         private readonly StubSessionDirectoryService _sessionDirectoryService = new();
         private readonly TestUserContextService _userContextService;
         private readonly TestProjectService _projectService;
@@ -753,6 +766,11 @@ public class FeishuCardActionServiceTests
             if (serviceType == typeof(ISessionDirectoryService))
             {
                 return _sessionDirectoryService;
+            }
+
+            if (serviceType == typeof(IUserFeishuBotConfigService))
+            {
+                return _feishuBotConfigService;
             }
 
             if (serviceType == typeof(IUserContextService))
@@ -783,14 +801,48 @@ public class FeishuCardActionServiceTests
 
         public Task<bool> IsBoundAsync(string feishuUserId) => Task.FromResult(false);
 
-        public Task<(bool Success, string? ErrorMessage, string? WebUsername)> BindAsync(string feishuUserId, string webUsername)
+        public Task<(bool Success, string? ErrorMessage, string? WebUsername)> BindAsync(string feishuUserId, string webUsername, string? appId = null)
             => Task.FromResult((true, (string?)null, (string?)webUsername));
 
         public Task<bool> UnbindAsync(string feishuUserId) => Task.FromResult(true);
 
-        public Task<List<string>> GetBindableWebUsernamesAsync() => Task.FromResult(new List<string>());
+        public Task<List<string>> GetBindableWebUsernamesAsync(string? appId = null) => Task.FromResult(new List<string>());
 
         public Task<HashSet<string>> GetAllBoundWebUsernamesAsync() => Task.FromResult(new HashSet<string>());
+    }
+
+    private sealed class StubUserFeishuBotConfigService : IUserFeishuBotConfigService
+    {
+        private static readonly FeishuOptions DefaultOptions = new()
+        {
+            Enabled = true,
+            AppId = "test-app-id",
+            AppSecret = "test-app-secret",
+            DefaultCardTitle = "AI助手",
+            ThinkingMessage = "思考中..."
+        };
+
+        public Task<UserFeishuBotConfigEntity?> GetByUsernameAsync(string username)
+            => Task.FromResult<UserFeishuBotConfigEntity?>(null);
+
+        public Task<UserFeishuBotConfigEntity?> GetByAppIdAsync(string appId)
+            => Task.FromResult<UserFeishuBotConfigEntity?>(null);
+
+        public Task<UserFeishuBotConfigSaveResult> SaveAsync(UserFeishuBotConfigEntity config)
+            => throw new NotSupportedException();
+
+        public Task<bool> DeleteAsync(string username) => Task.FromResult(true);
+
+        public Task<string?> FindConflictingUsernameByAppIdAsync(string username, string? appId)
+            => Task.FromResult<string?>(null);
+
+        public FeishuOptions GetSharedDefaults() => DefaultOptions;
+
+        public Task<FeishuOptions> GetEffectiveOptionsAsync(string? username)
+            => Task.FromResult(DefaultOptions);
+
+        public Task<FeishuOptions?> GetEffectiveOptionsByAppIdAsync(string? appId)
+            => Task.FromResult<FeishuOptions?>(string.IsNullOrWhiteSpace(appId) ? null : DefaultOptions);
     }
 
     private sealed class StubSessionDirectoryService : ISessionDirectoryService
@@ -822,7 +874,7 @@ public class FeishuCardActionServiceTests
             return Task.FromResult(directories);
         }
 
-        public Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path)
+        public Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path, string? username = null)
         {
             if (string.IsNullOrWhiteSpace(path))
             {
@@ -888,6 +940,10 @@ public class FeishuCardActionServiceTests
         private string _currentUsername = "default";
 
         public string GetCurrentUsername() => _currentUsername;
+
+        public string GetCurrentRole() => "admin";
+
+        public bool IsAuthenticated() => true;
 
         public void SetCurrentUsername(string username)
         {

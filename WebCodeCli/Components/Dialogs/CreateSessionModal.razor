@@ -27,7 +27,7 @@
                     </button>
                     <button @onclick='() => ActiveTab = "whitelist"'
                             class='flex-1 py-4 px-4 text-sm font-medium transition-colors @(ActiveTab == "whitelist" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
-                        白名单目录
+                        浏览白名单目录
                     </button>
                     <button @onclick='() => ActiveTab = "custom"'
                             class='flex-1 py-4 px-4 text-sm font-medium transition-colors @(ActiveTab == "custom" ? "text-blue-600 border-b-2 border-blue-600" : "text-gray-500 hover:text-gray-700")'>
@@ -161,7 +161,7 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
                             </svg>
                             <p class="text-gray-500 mb-2">暂无可用目录</p>
-                            <p class="text-xs text-gray-400">您可以切换到“白名单目录”或“自定义路径”继续创建会话</p>
+                            <p class="text-xs text-gray-400">您可以切换到“浏览白名单目录”或“自定义路径”继续创建会话</p>
                         </div>
                     }
                 }
@@ -187,21 +187,21 @@
                                 <svg class="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
                                 </svg>
-                                <p class="text-gray-500 mb-2">当前未配置白名单目录</p>
-                                <p class="text-xs text-gray-400">请在配置文件中设置 <code>Workspace:AllowedRoots</code></p>
+                                <p class="text-gray-500 mb-2">当前没有可浏览的白名单目录</p>
+                                <p class="text-xs text-gray-400">请先为当前用户配置白名单目录；如果用户未单独配置，则会回退到 <code>Workspace:AllowedRoots</code> 全局目录。</p>
                             </div>
                         }
                         else if (string.IsNullOrWhiteSpace(AllowedDirectoryBrowser.CurrentPath))
                         {
                             <div class="p-4 rounded-lg border border-blue-200 bg-blue-50">
-                                <p class="text-sm font-medium text-blue-800">白名单根目录</p>
-                                <p class="text-xs text-blue-700 mt-1">仅可浏览配置在 <code>Workspace:AllowedRoots</code> 中的目录。</p>
+                                <p class="text-sm font-medium text-blue-800">浏览白名单目录</p>
+                                <p class="text-xs text-blue-700 mt-1">优先显示当前用户配置的白名单目录；未单独配置时回退到 <code>Workspace:AllowedRoots</code> 全局目录。</p>
                             </div>
 
                             @if (AllowedDirectoryBrowser.Roots.Count == 0)
                             {
                                 <div class="text-center py-12 text-gray-500">
-                                    白名单已配置，但当前没有可浏览的目录
+                                    白名单目录已配置，但当前没有可浏览的目录
                                 </div>
                             }
                             else
@@ -243,7 +243,7 @@
                                     <div class="min-w-0">
                                         <p class="text-sm font-medium text-blue-800">当前位置</p>
                                         <p class="text-xs text-blue-700 mt-1 break-all">@AllowedDirectoryBrowser.CurrentPath</p>
-                                        <p class="text-xs text-blue-700 mt-2">当前目录可直接作为新会话工作区。</p>
+                                        <p class="text-xs text-blue-700 mt-2">当前目录位于可浏览白名单范围内，可直接作为新会话工作区。</p>
                                     </div>
                                     <div class="flex items-center gap-2 shrink-0">
                                         <button @onclick='() => CopyPathAsync(AllowedDirectoryBrowser.CurrentPath)'

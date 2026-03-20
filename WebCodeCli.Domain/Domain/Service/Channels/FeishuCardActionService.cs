@@ -5,6 +5,7 @@ using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
@@ -75,7 +76,8 @@ public class FeishuCardActionService
         Dictionary<string, object>? formValue = null,
         string? chatId = null,
         string? inputValues = null,
-        string? operatorUserId = null)
+        string? operatorUserId = null,
+        string? appId = null)
     {
         try
         {
@@ -110,9 +112,9 @@ public class FeishuCardActionService
                 case "back_to_list":
                     return await HandleBackToListAsync(chatId);
                 case "execute_command":
-                    return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, inputValues);
+                    return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case "switch_session":
-                    return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
+                    return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId, appId);
                 case "close_session":
                     return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "show_create_session_form":
@@ -126,7 +128,7 @@ public class FeishuCardActionService
                 case "switch_tool":
                     return await HandleSwitchToolAsync(action.ToolId, action.ChatKey, operatorUserId);
                 case "bind_web_user":
-                    return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId);
+                    return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId, appId);
                 case "open_session_manager":
                     return await HandleOpenSessionManagerAsync(chatId, operatorUserId);
                 case "open_project_manager":
@@ -247,7 +249,13 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理执行命令
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleExecuteCommandAsync(JsonElement? formValue, string? commandFromAction, string? chatId, string? inputValues = null)
+    private async Task<CardActionTriggerResponseDto> HandleExecuteCommandAsync(
+        JsonElement? formValue,
+        string? commandFromAction,
+        string? chatId,
+        string? operatorUserId,
+        string? inputValues = null,
+        string? appId = null)
     {
         if (string.IsNullOrEmpty(chatId))
         {
@@ -307,6 +315,9 @@ public class FeishuCardActionService
         {
             try
             {
+                var username = ResolveFeishuUsername(chatId.ToLowerInvariant(), operatorUserId);
+                var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
+
                 // 获取或创建会话
                 var toolId = ResolveToolIdForChat(chatId);
                 var sessionId = GetOrCreateSession(chatId, toolId);
@@ -324,15 +335,16 @@ public class FeishuCardActionService
                 var handle = await _cardKit.CreateStreamingHandleAsync(
                     chatId,
                     null,
-                    "思考中...",
-                    "AI 助手");
+                    effectiveOptions.ThinkingMessage,
+                    effectiveOptions.DefaultCardTitle,
+                    optionsOverride: effectiveOptions);
 
                 _logger.LogInformation(
                     "🔥 [FeishuHelp] 流式句柄已创建: CardId={CardId}",
                     handle.CardId);
 
                 // 执行 CLI 工具并流式更新卡片
-                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, commandInput, chatId);
+                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, commandInput, chatId, effectiveOptions.ThinkingMessage);
             }
             catch (Exception ex)
             {
@@ -420,7 +432,8 @@ public class FeishuCardActionService
         string sessionId,
         string toolId,
         string userPrompt,
-        string chatId)
+        string chatId,
+        string thinkingMessage)
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
@@ -467,7 +480,7 @@ public class FeishuCardActionService
 
                     if (string.IsNullOrWhiteSpace(displayContent))
                     {
-                        displayContent = "思考中...";
+                        displayContent = thinkingMessage;
                     }
                 }
                 else
@@ -670,7 +683,7 @@ public class FeishuCardActionService
         return lastUsefulContent;
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleBindWebUserAsync(JsonElement? formValue, string? chatId, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleBindWebUserAsync(JsonElement? formValue, string? chatId, string? operatorUserId, string? appId)
     {
         var webUsername = GetFormStringValue(formValue, "web_username")?.Trim();
         var webPassword = GetFormStringValue(formValue, "web_password")?.Trim();
@@ -684,7 +697,7 @@ public class FeishuCardActionService
         {
             using var retryScope = _serviceProvider.CreateScope();
             var retryBindingService = retryScope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
-            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await retryBindingService.GetBindableWebUsernamesAsync()).ToArray());
+            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await retryBindingService.GetBindableWebUsernamesAsync(appId)).ToArray());
             return _cardBuilder.BuildCardActionResponseV2(retryCard, "⚠️ 请输入用户名和密码", "warning");
         }
 
@@ -694,14 +707,14 @@ public class FeishuCardActionService
 
         if (!authService.ValidateUser(webUsername, webPassword))
         {
-            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await bindingService.GetBindableWebUsernamesAsync()).ToArray());
+            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await bindingService.GetBindableWebUsernamesAsync(appId)).ToArray());
             return _cardBuilder.BuildCardActionResponseV2(retryCard, "❌ 用户名或密码错误", "error");
         }
 
-        var bindResult = await bindingService.BindAsync(operatorUserId, webUsername);
+        var bindResult = await bindingService.BindAsync(operatorUserId, webUsername, appId);
         if (!bindResult.Success)
         {
-            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await bindingService.GetBindableWebUsernamesAsync()).ToArray());
+            var retryCard = _cardBuilder.BuildBindWebUserCardV2((await bindingService.GetBindableWebUsernamesAsync(appId)).ToArray());
             return _cardBuilder.BuildCardActionResponseV2(retryCard, $"❌ 绑定失败：{bindResult.ErrorMessage}", "error");
         }
 
@@ -722,7 +735,7 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理切换会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleSwitchSessionAsync(string? sessionId, string? chatKey, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleSwitchSessionAsync(string? sessionId, string? chatKey, string? operatorUserId, string? appId)
     {
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(chatKey))
         {
@@ -789,7 +802,7 @@ public class FeishuCardActionService
 
                     // 直接发送Markdown内容，系统会自动包装成卡片
                     _logger.LogInformation("🔍 [会话历史] 开始发送消息到聊天 {ChatId}", actualChatKey);
-                    var messageId = await _feishuChannel.SendMessageAsync(actualChatKey, contentBuilder.ToString());
+                    var messageId = await _feishuChannel.SendMessageAsync(actualChatKey, contentBuilder.ToString(), username, appId);
                     _logger.LogInformation("✅ [会话历史] 已发送会话 {SessionId} 历史到聊天 {ChatId}, MessageId={MessageId}", sessionId, actualChatKey, messageId);
                 }
                 catch (Exception ex)
@@ -799,7 +812,7 @@ public class FeishuCardActionService
                     // 尝试发送错误提示
                     try
                     {
-                        await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 历史消息加载失败: {ex.Message}");
+                        await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 历史消息加载失败: {ex.Message}", username, appId);
                     }
                     catch { }
                 }
@@ -1049,7 +1062,7 @@ public class FeishuCardActionService
 
         try
         {
-            var browseResult = await sessionDirectoryService.BrowseAllowedDirectoriesAsync(workspacePath);
+            var browseResult = await sessionDirectoryService.BrowseAllowedDirectoriesAsync(workspacePath, username);
             var effectiveToolId = NormalizeToolId(selectedToolId) ?? ResolveToolIdForChat(actualChatKey, username);
             var card = BuildAllowedDirectoryCard(actualChatKey, effectiveToolId, browseResult, Math.Max(page ?? 0, 0));
             return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
@@ -1089,7 +1102,7 @@ public class FeishuCardActionService
         {
             var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
             var prefix = string.IsNullOrWhiteSpace(username) ? "可复制路径" : $"{username} 的可复制路径";
-            await _feishuChannel.SendMessageAsync(actualChatKey, $"{prefix}:\n{path}");
+            await _feishuChannel.SendMessageAsync(actualChatKey, $"{prefix}:\n{path}", username);
             return _cardBuilder.BuildCardActionToastOnlyResponse("✅ 路径已发送到聊天，可长按复制", "success");
         }
         catch (Exception ex)
@@ -1165,6 +1178,23 @@ public class FeishuCardActionService
         }
 
         return _feishuChannel.GetSessionUsername(chatKey);
+    }
+
+    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username, string? appId = null)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+
+        if (!string.IsNullOrWhiteSpace(appId))
+        {
+            var appOptions = await userFeishuBotConfigService.GetEffectiveOptionsByAppIdAsync(appId);
+            if (appOptions != null)
+            {
+                return appOptions;
+            }
+        }
+
+        return await userFeishuBotConfigService.GetEffectiveOptionsAsync(username);
     }
 
     private static string? GetFormStringValue(JsonElement? formValue, string key)
@@ -1293,7 +1323,7 @@ public class FeishuCardActionService
                 text = new
                 {
                     tag = "lark_md",
-                    content = $"## 🆕 新建会话\n先选择 **CLI 工具**，再选择 **默认目录**、**已有目录/项目**、**白名单目录** 或 **自定义路径**。\n当前选择：**{GetToolDisplayName(effectiveToolId)}**"
+                    content = $"## 🆕 新建会话\n先选择 **CLI 工具**，再选择 **默认目录**、**已有目录/项目**、**浏览白名单目录** 或 **自定义路径**。\n当前选择：**{GetToolDisplayName(effectiveToolId)}**"
                 }
             },
             new { tag = "hr" },
@@ -1434,7 +1464,7 @@ public class FeishuCardActionService
             text = new
             {
                 tag = "lark_md",
-                content = "### 3️⃣ 浏览白名单目录\n仅显示配置在 `Workspace:AllowedRoots` 中的目录，可浏览文件并复制路径。"
+                content = "### 3️⃣ 浏览白名单目录\n优先显示当前用户配置的白名单目录；未单独配置时回退到 `Workspace:AllowedRoots` 全局目录，可浏览文件并复制路径。"
             }
         });
         elements.Add(new
@@ -3108,7 +3138,7 @@ public class FeishuCardActionService
                 text = new
                 {
                     tag = "lark_md",
-                    content = "## 📁 白名单目录浏览\n仅展示 `Workspace:AllowedRoots` 中配置的目录。"
+                    content = "## 📁 浏览白名单目录\n优先展示当前用户配置的白名单目录；未单独配置时回退到 `Workspace:AllowedRoots` 全局目录。"
                 }
             },
             new { tag = "hr" }
@@ -3122,7 +3152,7 @@ public class FeishuCardActionService
                 text = new
                 {
                     tag = "lark_md",
-                    content = "当前还没有配置白名单目录，请先在服务端设置 `Workspace:AllowedRoots`。"
+                    content = "当前用户还没有可浏览的白名单目录，且系统也没有可回退的全局目录。请先在用户管理中配置白名单目录，或在服务端设置 `Workspace:AllowedRoots`。"
                 }
             });
         }
@@ -3143,7 +3173,7 @@ public class FeishuCardActionService
                 elements.Add(new
                 {
                     tag = "div",
-                    text = new { tag = "plain_text", content = "白名单已配置，但当前没有可浏览目录。" }
+                    text = new { tag = "plain_text", content = "白名单目录已配置，但当前没有可浏览目录。" }
                 });
             }
             else
@@ -3284,7 +3314,7 @@ public class FeishuCardActionService
             Header = new ElementsCardV2Dto.HeaderSuffix
             {
                 Template = "blue",
-                Title = new HeaderTitleElement { Content = "📁 白名单目录" }
+                Title = new HeaderTitleElement { Content = "📁 浏览白名单目录" }
             },
             Config = new ElementsCardV2Dto.ConfigSuffix
             {

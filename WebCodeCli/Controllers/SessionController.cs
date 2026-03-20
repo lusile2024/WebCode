@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 using WebCodeCli.Domain.Domain.Model;
@@ -10,6 +11,7 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/session")]
+[Authorize]
 public class SessionController : ControllerBase
 {
     private readonly ISessionHistoryManager _sessionHistoryManager;

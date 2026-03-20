@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
@@ -9,12 +10,14 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/setting")]
+[Authorize]
 public class SettingController : ControllerBase
 {
     private readonly IUserSettingService _settingService;
     private readonly IInputHistoryService _inputHistoryService;
     private readonly IQuickActionService _quickActionService;
     private readonly ICliExecutorService _cliExecutorService;
+    private readonly IUserContextService _userContextService;
     private readonly ILogger<SettingController> _logger;
 
     public SettingController(
@@ -22,12 +25,14 @@ public class SettingController : ControllerBase
         IInputHistoryService inputHistoryService,
         IQuickActionService quickActionService,
         ICliExecutorService cliExecutorService,
+        IUserContextService userContextService,
         ILogger<SettingController> logger)
     {
         _settingService = settingService;
         _inputHistoryService = inputHistoryService;
         _quickActionService = quickActionService;
         _cliExecutorService = cliExecutorService;
+        _userContextService = userContextService;
         _logger = logger;
     }
 
@@ -41,7 +46,7 @@ public class SettingController : ControllerBase
     {
         try
         {
-            var tools = _cliExecutorService.GetAvailableTools();
+            var tools = _cliExecutorService.GetAvailableTools(_userContextService.GetCurrentUsername());
             var result = tools.Select(t => new CliToolInfo
             {
                 Id = t.Id,

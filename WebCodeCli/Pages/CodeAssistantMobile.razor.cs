@@ -1679,6 +1679,14 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         }
     }
 
+    private async Task ShowAdminUserManagementModal()
+    {
+        if (_adminUserManagementModal != null)
+        {
+            await _adminUserManagementModal.ShowAsync();
+        }
+    }
+
     /// <summary>
     /// 项目列表变更回调
     /// </summary>
@@ -2173,7 +2181,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     {
         try
         {
-            _availableTools = CliExecutorService.GetAvailableTools();
+            _availableTools = CliExecutorService.GetAvailableTools(_currentUsername);
             if (_availableTools.Any() && string.IsNullOrEmpty(_selectedToolId))
             {
                 _selectedToolId = _availableTools.First().Id;
@@ -2840,6 +2848,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     
     private bool _showUserInfo = false;
     private string _currentUsername = string.Empty;
+    private bool _isAdmin = false;
 
     // 设备类型检测（用于PC/移动端路由跳转）
     private bool _hasCheckedDevice = false;
@@ -2851,6 +2860,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private UpdateNotificationModal _updateNotificationModal = default!;
     private ProjectSelectModal _projectSelectModal = default!;
     private ProjectManageModal _projectManageModal = default!;
+    private AdminUserManagementModal _adminUserManagementModal = default!;
     private CreateSessionModal _createSessionModal = default!;
     
     // 版本相关
@@ -3074,11 +3084,17 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     {
         try
         {
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "isAuthenticated");
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "username");
-            NavigationManager.NavigateTo("/login");
+            await JSRuntime.InvokeVoidAsync("authHelper.logout");
+            NavigationManager.NavigateTo("/login", forceLoad: true);
         }
         catch { }
+    }
+
+    private sealed class ClientAuthState
+    {
+        public bool IsAuthenticated { get; set; }
+        public string? Username { get; set; }
+        public string? Role { get; set; }
     }
     
     #endregion
@@ -3132,14 +3148,15 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         {
             try
             {
-                var isAuthenticated = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "isAuthenticated");
-                if (isAuthenticated != "true")
+                var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+                if (!authState.IsAuthenticated || string.IsNullOrWhiteSpace(authState.Username))
                 {
                     NavigationManager.NavigateTo("/login");
                     return;
                 }
                 
-                _currentUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username") ?? "用户";
+                _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
                 _showUserInfo = true;
             }
             catch
@@ -3153,13 +3170,13 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         // 无论认证是否启用，都需要设置用户上下文
         try
         {
-            // 尝试从 sessionStorage 获取用户名
-            var storedUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username");
-            if (!string.IsNullOrWhiteSpace(storedUsername))
+            var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+            if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
-                _currentUsername = storedUsername;
-                UserContextService.SetCurrentUsername(storedUsername);
-                Console.WriteLine($"[用户上下文] 从sessionStorage设置当前用户: {storedUsername}");
+                _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
+                UserContextService.SetCurrentUsername(authState.Username);
+                Console.WriteLine($"[用户上下文] 从认证状态设置当前用户: {authState.Username}");
             }
             else
             {

@@ -41,6 +41,7 @@ public class SessionDirectoryService : ISessionDirectoryService
     private readonly IWorkspaceRegistryService _registryService;
     private readonly IWorkspaceAuthorizationService _authorizationService;
     private readonly IProjectRepository _projectRepository;
+    private readonly IUserWorkspacePolicyService _userWorkspacePolicyService;
     private readonly bool _autoCreateMissingDirectories;
     private readonly string[] _allowedRoots;
 
@@ -49,12 +50,14 @@ public class SessionDirectoryService : ISessionDirectoryService
         IWorkspaceRegistryService registryService,
         IWorkspaceAuthorizationService authorizationService,
         IProjectRepository projectRepository,
+        IUserWorkspacePolicyService userWorkspacePolicyService,
         IConfiguration configuration)
     {
         _chatSessionRepository = chatSessionRepository;
         _registryService = registryService;
         _authorizationService = authorizationService;
         _projectRepository = projectRepository;
+        _userWorkspacePolicyService = userWorkspacePolicyService;
         _autoCreateMissingDirectories = configuration.GetValue<bool?>("Workspace:AutoCreateMissingDirectories") ?? true;
         _allowedRoots = (configuration.GetSection("Workspace:AllowedRoots").Get<string[]>() ?? Array.Empty<string>())
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -84,14 +87,20 @@ public class SessionDirectoryService : ISessionDirectoryService
                 throw new UnauthorizedAccessException($"禁止访问系统敏感目录: {directoryPath}");
             }
 
-            if (_allowedRoots.Length > 0)
+            var effectiveRoots = await GetEffectiveAllowedRootsAsync(username);
+            if (effectiveRoots.Length > 0)
             {
-                var isUnderAllowedRoots = _allowedRoots
+                var isUnderAllowedRoots = effectiveRoots
                     .Any(root => IsPathWithinRoot(root, normalizedPath));
                 if (!isUnderAllowedRoots)
                 {
                     throw new UnauthorizedAccessException($"目录不在允许范围内: {directoryPath}");
                 }
+            }
+
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, normalizedPath))
+            {
+                throw new UnauthorizedAccessException($"目录不在当前用户白名单内: {directoryPath}");
             }
 
             if (!Directory.Exists(normalizedPath))
@@ -156,7 +165,6 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         if (string.IsNullOrEmpty(session.WorkspacePath))
         {
-            // 没有设置工作区，默认允许访问
             return true;
         }
 
@@ -177,6 +185,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         foreach (var dir in owned)
         {
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, dir.DirectoryPath))
+            {
+                continue;
+            }
+
             result.Add(new
             {
                 dir.Id,
@@ -194,6 +207,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         foreach (var project in projects.Where(x => !string.IsNullOrWhiteSpace(x.LocalPath) && Directory.Exists(x.LocalPath)))
         {
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, project.LocalPath!))
+            {
+                continue;
+            }
+
             if (!addedPaths.Add(project.LocalPath!))
             {
                 continue;
@@ -215,6 +233,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         foreach (var auth in authorized)
         {
+            if (!await _userWorkspacePolicyService.IsPathAllowedAsync(username, auth.DirectoryPath))
+            {
+                continue;
+            }
+
             if (!addedPaths.Add(auth.DirectoryPath))
             {
                 continue;
@@ -237,9 +260,10 @@ public class SessionDirectoryService : ISessionDirectoryService
         return result.OrderByDescending(x => x.GetType().GetProperty("UpdatedAt")?.GetValue(x) as DateTime? ?? DateTime.MinValue).ToList<object>();
     }
 
-    public Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path)
+    public async Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path, string? username = null)
     {
-        var availableRoots = _allowedRoots
+        var effectiveRoots = await GetEffectiveAllowedRootsAsync(username);
+        var availableRoots = effectiveRoots
             .Where(Directory.Exists)
             .Select(root => new AllowedDirectoryRootItem
             {
@@ -250,11 +274,11 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            return Task.FromResult(new AllowedDirectoryBrowseResult
+            return new AllowedDirectoryBrowseResult
             {
-                HasConfiguredRoots = _allowedRoots.Length > 0,
+                HasConfiguredRoots = effectiveRoots.Length > 0,
                 Roots = availableRoots
-            });
+            };
         }
 
         var normalizedPath = _registryService.NormalizePath(path);
@@ -263,7 +287,7 @@ public class SessionDirectoryService : ISessionDirectoryService
             throw new UnauthorizedAccessException($"禁止访问系统敏感目录: {path}");
         }
 
-        var matchedRoot = _allowedRoots.FirstOrDefault(root => IsPathWithinRoot(root, normalizedPath));
+        var matchedRoot = effectiveRoots.FirstOrDefault(root => IsPathWithinRoot(root, normalizedPath));
         if (string.IsNullOrWhiteSpace(matchedRoot))
         {
             throw new UnauthorizedAccessException($"目录不在允许范围内: {path}");
@@ -298,15 +322,35 @@ public class SessionDirectoryService : ISessionDirectoryService
             parentPath = null;
         }
 
-        return Task.FromResult(new AllowedDirectoryBrowseResult
+        return new AllowedDirectoryBrowseResult
         {
-            HasConfiguredRoots = _allowedRoots.Length > 0,
+            HasConfiguredRoots = effectiveRoots.Length > 0,
             CurrentPath = normalizedPath,
             ParentPath = parentPath,
             RootPath = matchedRoot,
             Roots = availableRoots,
             Entries = directories.Concat(files).ToList()
-        });
+        };
+    }
+
+    private async Task<string[]> GetEffectiveAllowedRootsAsync(string? username)
+    {
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            var userAllowedDirectories = await _userWorkspacePolicyService.GetAllowedDirectoriesAsync(username);
+            var normalizedUserRoots = userAllowedDirectories
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => _registryService.NormalizePath(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (normalizedUserRoots.Length > 0)
+            {
+                return normalizedUserRoots;
+            }
+        }
+
+        return _allowedRoots;
     }
 
     private static bool IsPathWithinRoot(string rootPath, string targetPath)

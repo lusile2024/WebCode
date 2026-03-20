@@ -28,7 +28,7 @@ public class FeishuCardKitClientTests
                 """{"schema":"2.0","body":{"elements":[]}}""",
                 TestContext.Current.CancellationToken));
 
-        Assert.Contains("Reply interactive card message failed", exception.Message);
+        Assert.Contains("Reply raw Feishu card message failed", exception.Message);
         Assert.Equal(
         [
             "/open-apis/auth/v3/tenant_access_token/internal",

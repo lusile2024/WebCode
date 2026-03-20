@@ -1,6 +1,9 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using WebCodeCli.Domain.Common.Extensions;
+using WebCodeCli.Domain.Domain.Model;
 
 namespace WebCodeCli.Domain.Domain.Service;
 
@@ -12,6 +15,7 @@ namespace WebCodeCli.Domain.Domain.Service;
 public class UserContextService : IUserContextService
 {
     private readonly IConfiguration _configuration;
+    private readonly IHttpContextAccessor _httpContextAccessor;
     private string? _overrideUsername;
     
     /// <summary>
@@ -19,9 +23,10 @@ public class UserContextService : IUserContextService
     /// </summary>
     private const string DefaultUsername = "default";
 
-    public UserContextService(IConfiguration configuration)
+    public UserContextService(IConfiguration configuration, IHttpContextAccessor httpContextAccessor)
     {
         _configuration = configuration;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     /// <summary>
@@ -35,9 +40,17 @@ public class UserContextService : IUserContextService
         {
             return _overrideUsername;
         }
+
+        var claimsUsername = _httpContextAccessor.HttpContext?.User?.Identity?.IsAuthenticated == true
+            ? _httpContextAccessor.HttpContext.User.Identity?.Name
+            : null;
+
+        if (!string.IsNullOrWhiteSpace(claimsUsername))
+        {
+            return claimsUsername;
+        }
         
         // 从配置读取，默认为 "default"
-        // 未来可从 HttpContext.User 获取
         var configUsername = _configuration["App:DefaultUsername"];
         
         if (!string.IsNullOrWhiteSpace(configUsername))
@@ -46,6 +59,26 @@ public class UserContextService : IUserContextService
         }
         
         return DefaultUsername;
+    }
+
+    public string GetCurrentRole()
+    {
+        if (_httpContextAccessor.HttpContext?.User?.Identity?.IsAuthenticated == true)
+        {
+            var role = _httpContextAccessor.HttpContext.User.FindFirstValue(ClaimTypes.Role);
+            if (!string.IsNullOrWhiteSpace(role))
+            {
+                return role;
+            }
+        }
+
+        return UserAccessConstants.UserRole;
+    }
+
+    public bool IsAuthenticated()
+    {
+        return !string.IsNullOrWhiteSpace(_overrideUsername) ||
+               _httpContextAccessor.HttpContext?.User?.Identity?.IsAuthenticated == true;
     }
 
     /// <summary>

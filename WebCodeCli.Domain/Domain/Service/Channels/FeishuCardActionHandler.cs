@@ -48,7 +48,7 @@ public class FeishuCardActionHandler : ICallbackHandler<
 
         try
         {
-            var response = await HandleCardActionTriggerAsync(input.Event);
+            var response = await HandleCardActionTriggerAsync(input.Event, input.Header?.AppId);
 
             // 记录返回的响应内容
             var responseJson = JsonSerializer.Serialize(response, new JsonSerializerOptions
@@ -69,7 +69,7 @@ public class FeishuCardActionHandler : ICallbackHandler<
     /// <summary>
     /// 处理卡片动作触发事件
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleCardActionTriggerAsync(CardActionTriggerEventBodyDto eventDto)
+    private async Task<CardActionTriggerResponseDto> HandleCardActionTriggerAsync(CardActionTriggerEventBodyDto eventDto, string? appId)
     {
         try
         {
@@ -169,7 +169,8 @@ public class FeishuCardActionHandler : ICallbackHandler<
                 eventDto.Action.FormValue,
                 chatId,
                 eventDto.Action.InputValue,
-                eventDto.Operator?.UnionId ?? eventDto.Operator?.OpenId ?? string.Empty);
+                eventDto.Operator?.UnionId ?? eventDto.Operator?.OpenId ?? string.Empty,
+                appId);
         }
         catch (Exception ex)
         {

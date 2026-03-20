@@ -16,15 +16,18 @@ public class AuthenticationService : IAuthenticationService
 {
     private readonly AuthenticationOption _authOption;
     private readonly ISystemSettingsRepository _settingsRepository;
+    private readonly IUserAccountService _userAccountService;
     private readonly ILogger<AuthenticationService> _logger;
 
     public AuthenticationService(
         IOptions<AuthenticationOption> authOption,
         ISystemSettingsRepository settingsRepository,
+        IUserAccountService userAccountService,
         ILogger<AuthenticationService> logger)
     {
         _authOption = authOption.Value;
         _settingsRepository = settingsRepository;
+        _userAccountService = userAccountService;
         _logger = logger;
     }
 
@@ -37,26 +40,15 @@ public class AuthenticationService : IAuthenticationService
 
         try
         {
-            // 优先验证数据库中的用户
-            var storedUsername = _settingsRepository.GetAsync(SystemSettingsKeys.AdminUsername).GetAwaiter().GetResult();
-            var storedPassword = _settingsRepository.GetAsync(SystemSettingsKeys.AdminPassword).GetAwaiter().GetResult();
-
-            if (!string.IsNullOrWhiteSpace(storedUsername) && !string.IsNullOrWhiteSpace(storedPassword))
+            var account = _userAccountService.ValidateCredentialsAsync(username, password).GetAwaiter().GetResult();
+            if (account != null)
             {
-                // 解密密码
-                var decryptedPassword = System.Text.Encoding.UTF8.GetString(
-                    Convert.FromBase64String(storedPassword));
-                
-                if (storedUsername.Equals(username, StringComparison.OrdinalIgnoreCase) && 
-                    decryptedPassword == password)
-                {
-                    return true;
-                }
+                return true;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "从数据库验证用户失败，降级到配置文件验证");
+            _logger.LogWarning(ex, "从用户账户服务验证用户失败，降级到配置文件验证");
         }
 
         // 降级到配置文件验证

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
@@ -12,6 +13,7 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/workspace")]
+[Authorize]
 public class WorkspaceController : ControllerBase
 {
     private readonly ICliExecutorService _cliExecutorService;
@@ -440,7 +442,7 @@ public class WorkspaceController : ControllerBase
     {
         try
         {
-            var result = await _sessionDirectoryService.BrowseAllowedDirectoriesAsync(path);
+            var result = await _sessionDirectoryService.BrowseAllowedDirectoriesAsync(path, GetCurrentUsername());
             return Ok(new
             {
                 success = true,

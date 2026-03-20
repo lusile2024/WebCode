@@ -49,7 +49,8 @@ public interface ISessionDirectoryService
     /// 未指定 path 时返回白名单根目录列表；指定 path 时返回该目录下的目录和文件条目。
     /// </summary>
     /// <param name="path">要浏览的绝对路径，可为空</param>
-    Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path);
+    /// <param name="username">当前用户名，用于解析用户级白名单目录</param>
+    Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path, string? username = null);
 }
 
 public sealed class AllowedDirectoryBrowseResult

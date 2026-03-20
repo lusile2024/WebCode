@@ -216,6 +216,10 @@ public class ProjectServiceTests
     {
         public string GetCurrentUsername() => "tester";
 
+        public string GetCurrentRole() => "admin";
+
+        public bool IsAuthenticated() => true;
+
         public void SetCurrentUsername(string username)
         {
         }

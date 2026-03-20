@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebCodeCli", "WebCodeCli\We
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebCodeCli.Domain", "WebCodeCli.Domain\WebCodeCli.Domain.csproj", "{E95DA37E-8AA9-9899-B64C-920F1BCE156E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebCodeCli.Tests", "tests\WebCodeCli.Tests\WebCodeCli.Tests.csproj", "{D7B7EE31-8A4D-4C9C-9D10-B05840B6B4A0}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "解决方案项", "解决方案项", "{9FA3D6BD-1EC1-3BA5-80CB-CE02773A58D5}"
 	ProjectSection(SolutionItems) = preProject
 		Directory.Build.props = Directory.Build.props
@@ -28,6 +30,10 @@ Global
 		{E95DA37E-8AA9-9899-B64C-920F1BCE156E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E95DA37E-8AA9-9899-B64C-920F1BCE156E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E95DA37E-8AA9-9899-B64C-920F1BCE156E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D7B7EE31-8A4D-4C9C-9D10-B05840B6B4A0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D7B7EE31-8A4D-4C9C-9D10-B05840B6B4A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D7B7EE31-8A4D-4C9C-9D10-B05840B6B4A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D7B7EE31-8A4D-4C9C-9D10-B05840B6B4A0}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C7F5C56A-14ED-4F36-AB87-F8FC62FF06A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{C7F5C56A-14ED-4F36-AB87-F8FC62FF06A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C7F5C56A-14ED-4F36-AB87-F8FC62FF06A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
