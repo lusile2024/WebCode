@@ -48,6 +48,10 @@ public class GitServiceTests
                 cloneCall =>
                 {
                     Assert.Contains("credential.helper=store --file=", cloneCall.Arguments);
+                    if (OperatingSystem.IsWindows())
+                    {
+                        Assert.Contains("-c core.longpaths=true", cloneCall.Arguments);
+                    }
                     Assert.EndsWith(
                         $"clone \"http://sql-for-tfs2017:8080/tfs/DefaultCollection/WmsV4/_git/WmsServerV4\" \"{localPath}\"",
                         cloneCall.Arguments,

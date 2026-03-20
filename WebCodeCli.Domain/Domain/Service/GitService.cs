@@ -1179,9 +1179,13 @@ public class GitService : IGitService
 
     private static string BuildCloneArguments(string gitUrl, string localPath, string branch)
     {
+        var longPathPrefix = OperatingSystem.IsWindows()
+            ? $"{BuildLongPathConfigArguments()} "
+            : string.Empty;
+
         return string.IsNullOrWhiteSpace(branch)
-            ? $"clone \"{gitUrl}\" \"{localPath}\""
-            : $"clone --branch \"{branch}\" --single-branch \"{gitUrl}\" \"{localPath}\"";
+            ? $"{longPathPrefix}clone \"{gitUrl}\" \"{localPath}\""
+            : $"{longPathPrefix}clone --branch \"{branch}\" --single-branch \"{gitUrl}\" \"{localPath}\"";
     }
 
     private static string BuildFetchBranchRefSpec(string branch)

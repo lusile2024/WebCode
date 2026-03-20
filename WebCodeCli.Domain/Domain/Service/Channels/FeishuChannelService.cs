@@ -426,6 +426,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             var sessionDirectoryService = scope.ServiceProvider.GetRequiredService<ISessionDirectoryService>();
             sessionDirectoryService.SetSessionWorkspaceAsync(newSessionId, username, customWorkspacePath, true)
                 .GetAwaiter().GetResult();
+            session = repo.GetByIdAsync(newSessionId).GetAwaiter().GetResult();
+            if (session == null)
+            {
+                throw new InvalidOperationException($"设置飞书会话工作区后未找到会话记录: {newSessionId}");
+            }
             session.ToolId = resolvedToolId;
             session.UpdatedAt = DateTime.Now;
             repo.UpdateAsync(session).GetAwaiter().GetResult();

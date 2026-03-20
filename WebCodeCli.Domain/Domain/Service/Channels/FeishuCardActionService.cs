@@ -21,6 +21,32 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 /// </summary>
 public class FeishuCardActionService
 {
+    private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9"
+    };
+
     private readonly FeishuCommandService _commandService;
     private readonly FeishuHelpCardBuilder _cardBuilder;
     private readonly IFeishuCardKitClient _cardKit;
@@ -142,15 +168,15 @@ public class FeishuCardActionService
                 case "update_project":
                     return await HandleUpdateProjectAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId);
                 case "clone_project":
-                    return await HandleCloneProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                    return await HandleCloneProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, appId);
                 case "pull_project":
-                    return await HandlePullProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                    return await HandlePullProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, appId);
                 case "show_project_branch_switcher":
-                    return await HandleShowProjectBranchSwitcherAsync(action.ChatKey ?? chatId, action.ProjectId, action.Page, operatorUserId);
+                    return await HandleShowProjectBranchSwitcherAsync(action.ChatKey ?? chatId, action.ProjectId, action.Page, operatorUserId, appId);
                 case "switch_project_branch":
-                    return await HandleSwitchProjectBranchAsync(action.ChatKey ?? chatId, action.ProjectId, action.Branch, action.Page, operatorUserId);
+                    return await HandleSwitchProjectBranchAsync(action.ChatKey ?? chatId, action.ProjectId, action.Branch, action.Page, operatorUserId, appId);
                 case "delete_project":
-                    return await HandleDeleteProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                    return await HandleDeleteProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, appId);
                 case "fetch_project_branches":
                     return await HandleFetchProjectBranchesAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId);
                 case "create_session_from_project":
@@ -865,21 +891,28 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在，关闭失败", "error");
         }
 
-        // 自定义目录/项目目录：直接关闭，无需确认
-        if (session.IsCustomWorkspace)
+        var hasExistingWorkspace = !string.IsNullOrWhiteSpace(session.WorkspacePath)
+            && Directory.Exists(session.WorkspacePath);
+        var requiresTempWorkspaceConfirmation = !session.IsCustomWorkspace && hasExistingWorkspace;
+
+        // 自定义目录、项目目录、或已丢失工作区的历史坏会话：直接关闭，无需确认
+        if (!requiresTempWorkspaceConfirmation)
         {
             var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
             var success = _feishuChannel.CloseSession(actualChatKey, sessionId, username);
             if (success)
             {
+                var closeMessage = session.IsCustomWorkspace
+                    ? $"🗑️ 已关闭会话 {sessionId[..8]}...\n✅ 自定义目录内容已保留"
+                    : $"🗑️ 已关闭会话 {sessionId[..8]}...\nℹ️ 该会话没有可清理的临时工作区";
                 return _cardBuilder.BuildCardActionToastOnlyResponse(
-                    $"🗑️ 已关闭会话 {sessionId[..8]}...\n✅ 自定义目录内容已保留",
+                    closeMessage,
                     "info");
             }
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话关闭失败", "error");
         }
 
-        // 临时目录：需要二次确认
+        // 仍然存在的临时目录：需要二次确认
         lock (_pendingCloseSessions)
         {
             // 清理过期的待确认会话
@@ -1019,7 +1052,9 @@ public class FeishuCardActionService
         try
         {
             var newSessionId = _feishuChannel.CreateNewSession(mockMessage, selectedWorkspacePath, selectedToolId);
-            var workspacePath = _cliExecutor.GetSessionWorkspacePath(newSessionId);
+            var workspacePath = string.IsNullOrWhiteSpace(selectedWorkspacePath)
+                ? _cliExecutor.GetSessionWorkspacePath(newSessionId)
+                : selectedWorkspacePath;
             _feishuChannel.SwitchCurrentSession(actualChatKey, newSessionId, username);
             var toolLabel = GetToolDisplayName(selectedToolId);
 
@@ -1647,7 +1682,27 @@ public class FeishuCardActionService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[Feishu] 获取会话工作区失败，降级显示: {SessionId}", sessionId);
+            _logger.LogWarning(ex, "[Feishu] 从 CLI 缓存获取会话工作区失败，尝试仓储回退: {SessionId}", sessionId);
+
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+                var sessionEntity = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+                var workspacePath = sessionEntity?.WorkspacePath;
+
+                if (!string.IsNullOrWhiteSpace(workspacePath) && Directory.Exists(workspacePath))
+                {
+                    return workspacePath;
+                }
+
+                _logger.LogWarning("[Feishu] 会话工作区仓储回退未命中或目录不存在: {SessionId}, WorkspacePath={WorkspacePath}", sessionId, workspacePath);
+            }
+            catch (Exception repoEx)
+            {
+                _logger.LogWarning(repoEx, "[Feishu] 从会话仓储回退工作区失败: {SessionId}", sessionId);
+            }
+
             return "(工作区未初始化或已失效)";
         }
     }
@@ -2000,7 +2055,7 @@ public class FeishuCardActionService
         return _cardBuilder.BuildCardActionResponseV2(managerCard, "✅ 项目配置已更新", "success");
     }
 
-    private Task<CardActionTriggerResponseDto> HandleDeleteProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandleDeleteProjectAsync(string? chatId, string? projectId, string? operatorUserId, string? appId)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -2008,7 +2063,7 @@ public class FeishuCardActionService
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        _ = Task.Run(() => DeleteProjectInBackgroundAsync(actualChatKey, projectId, operatorUserId));
+        _ = Task.Run(() => DeleteProjectInBackgroundAsync(actualChatKey, projectId, operatorUserId, appId));
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台删除项目，完成后会发送结果", "info"));
     }
 
@@ -2057,7 +2112,7 @@ public class FeishuCardActionService
         return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, toastType);
     }
 
-    private Task<CardActionTriggerResponseDto> HandleCloneProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandleCloneProjectAsync(string? chatId, string? projectId, string? operatorUserId, string? appId)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -2067,33 +2122,36 @@ public class FeishuCardActionService
         var actualChatKey = NormalizeChatKey(chatId);
         _ = Task.Run(async () =>
         {
+            string? notificationUsername = null;
             try
             {
                 using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
                 if (projectScope == null)
                 {
+                    await _feishuChannel.SendMessageAsync(actualChatKey, "❌ 请先绑定 Web 用户，再管理项目", appId: appId);
                     return;
                 }
 
+                notificationUsername = projectScope.Username;
                 var project = await projectScope.ProjectService.GetProjectAsync(projectId);
                 var projectName = project?.Name ?? projectId;
                 var (success, errorMessage) = await projectScope.ProjectService.CloneProjectAsync(projectId);
                 var message = success
                     ? $"✅ 项目 {projectName} 克隆完成"
                     : $"❌ 项目 {projectName} 克隆失败：{errorMessage ?? "未知错误"}";
-                await _feishuChannel.SendMessageAsync(actualChatKey, message);
+                await _feishuChannel.SendMessageAsync(actualChatKey, message, notificationUsername, appId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "后台克隆项目失败: ProjectId={ProjectId}", projectId);
-                await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 项目克隆失败：{ex.Message}");
+                await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 项目克隆失败：{ex.Message}", notificationUsername, appId);
             }
         });
 
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台克隆项目，完成后会发送通知", "info"));
     }
 
-    private Task<CardActionTriggerResponseDto> HandlePullProjectAsync(string? chatId, string? projectId, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandlePullProjectAsync(string? chatId, string? projectId, string? operatorUserId, string? appId)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -2103,26 +2161,29 @@ public class FeishuCardActionService
         var actualChatKey = NormalizeChatKey(chatId);
         _ = Task.Run(async () =>
         {
+            string? notificationUsername = null;
             try
             {
                 using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId);
                 if (projectScope == null)
                 {
+                    await _feishuChannel.SendMessageAsync(actualChatKey, "❌ 请先绑定 Web 用户，再管理项目", appId: appId);
                     return;
                 }
 
+                notificationUsername = projectScope.Username;
                 var project = await projectScope.ProjectService.GetProjectAsync(projectId);
                 var projectName = project?.Name ?? projectId;
                 var (success, errorMessage) = await projectScope.ProjectService.PullProjectAsync(projectId);
                 var message = success
                     ? $"✅ 项目 {projectName} 已拉取最新代码"
                     : $"❌ 项目 {projectName} 拉取失败：{errorMessage ?? "未知错误"}";
-                await _feishuChannel.SendMessageAsync(actualChatKey, message);
+                await _feishuChannel.SendMessageAsync(actualChatKey, message, notificationUsername, appId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "后台拉取项目失败: ProjectId={ProjectId}", projectId);
-                await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 项目拉取失败：{ex.Message}");
+                await _feishuChannel.SendMessageAsync(actualChatKey, $"❌ 项目拉取失败：{ex.Message}", notificationUsername, appId);
             }
         });
 
@@ -2133,7 +2194,8 @@ public class FeishuCardActionService
         string? chatId,
         string? projectId,
         int? page,
-        string? operatorUserId)
+        string? operatorUserId,
+        string? appId)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -2141,7 +2203,7 @@ public class FeishuCardActionService
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        _ = Task.Run(() => SendProjectBranchSwitcherCardAsync(actualChatKey, projectId, page, operatorUserId));
+        _ = Task.Run(() => SendProjectBranchSwitcherCardAsync(actualChatKey, projectId, page, operatorUserId, appId));
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台加载分支列表，完成后会发送卡片", "info"));
     }
 
@@ -2150,7 +2212,8 @@ public class FeishuCardActionService
         string? projectId,
         string? branch,
         int? page,
-        string? operatorUserId)
+        string? operatorUserId,
+        string? appId)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(branch))
         {
@@ -2158,36 +2221,38 @@ public class FeishuCardActionService
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        _ = Task.Run(() => SwitchProjectBranchInBackgroundAsync(actualChatKey, projectId, branch, page, operatorUserId));
+        _ = Task.Run(() => SwitchProjectBranchInBackgroundAsync(actualChatKey, projectId, branch, page, operatorUserId, appId));
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse($"🚀 已开始后台切换到分支 {branch}", "info"));
     }
 
-    private async Task SendProjectBranchSwitcherCardAsync(string chatKey, string projectId, int? page, string? operatorUserId)
+    private async Task SendProjectBranchSwitcherCardAsync(string chatKey, string projectId, int? page, string? operatorUserId, string? appId)
     {
+        string? notificationUsername = null;
         try
         {
             using var projectScope = CreateProjectScopeContext(chatKey, operatorUserId);
             if (projectScope == null)
             {
-                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目");
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目", appId: appId);
                 return;
             }
 
+            notificationUsername = projectScope.Username;
             var project = await projectScope.ProjectService.GetProjectAsync(projectId);
             if (project == null)
             {
-                await _feishuChannel.SendMessageAsync(chatKey, "❌ 项目不存在或已被删除");
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 项目不存在或已被删除", notificationUsername, appId);
                 return;
             }
 
             var (branches, errorMessage) = await projectScope.ProjectService.GetProjectBranchesAsync(projectId);
             var card = BuildProjectBranchSwitcherCard(chatKey, project, branches, errorMessage, page ?? 0);
-            await SendElementsCardToChatAsync(chatKey, card, "❌ 分支列表加载完成，但发送卡片失败");
+            await SendElementsCardToChatAsync(chatKey, card, "❌ 分支列表加载完成，但发送卡片失败", notificationUsername, appId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "后台加载项目分支列表失败: ChatKey={ChatKey}, ProjectId={ProjectId}", chatKey, projectId);
-            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 加载项目分支列表失败：{ex.Message}");
+            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 加载项目分支列表失败：{ex.Message}", notificationUsername, appId);
         }
     }
 
@@ -2196,21 +2261,24 @@ public class FeishuCardActionService
         string projectId,
         string branch,
         int? page,
-        string? operatorUserId)
+        string? operatorUserId,
+        string? appId)
     {
+        string? notificationUsername = null;
         try
         {
             using var projectScope = CreateProjectScopeContext(chatKey, operatorUserId);
             if (projectScope == null)
             {
-                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目");
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目", appId: appId);
                 return;
             }
 
+            notificationUsername = projectScope.Username;
             var project = await projectScope.ProjectService.GetProjectAsync(projectId);
             if (project == null)
             {
-                await _feishuChannel.SendMessageAsync(chatKey, "❌ 项目不存在或已被删除");
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 项目不存在或已被删除", notificationUsername, appId);
                 return;
             }
 
@@ -2228,47 +2296,49 @@ public class FeishuCardActionService
                 }
 
                 var retryCard = BuildProjectBranchSwitcherCard(chatKey, latestProject, branches, helperText, page ?? 0);
-                await SendElementsCardToChatAsync(chatKey, retryCard, $"❌ 切换分支失败：{errorMessage ?? "未知错误"}");
+                await SendElementsCardToChatAsync(chatKey, retryCard, $"❌ 切换分支失败：{errorMessage ?? "未知错误"}", notificationUsername, appId);
                 return;
             }
 
             var managerCard = await BuildProjectManagerCardAsync(chatKey, operatorUserId);
-            await SendElementsCardToChatAsync(chatKey, managerCard, $"✅ 已切换到分支 {branch}");
+            await SendElementsCardToChatAsync(chatKey, managerCard, $"✅ 已切换到分支 {branch}", notificationUsername, appId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "后台切换项目分支失败: ChatKey={ChatKey}, ProjectId={ProjectId}, Branch={Branch}", chatKey, projectId, branch);
-            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 切换项目分支失败：{ex.Message}");
+            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 切换项目分支失败：{ex.Message}", notificationUsername, appId);
         }
     }
 
-    private async Task DeleteProjectInBackgroundAsync(string chatKey, string projectId, string? operatorUserId)
+    private async Task DeleteProjectInBackgroundAsync(string chatKey, string projectId, string? operatorUserId, string? appId)
     {
+        string? notificationUsername = null;
         try
         {
             using var projectScope = CreateProjectScopeContext(chatKey, operatorUserId);
             if (projectScope == null)
             {
-                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目");
+                await _feishuChannel.SendMessageAsync(chatKey, "❌ 请先绑定 Web 用户，再管理项目", appId: appId);
                 return;
             }
 
+            notificationUsername = projectScope.Username;
             var project = await projectScope.ProjectService.GetProjectAsync(projectId);
             var projectName = project?.Name ?? projectId;
             var (success, errorMessage) = await projectScope.ProjectService.DeleteProjectAsync(projectId);
             if (!success)
             {
-                await _feishuChannel.SendMessageAsync(chatKey, $"❌ 项目 {projectName} 删除失败：{errorMessage ?? "未知错误"}");
+                await _feishuChannel.SendMessageAsync(chatKey, $"❌ 项目 {projectName} 删除失败：{errorMessage ?? "未知错误"}", notificationUsername, appId);
                 return;
             }
 
             var managerCard = await BuildProjectManagerCardAsync(chatKey, operatorUserId);
-            await SendElementsCardToChatAsync(chatKey, managerCard, $"🗑️ 项目 {projectName} 已删除");
+            await SendElementsCardToChatAsync(chatKey, managerCard, $"🗑️ 项目 {projectName} 已删除", notificationUsername, appId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "后台删除项目失败: ChatKey={ChatKey}, ProjectId={ProjectId}", chatKey, projectId);
-            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 项目删除失败：{ex.Message}");
+            await _feishuChannel.SendMessageAsync(chatKey, $"❌ 项目删除失败：{ex.Message}", notificationUsername, appId);
         }
     }
 
@@ -3568,15 +3638,46 @@ public class FeishuCardActionService
         var files = Directory.GetFiles(directoryPath)
             .Select(path => new FileInfo(path))
             .Where(info => !info.Name.StartsWith(".", StringComparison.Ordinal))
+            .Where(info => !IsReservedDeviceName(info.Name))
             .Select(info => new SessionDirectoryEntry(
                 info.Name,
                 Path.GetRelativePath(workspacePath, info.FullName).Replace("\\", "/"),
                 false,
-                info.Length,
+                GetFileSizeSafely(info),
                 info.Extension))
             .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
 
         return directories.Concat(files).ToList();
+    }
+
+    private static long GetFileSizeSafely(FileInfo info)
+    {
+        try
+        {
+            return info.Length;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return 0;
+        }
+        catch (ArgumentException)
+        {
+            return 0;
+        }
+        catch (NotSupportedException)
+        {
+            return 0;
+        }
+    }
+
+    private static bool IsReservedDeviceName(string fileName)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        return !string.IsNullOrWhiteSpace(baseName) && ReservedDeviceNames.Contains(baseName);
     }
 
     private object BuildSessionDirectoryEntryRow(
@@ -3830,7 +3931,7 @@ public class FeishuCardActionService
         };
     }
 
-    private async Task SendElementsCardToChatAsync(string chatId, ElementsCardV2Dto card, string fallbackMessage)
+    private async Task SendElementsCardToChatAsync(string chatId, ElementsCardV2Dto card, string fallbackMessage, string? username = null, string? appId = null)
     {
         try
         {
@@ -3838,12 +3939,13 @@ public class FeishuCardActionService
             {
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             });
-            await _cardKit.SendRawCardAsync(chatId, cardJson);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
+            await _cardKit.SendRawCardAsync(chatId, cardJson, optionsOverride: effectiveOptions);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "发送飞书卡片失败: ChatId={ChatId}", chatId);
-            await _feishuChannel.SendMessageAsync(chatId, fallbackMessage);
+            await _feishuChannel.SendMessageAsync(chatId, fallbackMessage, username, appId);
         }
     }
 
