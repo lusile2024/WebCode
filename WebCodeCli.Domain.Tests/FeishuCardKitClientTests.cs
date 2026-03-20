@@ -11,6 +11,61 @@ namespace WebCodeCli.Domain.Tests;
 public class FeishuCardKitClientTests
 {
     [Fact]
+    public async Task SendTextMessageAsync_SendsTextPayload()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_text_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var messageId = await client.SendTextMessageAsync("oc_text_chat", "已完成", TestContext.Current.CancellationToken);
+
+        Assert.Equal("om_text_success", messageId);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/im/v1/messages"
+        ], handler.RequestPaths);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("text", requestDoc.RootElement.GetProperty("msg_type").GetString());
+        Assert.Equal("oc_text_chat", requestDoc.RootElement.GetProperty("receive_id").GetString());
+
+        using var contentDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("content").GetString()!);
+        Assert.Equal("已完成", contentDoc.RootElement.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task ReplyTextMessageAsync_SendsTextPayload()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_text_reply_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var messageId = await client.ReplyTextMessageAsync("om_reply", "已完成", TestContext.Current.CancellationToken);
+
+        Assert.Equal("om_text_reply_success", messageId);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/im/v1/messages/om_reply/reply"
+        ], handler.RequestPaths);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("text", requestDoc.RootElement.GetProperty("msg_type").GetString());
+
+        using var contentDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("content").GetString()!);
+        Assert.Equal("已完成", contentDoc.RootElement.GetProperty("text").GetString());
+    }
+
+    [Fact]
     public async Task ReplyRawCardAsync_Throws_WhenReplyReturnsBusinessError()
     {
         var handler = new StubHttpMessageHandler(

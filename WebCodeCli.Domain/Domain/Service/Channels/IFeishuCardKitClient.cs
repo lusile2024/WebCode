@@ -51,6 +51,19 @@ public interface IFeishuCardKitClient
         FeishuOptions? optionsOverride = null);
 
     /// <summary>
+    /// 发送文本消息
+    /// </summary>
+    /// <param name="chatId">会话 ID</param>
+    /// <param name="content">文本内容</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>消息 ID</returns>
+    Task<string> SendTextMessageAsync(
+        string chatId,
+        string content,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
+
+    /// <summary>
     /// 回复卡片消息
     /// </summary>
     /// <param name="replyMessageId">被回复的消息 ID</param>
@@ -60,6 +73,19 @@ public interface IFeishuCardKitClient
     Task<string> ReplyCardMessageAsync(
         string replyMessageId,
         string cardId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
+
+    /// <summary>
+    /// 回复文本消息
+    /// </summary>
+    /// <param name="replyMessageId">被回复的消息 ID</param>
+    /// <param name="content">文本内容</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>回复消息 ID</returns>
+    Task<string> ReplyTextMessageAsync(
+        string replyMessageId,
+        string content,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null);
 

@@ -818,18 +818,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     {
         _logger.LogDebug("Sending message to chat {ChatId}: {Content}", chatId, content);
         var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId, appId);
-
-        // 创建卡片
-        var cardId = await _cardKit.CreateCardAsync(content, effectiveOptions.DefaultCardTitle, optionsOverride: effectiveOptions);
-
-        // 发送卡片消息
-        var messageId = await _cardKit.SendCardMessageAsync(chatId, cardId, optionsOverride: effectiveOptions);
-
-        _logger.LogDebug(
-            "Message sent: CardId={CardId}, MessageId={MessageId}",
-            cardId,
-            messageId);
-
+        var messageId = await _cardKit.SendTextMessageAsync(chatId, content, optionsOverride: effectiveOptions);
+        _logger.LogDebug("Text message sent: MessageId={MessageId}", messageId);
         return messageId;
     }
 
@@ -840,18 +830,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     {
         _logger.LogDebug("Replying to message {MessageId}: {Content}", messageId, content);
         var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId: appId);
-
-        // 创建卡片
-        var cardId = await _cardKit.CreateCardAsync(content, effectiveOptions.DefaultCardTitle, optionsOverride: effectiveOptions);
-
-        // 回复卡片消息
-        var replyMessageId = await _cardKit.ReplyCardMessageAsync(messageId, cardId, optionsOverride: effectiveOptions);
-
-        _logger.LogDebug(
-            "Reply sent: CardId={CardId}, MessageId={ReplyMessageId}",
-            cardId,
-            replyMessageId);
-
+        var replyMessageId = await _cardKit.ReplyTextMessageAsync(messageId, content, optionsOverride: effectiveOptions);
+        _logger.LogDebug("Text reply sent: MessageId={ReplyMessageId}", replyMessageId);
         return replyMessageId;
     }
 

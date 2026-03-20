@@ -191,14 +191,38 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         var result = await ParseResponseAsync(response, cancellationToken);
         EnsureBusinessSuccess(result, "Send Feishu card message");
+        return ExtractMessageId(result, "send card message");
+    }
 
-        if (result.TryGetProperty("data", out var data) &&
-            data.TryGetProperty("message_id", out var messageIdProp))
+    public async Task<string> SendTextMessageAsync(
+        string chatId,
+        string content,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+
+        var payload = new
         {
-            return messageIdProp.GetString() ?? string.Empty;
-        }
+            receive_id = chatId,
+            msg_type = "text",
+            content = JsonSerializer.Serialize(new
+            {
+                text = content
+            })
+        };
 
-        throw new InvalidOperationException("Failed to send card message: invalid response");
+        var response = await PostAsync(
+            "/open-apis/im/v1/messages?receive_id_type=chat_id",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Send Feishu text message");
+        return ExtractMessageId(result, "send text message");
     }
 
     public async Task<string> ReplyCardMessageAsync(
@@ -238,17 +262,39 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         var result = await ParseResponseAsync(response, cancellationToken);
         EnsureBusinessSuccess(result, "Reply Feishu card message");
         _logger.LogDebug("📤 [FeishuCardKit] 响应内容: {Response}", result);
+        var messageId = ExtractMessageId(result, "reply card message");
+        _logger.LogInformation("✅ [FeishuCardKit] 回复成功, MessageId={MessageId}", messageId);
+        return messageId;
+    }
 
-        if (result.TryGetProperty("data", out var data) &&
-            data.TryGetProperty("message_id", out var messageIdProp))
+    public async Task<string> ReplyTextMessageAsync(
+        string replyMessageId,
+        string content,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+
+        var payload = new
         {
-            var messageId = messageIdProp.GetString() ?? string.Empty;
-            _logger.LogInformation("✅ [FeishuCardKit] 回复成功, MessageId={MessageId}", messageId);
-            return messageId;
-        }
+            msg_type = "text",
+            content = JsonSerializer.Serialize(new
+            {
+                text = content
+            })
+        };
 
-        _logger.LogError("❌ [FeishuCardKit] 响应中没有 message_id");
-        throw new InvalidOperationException("Failed to reply card message: invalid response");
+        var response = await PostAsync(
+            $"/open-apis/im/v1/messages/{replyMessageId}/reply",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Reply Feishu text message");
+        return ExtractMessageId(result, "reply text message");
     }
 
     public async Task<FeishuStreamingHandle> CreateStreamingHandleAsync(
@@ -287,6 +333,18 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
     private int _sequence = 0;
     private int Sequence => Interlocked.Increment(ref _sequence);
+
+    private string ExtractMessageId(JsonElement result, string operationName)
+    {
+        if (result.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("message_id", out var messageIdProp))
+        {
+            return messageIdProp.GetString() ?? string.Empty;
+        }
+
+        _logger.LogError("❌ [FeishuCardKit] 响应中没有 message_id, Operation={Operation}", operationName);
+        throw new InvalidOperationException($"Failed to {operationName}: invalid response");
+    }
 
     /// <summary>
     /// 获取或刷新访问令牌
