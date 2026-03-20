@@ -8,7 +8,6 @@ using Microsoft.Extensions.Hosting;
 using SqlSugar;
 using System.Reflection;
 using System;
-using FeishuNetSdk;
 using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Domain.Common.Extensions
@@ -68,7 +67,6 @@ namespace WebCodeCli.Domain.Common.Extensions
             IConfiguration configuration)
         {
             var feishuSection = configuration.GetSection("Feishu");
-            var options = feishuSection.Get<FeishuOptions>() ?? new FeishuOptions();
 
             // 绑定配置选项
             services.Configure<FeishuOptions>(feishuSection);
@@ -101,13 +99,8 @@ namespace WebCodeCli.Domain.Common.Extensions
             services.AddSingleton<FeishuHelpCardBuilder>();
             services.AddSingleton<FeishuCardActionService>();
 
-            // 配置飞书 WebSocket 客户端（仅当启用时）
-            if (options.Enabled)
-            {
-                // 使用 FeishuNetSdk 的标准配置方式（使用 FeishuNetSdk 配置节）
-                services.AddFeishuNetSdk(configuration.GetSection("FeishuNetSdk"))
-                    .AddFeishuWebSocket();
-            }
+            services.AddSingleton<IUserFeishuBotRuntimeService, UserFeishuBotRuntimeService>();
+            services.AddHostedService(sp => (UserFeishuBotRuntimeService)sp.GetRequiredService<IUserFeishuBotRuntimeService>());
 
             return services;
         }

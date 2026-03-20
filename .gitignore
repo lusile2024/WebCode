@@ -362,7 +362,8 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /WebCodeCli/appsettings.Development.json
-/WebCodeCli/WebCodeCli.db
+/WebCodeCli.db*
+/WebCodeCli/WebCodeCli.db*
 /Temp
 /docs-local
 /codex

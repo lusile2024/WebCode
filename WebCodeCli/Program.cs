@@ -3,10 +3,11 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
+using WebCodeCli.Helpers;
 using Serilog;
 using Log = Serilog.Log;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(CreateBuilderOptions(args));
 
 // 配置 Kestrel 服务器限制
 builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -209,3 +210,17 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+static WebApplicationOptions CreateBuilderOptions(string[] args)
+{
+    var resolvedWebRoot = WebRootPathResolver.Resolve(
+        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"),
+        Directory.GetCurrentDirectory(),
+        AppContext.BaseDirectory);
+
+    return new WebApplicationOptions
+    {
+        Args = args,
+        WebRootPath = resolvedWebRoot
+    };
+}

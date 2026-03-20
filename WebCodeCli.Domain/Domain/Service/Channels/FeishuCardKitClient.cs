@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -522,6 +523,19 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     }
 
     /// <summary>
+    /// 回复 V2 DTO 卡片消息（帮助功能专用）
+    /// </summary>
+    public Task<string> ReplyElementsCardAsync(
+        string replyMessageId,
+        ElementsCardV2Dto card,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        var cardJson = SerializeElementsCard(card);
+        return ReplyRawCardAsync(replyMessageId, cardJson, cancellationToken, optionsOverride);
+    }
+
+    /// <summary>
     /// 回复原始JSON卡片消息(帮助功能专用)
     /// 参考 OpenCowork 实现:先创建卡片获取 card_id,再发送
     /// </summary>
@@ -633,5 +647,19 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         public DateTime TokenExpiresAt { get; set; } = DateTime.MinValue;
         public string? LastValidToken { get; set; }
         public SemaphoreSlim TokenLock { get; } = new(1, 1);
+    }
+
+    private static string SerializeElementsCard(ElementsCardV2Dto card)
+    {
+        var payload = new
+        {
+            schema = string.IsNullOrWhiteSpace(card.Schema) ? "2.0" : card.Schema,
+            config = card.Config,
+            header = card.Header,
+            card_link = card.CardLink,
+            body = card.Body
+        };
+
+        return JsonSerializer.Serialize(payload);
     }
 }

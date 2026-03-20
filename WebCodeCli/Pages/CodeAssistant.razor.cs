@@ -170,6 +170,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     
     // 项目管理模态框
     private ProjectManageModal _projectManageModal = default!;
+    private AdminUserManagementModal _adminUserManagementModal = default!;
     
     // 项目选择模态框
     private ProjectSelectModal _projectSelectModal = default!;
@@ -197,6 +198,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     // 用户信息
     private bool _showUserInfo = false;
     private string _currentUsername = string.Empty;
+    private bool _isAdmin = false;
     private bool _showUserDropdown = false; // 用户头像下拉菜单
     
     // 键盘事件状态
@@ -332,6 +334,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 }
                 
                 _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
                 _showUserInfo = true;
             }
             catch
@@ -349,6 +352,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
                 _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
                 UserContextService.SetCurrentUsername(authState.Username);
                 Console.WriteLine($"[用户上下文] 从认证状态设置当前用户: {authState.Username}");
             }
@@ -3250,6 +3254,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     {
         public bool IsAuthenticated { get; set; }
         public string? Username { get; set; }
+        public string? Role { get; set; }
     }
     
     private void CloseUserDropdown()
@@ -4322,6 +4327,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private async Task ShowProjectManageModal()
     {
         await _projectManageModal.ShowAsync();
+    }
+
+    private async Task ShowAdminUserManagementModal()
+    {
+        await _adminUserManagementModal.ShowAsync();
     }
     
     /// <summary>

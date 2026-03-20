@@ -16,6 +16,7 @@ public class AdminController : ControllerBase
     private readonly IUserToolPolicyService _userToolPolicyService;
     private readonly IUserWorkspacePolicyService _userWorkspacePolicyService;
     private readonly IUserFeishuBotConfigService _userFeishuBotConfigService;
+    private readonly IUserFeishuBotRuntimeService _userFeishuBotRuntimeService;
     private readonly ICliExecutorService _cliExecutorService;
 
     public AdminController(
@@ -23,12 +24,14 @@ public class AdminController : ControllerBase
         IUserToolPolicyService userToolPolicyService,
         IUserWorkspacePolicyService userWorkspacePolicyService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
+        IUserFeishuBotRuntimeService userFeishuBotRuntimeService,
         ICliExecutorService cliExecutorService)
     {
         _userAccountService = userAccountService;
         _userToolPolicyService = userToolPolicyService;
         _userWorkspacePolicyService = userWorkspacePolicyService;
         _userFeishuBotConfigService = userFeishuBotConfigService;
+        _userFeishuBotRuntimeService = userFeishuBotRuntimeService;
         _cliExecutorService = cliExecutorService;
     }
 
@@ -91,6 +94,11 @@ public class AdminController : ControllerBase
         }
 
         var success = await _userAccountService.SetStatusAsync(username, request.Enabled ? UserAccessConstants.EnabledStatus : UserAccessConstants.DisabledStatus);
+        if (success && !request.Enabled)
+        {
+            await _userFeishuBotRuntimeService.StopAsync(username);
+        }
+
         return Ok(new { success });
     }
 
@@ -138,7 +146,7 @@ public class AdminController : ControllerBase
     [HttpPut("users/{username}/feishu-bot")]
     public async Task<ActionResult> SaveFeishuBotConfig(string username, [FromBody] UserFeishuBotConfigDto request)
     {
-        var success = await _userFeishuBotConfigService.SaveAsync(new UserFeishuBotConfigEntity
+        var result = await _userFeishuBotConfigService.SaveAsync(new UserFeishuBotConfigEntity
         {
             Username = username.Trim(),
             IsEnabled = request.IsEnabled,
@@ -152,14 +160,64 @@ public class AdminController : ControllerBase
             StreamingThrottleMs = request.StreamingThrottleMs
         });
 
-        return Ok(new { success });
+        if (!result.Success)
+        {
+            if (!string.IsNullOrWhiteSpace(result.ConflictingUsername))
+            {
+                return Conflict(new { error = result.ErrorMessage });
+            }
+
+            return StatusCode(500, new { error = result.ErrorMessage ?? "保存飞书机器人配置失败。" });
+        }
+
+        var status = await _userFeishuBotRuntimeService.StopAsync(username);
+        return Ok(new { success = true, status = MapFeishuRuntimeStatus(status) });
     }
 
     [HttpDelete("users/{username}/feishu-bot")]
     public async Task<ActionResult> DeleteFeishuBotConfig(string username)
     {
         var success = await _userFeishuBotConfigService.DeleteAsync(username);
-        return Ok(new { success });
+        var status = await _userFeishuBotRuntimeService.StopAsync(username);
+        return Ok(new { success, status = MapFeishuRuntimeStatus(status) });
+    }
+
+    [HttpGet("users/{username}/feishu-bot/status")]
+    public async Task<ActionResult<UserFeishuBotRuntimeStatusDto>> GetFeishuBotStatus(string username)
+    {
+        var status = await _userFeishuBotRuntimeService.GetStatusAsync(username);
+        return Ok(MapFeishuRuntimeStatus(status));
+    }
+
+    [HttpPost("users/{username}/feishu-bot/start")]
+    public async Task<ActionResult<UserFeishuBotRuntimeStatusDto>> StartFeishuBot(string username)
+    {
+        var user = await _userAccountService.GetByUsernameAsync(username);
+        if (user == null)
+        {
+            return NotFound(new { error = "用户不存在。" });
+        }
+
+        if (!string.Equals(user.Status, UserAccessConstants.EnabledStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            var blockedStatus = await _userFeishuBotRuntimeService.GetStatusAsync(username);
+            blockedStatus.State = UserFeishuBotRuntimeState.Failed;
+            blockedStatus.CanStart = false;
+            blockedStatus.Message = "当前用户已被禁用，无法启动飞书机器人。";
+            blockedStatus.LastError = blockedStatus.Message;
+            blockedStatus.UpdatedAt = DateTime.Now;
+            return Ok(MapFeishuRuntimeStatus(blockedStatus));
+        }
+
+        var status = await _userFeishuBotRuntimeService.StartAsync(username);
+        return Ok(MapFeishuRuntimeStatus(status));
+    }
+
+    [HttpPost("users/{username}/feishu-bot/stop")]
+    public async Task<ActionResult<UserFeishuBotRuntimeStatusDto>> StopFeishuBot(string username)
+    {
+        var status = await _userFeishuBotRuntimeService.StopAsync(username);
+        return Ok(MapFeishuRuntimeStatus(status));
     }
 
     private static UserAccountResponseDto MapUser(UserAccountEntity account)
@@ -190,6 +248,22 @@ public class AdminController : ControllerBase
             ThinkingMessage = config.ThinkingMessage,
             HttpTimeoutSeconds = config.HttpTimeoutSeconds,
             StreamingThrottleMs = config.StreamingThrottleMs
+        };
+    }
+
+    private static UserFeishuBotRuntimeStatusDto MapFeishuRuntimeStatus(UserFeishuBotRuntimeStatus status)
+    {
+        return new UserFeishuBotRuntimeStatusDto
+        {
+            Username = status.Username,
+            AppId = status.AppId,
+            State = status.State.ToString(),
+            IsConfigured = status.IsConfigured,
+            CanStart = status.CanStart,
+            Message = status.Message,
+            LastError = status.LastError,
+            LastStartedAt = status.LastStartedAt,
+            UpdatedAt = status.UpdatedAt
         };
     }
 }
@@ -241,4 +315,17 @@ public sealed class UserFeishuBotConfigDto
     public string? ThinkingMessage { get; set; }
     public int? HttpTimeoutSeconds { get; set; }
     public int? StreamingThrottleMs { get; set; }
+}
+
+public sealed class UserFeishuBotRuntimeStatusDto
+{
+    public string Username { get; set; } = string.Empty;
+    public string? AppId { get; set; }
+    public string State { get; set; } = nameof(UserFeishuBotRuntimeState.NotConfigured);
+    public bool IsConfigured { get; set; }
+    public bool CanStart { get; set; }
+    public string? Message { get; set; }
+    public string? LastError { get; set; }
+    public DateTime? LastStartedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 }

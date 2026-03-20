@@ -43,4 +43,37 @@ public interface ISessionDirectoryService
     /// </summary>
     /// <param name="username">用户名</param>
     Task<List<object>> GetUserAccessibleDirectoriesAsync(string username);
+
+    /// <summary>
+    /// 浏览白名单目录。
+    /// 未指定 path 时返回白名单根目录列表；指定 path 时返回该目录下的目录和文件条目。
+    /// </summary>
+    /// <param name="path">要浏览的绝对路径，可为空</param>
+    /// <param name="username">当前用户名，用于解析用户级白名单目录</param>
+    Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path, string? username = null);
+}
+
+public sealed class AllowedDirectoryBrowseResult
+{
+    public bool HasConfiguredRoots { get; init; }
+    public string? CurrentPath { get; init; }
+    public string? ParentPath { get; init; }
+    public string? RootPath { get; init; }
+    public List<AllowedDirectoryRootItem> Roots { get; init; } = [];
+    public List<AllowedDirectoryBrowseEntry> Entries { get; init; } = [];
+}
+
+public sealed class AllowedDirectoryRootItem
+{
+    public string Name { get; init; } = string.Empty;
+    public string Path { get; init; } = string.Empty;
+}
+
+public sealed class AllowedDirectoryBrowseEntry
+{
+    public string Name { get; init; } = string.Empty;
+    public string Path { get; init; } = string.Empty;
+    public bool IsDirectory { get; init; }
+    public long Size { get; init; }
+    public string Extension { get; init; } = string.Empty;
 }

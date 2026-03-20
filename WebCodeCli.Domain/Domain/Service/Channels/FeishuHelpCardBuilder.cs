@@ -83,28 +83,13 @@ public class FeishuHelpCardBuilder
             });
         }
 
-        // 每个分组一个 overflow
+        // 每个分组显示为分类按钮，避免首页元素超限
         foreach (var category in categories)
         {
             if (category.Commands.Count == 0)
                 continue;
 
-            var options = category.Commands.Select(cmd => new
-            {
-                text = new { tag = "plain_text", content = BuildCommandOptionText(cmd) },
-                value = new { action = "select_command", command_id = cmd.Id }
-            }).ToArray();
-
-            elements.Add(new
-            {
-                tag = "div",
-                text = new { tag = "lark_md", content = BuildCategoryPreviewMarkdown(category) },
-                extra = new
-                {
-                    tag = "overflow",
-                    options = options
-                }
-            });
+            elements.Add(BuildCategoryActionRow(category));
         }
 
         return new ElementsCardV2Dto
@@ -112,7 +97,177 @@ public class FeishuHelpCardBuilder
             Header = new ElementsCardV2Dto.HeaderSuffix
             {
                 Template = "blue",
-                Title = new HeaderTitleElement { Content = "🤖 Claude Code CLI 命令帮助" }
+                Title = new HeaderTitleElement { Content = "🤖 当前 CLI 命令帮助" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    /// <summary>
+    /// 构建过滤后的搜索卡片 - 使用 ElementsCardV2Dto
+    /// </summary>
+    public ElementsCardV2Dto BuildFilteredCardV2(List<FeishuCommandCategory> categories, string keyword)
+    {
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"🔍 搜索结果：**{keyword}**\n\n点击下方按钮返回完整列表"
+                }
+            },
+            new
+            {
+                tag = "column_set",
+                flex_mode = "none",
+                background_style = "default",
+                columns = new[]
+                {
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new[]
+                        {
+                            new
+                            {
+                                tag = "button",
+                                text = new { tag = "plain_text", content = "📋 显示全部命令" },
+                                type = "default",
+                                behaviors = new[]
+                                {
+                                    new
+                                    {
+                                        type = "callback",
+                                        value = new { action = "back_to_list" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            new { tag = "hr" }
+        };
+
+        var allCommands = categories.SelectMany(c => c.Commands).ToList();
+        if (allCommands.Count > 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "lark_md", content = $"**找到 {allCommands.Count} 个匹配命令：**" }
+            });
+
+            foreach (var command in allCommands)
+            {
+                elements.Add(BuildCommandActionRow(command));
+            }
+        }
+        else
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "lark_md", content = "❌ 未找到匹配的命令，请尝试其他关键词" }
+            });
+        }
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "turquoise",
+                Title = new HeaderTitleElement { Content = "🔍 命令搜索" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    /// <summary>
+    /// 构建分类命令卡片（卡片1-2）- 展示某个分类下的命令按钮
+    /// </summary>
+    public ElementsCardV2Dto BuildCategoryCommandsCardV2(FeishuCommandCategory category)
+    {
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"**{SanitizeMarkdown(category.Name)}**\n共 {category.Commands.Count} 条命令，点击右侧按钮进入执行卡片"
+                }
+            },
+            new
+            {
+                tag = "column_set",
+                flex_mode = "none",
+                background_style = "default",
+                columns = new[]
+                {
+                    new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new[]
+                        {
+                            new
+                            {
+                                tag = "button",
+                                text = new { tag = "plain_text", content = "📋 返回分类列表" },
+                                type = "default",
+                                behaviors = new[]
+                                {
+                                    new
+                                    {
+                                        type = "callback",
+                                        value = new { action = "back_to_list" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            new { tag = "hr" }
+        };
+
+        foreach (var command in category.Commands)
+        {
+            elements.Add(BuildCommandActionRow(command));
+        }
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = $"📁 {category.Name}" }
             },
             Config = new ElementsCardV2Dto.ConfigSuffix
             {
@@ -144,7 +299,7 @@ public class FeishuHelpCardBuilder
                 name = "command_input",
                 label = new { tag = "plain_text", content = "点编辑后enter发送" },
                 placeholder = new { tag = "plain_text", content = "编辑命令..." },
-                default_value = command.Name,
+                default_value = string.IsNullOrWhiteSpace(command.ExecuteText) ? command.Name : command.ExecuteText,
                 behaviors = new[]
                 {
                     new{
@@ -530,28 +685,13 @@ public class FeishuHelpCardBuilder
             });
         }
 
-        // 每个分组一个 overflow
+        // 每个分组显示为分类按钮，避免首页元素超限
         foreach (var category in categories)
         {
             if (category.Commands.Count == 0)
                 continue;
 
-            var options = category.Commands.Select(cmd => new
-            {
-                text = new { tag = "plain_text", content = BuildCommandOptionText(cmd) },
-                value = new { action = "select_command", command_id = cmd.Id }
-            }).ToArray();
-
-            elements.Add(new
-            {
-                tag = "div",
-                text = new { tag = "lark_md", content = BuildCategoryPreviewMarkdown(category) },
-                extra = new
-                {
-                    tag = "overflow",
-                    options = options
-                }
-            });
+            elements.Add(BuildCategoryActionRow(category));
         }
 
         var card = new
@@ -561,7 +701,7 @@ public class FeishuHelpCardBuilder
             header = new
             {
                 template = "blue",
-                title = new { tag = "plain_text", content = "🤖 Claude Code CLI 命令帮助" }
+                title = new { tag = "plain_text", content = "🤖 当前 CLI 命令帮助" }
             },
             body = new { elements = elements }
         };
@@ -727,22 +867,16 @@ public class FeishuHelpCardBuilder
         var allCommands = categories.SelectMany(c => c.Commands).ToList();
         if (allCommands.Count > 0)
         {
-            var options = allCommands.Select(cmd => new
-            {
-                text = new { tag = "plain_text", content = BuildCommandOptionText(cmd) },
-                value = new { action = "select_command", command_id = cmd.Id }
-            }).ToArray();
-
             elements.Add(new
             {
                 tag = "div",
-                text = new { tag = "lark_md", content = $"**找到 {allCommands.Count} 个匹配命令：**" },
-                extra = new
-                {
-                    tag = "overflow",
-                    options = options
-                }
+                text = new { tag = "lark_md", content = $"**找到 {allCommands.Count} 个匹配命令：**" }
             });
+
+            foreach (var command in allCommands)
+            {
+                elements.Add(BuildCommandActionRow(command));
+            }
         }
         else
         {
@@ -826,6 +960,122 @@ public class FeishuHelpCardBuilder
         return $"**{SanitizeMarkdown(category.Name)}**{detail}";
     }
 
+    private static object BuildCategoryActionRow(FeishuCommandCategory category)
+    {
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            background_style = "default",
+            columns = new object[]
+            {
+                new
+                {
+                    tag = "column",
+                    width = "weighted",
+                    weight = 5,
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "div",
+                            text = new
+                            {
+                                tag = "lark_md",
+                                content = $"**{SanitizeMarkdown(category.Name)}**\n共 {category.Commands.Count} 条命令"
+                            }
+                        }
+                    }
+                },
+                new
+                {
+                    tag = "column",
+                    width = "auto",
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "button",
+                            text = new { tag = "plain_text", content = "查看" },
+                            type = "default",
+                            behaviors = new[]
+                            {
+                                new
+                                {
+                                    type = "callback",
+                                    value = new { action = "show_category", category_id = category.Id }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    private static object BuildCommandActionRow(FeishuCommand command)
+    {
+        var description = SanitizeMarkdown(command.Description);
+        if (description.Length > 80)
+        {
+            description = description[..80] + "...";
+        }
+
+        var markdown = string.IsNullOrWhiteSpace(description)
+            ? $"`{command.Name}`"
+            : $"`{command.Name}`\n{description}";
+
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            background_style = "default",
+            columns = new object[]
+            {
+                new
+                {
+                    tag = "column",
+                    width = "weighted",
+                    weight = 5,
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "div",
+                            text = new { tag = "lark_md", content = markdown }
+                        }
+                    }
+                },
+                new
+                {
+                    tag = "column",
+                    width = "auto",
+                    vertical_align = "top",
+                    elements = new object[]
+                    {
+                        new
+                        {
+                            tag = "button",
+                            text = new { tag = "plain_text", content = "使用" },
+                            type = "default",
+                            behaviors = new[]
+                            {
+                                new
+                                {
+                                    type = "callback",
+                                    value = new { action = "select_command", command_id = command.Id }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
     private static string BuildCommandOptionText(FeishuCommand command)
     {
         var description = SanitizeMarkdown(command.Description);
@@ -837,6 +1087,29 @@ public class FeishuHelpCardBuilder
         return string.IsNullOrWhiteSpace(description)
             ? command.Name
             : $"{command.Name} - {description}";
+    }
+
+    private static string SerializeActionValue(object value)
+    {
+        return JsonSerializer.Serialize(value);
+    }
+
+    private static object BuildOverflowRow(string markdown, object[] options)
+    {
+        return new
+        {
+            tag = "div",
+            text = new
+            {
+                tag = "lark_md",
+                content = markdown
+            },
+            extra = new
+            {
+                tag = "overflow",
+                options
+            }
+        };
     }
 
     private static string SanitizeMarkdown(string? value)

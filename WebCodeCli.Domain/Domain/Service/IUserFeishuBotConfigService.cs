@@ -6,7 +6,11 @@ namespace WebCodeCli.Domain.Domain.Service;
 public interface IUserFeishuBotConfigService
 {
     Task<UserFeishuBotConfigEntity?> GetByUsernameAsync(string username);
-    Task<bool> SaveAsync(UserFeishuBotConfigEntity config);
+    Task<UserFeishuBotConfigEntity?> GetByAppIdAsync(string appId);
+    Task<UserFeishuBotConfigSaveResult> SaveAsync(UserFeishuBotConfigEntity config);
     Task<bool> DeleteAsync(string username);
+    Task<string?> FindConflictingUsernameByAppIdAsync(string username, string? appId);
+    FeishuOptions GetSharedDefaults();
     Task<FeishuOptions> GetEffectiveOptionsAsync(string? username);
+    Task<FeishuOptions?> GetEffectiveOptionsByAppIdAsync(string? appId);
 }

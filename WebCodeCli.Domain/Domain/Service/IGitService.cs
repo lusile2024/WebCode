@@ -79,4 +79,15 @@ public interface IGitService
     /// <param name="localPath">本地仓库路径</param>
     /// <returns>当前分支名称</returns>
     string? GetCurrentBranch(string localPath);
+
+    /// <summary>
+    /// 切换本地仓库分支
+    /// </summary>
+    /// <param name="localPath">本地仓库路径</param>
+    /// <param name="branch">目标分支名称</param>
+    /// <param name="credentials">认证凭据</param>
+    Task<(bool Success, string? ErrorMessage)> SwitchBranchAsync(
+        string localPath,
+        string branch,
+        GitCredentials? credentials = null);
 }

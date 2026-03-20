@@ -7,6 +7,11 @@ namespace WebCodeCli.Domain.Domain.Model.Channels;
 public class FeishuCommand
 {
     /// <summary>
+    /// 归属的 CLI 工具 ID
+    /// </summary>
+    public string ToolId { get; set; } = string.Empty;
+
+    /// <summary>
     /// 唯一标识，如 "help"
     /// </summary>
     public string Id { get; set; } = string.Empty;
@@ -25,6 +30,11 @@ public class FeishuCommand
     /// 用法示例
     /// </summary>
     public string Usage { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 实际建议发送给 CLI 的命令文本
+    /// </summary>
+    public string ExecuteText { get; set; } = string.Empty;
 
     /// <summary>
     /// 所属分组

@@ -55,6 +55,16 @@ public interface IProjectService
     /// 获取远程仓库的分支列表
     /// </summary>
     Task<(List<string> Branches, string? ErrorMessage)> GetBranchesAsync(GetBranchesRequest request);
+
+    /// <summary>
+    /// 获取已保存项目的远程分支列表
+    /// </summary>
+    Task<(List<string> Branches, string? ErrorMessage)> GetProjectBranchesAsync(string projectId);
+
+    /// <summary>
+    /// 切换已克隆项目的当前分支
+    /// </summary>
+    Task<(bool Success, string? ErrorMessage)> SwitchProjectBranchAsync(string projectId, string branch);
     
     /// <summary>
     /// 获取项目的本地路径

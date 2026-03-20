@@ -22,6 +22,12 @@ public class FeishuHelpCardAction
     public string? CommandId { get; set; }
 
     /// <summary>
+    /// 分类ID（show_category时使用）
+    /// </summary>
+    [JsonPropertyName("category_id")]
+    public string? CategoryId { get; set; }
+
+    /// <summary>
     /// 命令内容（execute_command时使用）
     /// </summary>
     [JsonPropertyName("command")]
@@ -32,6 +38,18 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("session_id")]
     public string? SessionId { get; set; }
+
+    /// <summary>
+    /// 项目ID（项目管理时使用）
+    /// </summary>
+    [JsonPropertyName("project_id")]
+    public string? ProjectId { get; set; }
+
+    /// <summary>
+    /// 分支名称（项目分支切换时使用）
+    /// </summary>
+    [JsonPropertyName("branch")]
+    public string? Branch { get; set; }
 
     /// <summary>
     /// 聊天Key（会话管理时使用，格式：feishu:{AppId}:{ChatId}）
@@ -50,4 +68,34 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("workspace_path")]
     public string? WorkspacePath { get; set; }
+
+    /// <summary>
+    /// 要复制/发送到聊天的路径
+    /// </summary>
+    [JsonPropertyName("copy_path")]
+    public string? CopyPath { get; set; }
+
+    /// <summary>
+    /// CLI 工具 ID（新建会话选择工具时使用）
+    /// </summary>
+    [JsonPropertyName("tool_id")]
+    public string? ToolId { get; set; }
+
+    /// <summary>
+    /// 当前浏览的目录路径（相对于会话工作区根目录）
+    /// </summary>
+    [JsonPropertyName("directory_path")]
+    public string? DirectoryPath { get; set; }
+
+    /// <summary>
+    /// 当前浏览的文件路径（相对于会话工作区根目录）
+    /// </summary>
+    [JsonPropertyName("file_path")]
+    public string? FilePath { get; set; }
+
+    /// <summary>
+    /// 分页页码（从 0 开始）
+    /// </summary>
+    [JsonPropertyName("page")]
+    public int? Page { get; set; }
 }

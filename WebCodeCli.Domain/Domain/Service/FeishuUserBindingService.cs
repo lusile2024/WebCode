@@ -12,13 +12,16 @@ public class FeishuUserBindingService : IFeishuUserBindingService
 {
     private readonly IFeishuUserBindingRepository _bindingRepository;
     private readonly IUserAccountService _userAccountService;
+    private readonly IUserFeishuBotConfigService _userFeishuBotConfigService;
 
     public FeishuUserBindingService(
         IFeishuUserBindingRepository bindingRepository,
-        IUserAccountService userAccountService)
+        IUserAccountService userAccountService,
+        IUserFeishuBotConfigService userFeishuBotConfigService)
     {
         _bindingRepository = bindingRepository;
         _userAccountService = userAccountService;
+        _userFeishuBotConfigService = userFeishuBotConfigService;
     }
 
     public async Task<string?> GetBoundWebUsernameAsync(string feishuUserId)
@@ -37,7 +40,7 @@ public class FeishuUserBindingService : IFeishuUserBindingService
         return !string.IsNullOrWhiteSpace(await GetBoundWebUsernameAsync(feishuUserId));
     }
 
-    public async Task<(bool Success, string? ErrorMessage, string? WebUsername)> BindAsync(string feishuUserId, string webUsername)
+    public async Task<(bool Success, string? ErrorMessage, string? WebUsername)> BindAsync(string feishuUserId, string webUsername, string? appId = null)
     {
         if (string.IsNullOrWhiteSpace(feishuUserId))
         {
@@ -50,10 +53,21 @@ public class FeishuUserBindingService : IFeishuUserBindingService
         }
 
         var normalizedUsername = webUsername.Trim();
-        var bindableUsernames = await GetBindableWebUsernamesAsync();
-        if (!bindableUsernames.Any(x => string.Equals(x, normalizedUsername, StringComparison.OrdinalIgnoreCase)))
+        var configuredUsername = await GetConfiguredUsernameByAppIdAsync(appId);
+        if (!string.IsNullOrWhiteSpace(appId) && string.IsNullOrWhiteSpace(configuredUsername))
         {
-            return (false, $"Web 用户不存在: {normalizedUsername}", null);
+            return (false, "当前飞书机器人未在用户管理中配置有效用户名，无法绑定。", null);
+        }
+
+        var account = await _userAccountService.GetByUsernameAsync(normalizedUsername);
+        var validation = FeishuBindingUsernameValidationHelper.Validate(
+            normalizedUsername,
+            account?.Username,
+            configuredUsername);
+
+        if (!validation.Success)
+        {
+            return (false, validation.ErrorMessage, null);
         }
 
         var existing = await _bindingRepository.GetByFeishuUserIdAsync(feishuUserId);
@@ -62,19 +76,19 @@ public class FeishuUserBindingService : IFeishuUserBindingService
             await _bindingRepository.InsertAsync(new FeishuUserBindingEntity
             {
                 FeishuUserId = feishuUserId,
-                WebUsername = normalizedUsername,
+                WebUsername = validation.WebUsername!,
                 CreatedAt = DateTime.Now,
                 UpdatedAt = DateTime.Now
             });
         }
         else
         {
-            existing.WebUsername = normalizedUsername;
+            existing.WebUsername = validation.WebUsername!;
             existing.UpdatedAt = DateTime.Now;
             await _bindingRepository.UpdateAsync(existing);
         }
 
-        return (true, null, normalizedUsername);
+        return (true, null, validation.WebUsername);
     }
 
     public async Task<bool> UnbindAsync(string feishuUserId)
@@ -82,8 +96,16 @@ public class FeishuUserBindingService : IFeishuUserBindingService
         return await _bindingRepository.DeleteAsync(x => x.FeishuUserId == feishuUserId);
     }
 
-    public async Task<List<string>> GetBindableWebUsernamesAsync()
+    public async Task<List<string>> GetBindableWebUsernamesAsync(string? appId = null)
     {
+        var configuredUsername = await GetConfiguredUsernameByAppIdAsync(appId);
+        if (!string.IsNullOrWhiteSpace(appId))
+        {
+            return string.IsNullOrWhiteSpace(configuredUsername)
+                ? new List<string>()
+                : new List<string> { configuredUsername };
+        }
+
         return await _userAccountService.GetAllUsernamesAsync();
     }
 
@@ -94,5 +116,28 @@ public class FeishuUserBindingService : IFeishuUserBindingService
             .Where(x => !string.IsNullOrWhiteSpace(x.WebUsername))
             .Select(x => x.WebUsername)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task<string?> GetConfiguredUsernameByAppIdAsync(string? appId)
+    {
+        if (string.IsNullOrWhiteSpace(appId))
+        {
+            return null;
+        }
+
+        var config = await _userFeishuBotConfigService.GetByAppIdAsync(appId.Trim());
+        var configuredUsername = config?.Username?.Trim();
+        if (string.IsNullOrWhiteSpace(configuredUsername))
+        {
+            return null;
+        }
+
+        var account = await _userAccountService.GetByUsernameAsync(configuredUsername);
+        if (account == null || !string.Equals(account.Username, configuredUsername, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return account.Username;
     }
 }

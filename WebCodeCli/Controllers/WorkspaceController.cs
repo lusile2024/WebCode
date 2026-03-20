@@ -433,6 +433,37 @@ public class WorkspaceController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// 浏览白名单目录。
+    /// 未传 path 时返回白名单根目录；传入 path 时返回该目录下的目录和文件。
+    /// </summary>
+    [HttpGet("allowed-directories/browse")]
+    public async Task<IActionResult> BrowseAllowedDirectories([FromQuery] string? path = null)
+    {
+        try
+        {
+            var result = await _sessionDirectoryService.BrowseAllowedDirectoriesAsync(path, GetCurrentUsername());
+            return Ok(new
+            {
+                success = true,
+                data = result
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "浏览白名单目录失败: Path={Path}", path);
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
     #endregion
 }
 

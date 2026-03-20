@@ -679,6 +679,23 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                 </svg>
             </button>
+
+            @if (_isAdmin)
+            {
+                <button @onclick="ShowAdminUserManagementModal"
+                        class="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 rounded-lg transition-colors text-left">
+                    <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5V4H2v16h5m10 0v-4a3 3 0 00-3-3H10a3 3 0 00-3 3v4m10 0H7m10-12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                    </svg>
+                    <div class="flex-1">
+                        <div class="text-sm font-medium text-gray-700">@(T("adminUserManagement.title") == "adminUserManagement.title" ? "用户管理" : T("adminUserManagement.title"))</div>
+                        <div class="text-xs text-gray-400">@(T("adminUserManagement.subtitle") == "adminUserManagement.subtitle" ? "管理账号、工具权限、目录白名单和飞书机器人" : T("adminUserManagement.subtitle"))</div>
+                    </div>
+                    <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </button>
+            }
             
             <!-- 检查更新 -->
             <button @onclick="CheckForUpdateFromSidePanel" 
@@ -939,6 +956,9 @@
 
 <!-- 项目管理模态框 -->
 <ProjectManageModal @ref="_projectManageModal" OnProjectsChanged="OnProjectsChanged" />
+
+<!-- 用户管理模态框 -->
+<AdminUserManagementModal @ref="_adminUserManagementModal" />
 
 <!-- 项目选择模态框 -->
 <ProjectSelectModal @ref="_projectSelectModal" OnProjectSelected="OnProjectSelected" />

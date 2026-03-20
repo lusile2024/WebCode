@@ -49,4 +49,10 @@ public class FeishuOptions
     /// 思考中提示消息
     /// </summary>
     public string ThinkingMessage { get; set; } = "⏳ 思考中...";
+
+    /// <summary>
+    /// 飞书渠道默认使用的 CLI 工具 ID
+    /// 未配置时会按 claude-code -> codex -> opencode -> 首个可用工具 的顺序回退
+    /// </summary>
+    public string DefaultToolId { get; set; } = "claude-code";
 }

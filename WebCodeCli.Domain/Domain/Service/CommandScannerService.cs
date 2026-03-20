@@ -14,88 +14,205 @@ public class CommandScannerService : IDisposable
 {
     private readonly ConcurrentDictionary<string, CommandInfo> _commandCache = new();
     private readonly List<FileSystemWatcher> _watchers = new();
-    private readonly List<string> _scanDirectories = new();
-    private bool _disposed = false;
+    private readonly List<CommandScanDirectory> _scanDirectories = new();
+    private bool _disposed;
 
     public CommandScannerService()
     {
-        // 初始化扫描目录
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        _scanDirectories.Add(Path.Combine(userProfile, ".claude", "skills"));
-        _scanDirectories.Add(Path.Combine(userProfile, ".claude", "plugins"));
-        _scanDirectories.Add(Path.Combine(AppContext.BaseDirectory, ".claude", "skills"));
+        InitializeScanDirectories();
     }
 
-    /// <summary>
-    /// 初始化服务：首次扫描 + 启动文件监听
-    /// </summary>
     public void Initialize()
     {
         ScanAllDirectories();
         StartFileSystemWatchers();
     }
 
-    /// <summary>
-    /// 全量扫描所有目录更新缓存
-    /// </summary>
     public void ScanAllDirectories()
     {
         _commandCache.Clear();
 
-        foreach (var directory in _scanDirectories.Where(Directory.Exists))
+        foreach (var directory in _scanDirectories.Where(d => Directory.Exists(d.Path)))
         {
             ScanDirectory(directory);
         }
     }
 
-    /// <summary>
-    /// 获取所有命令列表
-    /// </summary>
-    public List<CommandInfo> GetAllCommands() => _commandCache.Values.ToList();
-
-    /// <summary>
-    /// 按分类获取命令列表
-    /// </summary>
-    public List<CommandInfo> GetCommandsByCategory(string category)
-        => _commandCache.Values.Where(c => c.Category == category).ToList();
-
-    private void ScanDirectory(string directory)
+    public List<CommandInfo> GetAllCommands(string? toolId = null)
     {
-        // 扫描所有MD文件
-        var mdFiles = Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories)
-            .Where(f => Path.GetFileName(f).EndsWith("SKILL.md", StringComparison.OrdinalIgnoreCase) ||
-                       Path.GetFileName(f).EndsWith("COMMAND.md", StringComparison.OrdinalIgnoreCase) ||
-                       Path.GetFileName(f).Equals("README.md", StringComparison.OrdinalIgnoreCase));
+        var normalizedToolId = NormalizeToolId(toolId);
+        return _commandCache.Values
+            .Where(c => normalizedToolId == null || c.ToolId.Equals(normalizedToolId, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Category, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public List<CommandInfo> GetCommandsByCategory(string category, string? toolId = null)
+    {
+        var normalizedToolId = NormalizeToolId(toolId);
+        return _commandCache.Values
+            .Where(c => c.Category.Equals(category, StringComparison.OrdinalIgnoreCase))
+            .Where(c => normalizedToolId == null || c.ToolId.Equals(normalizedToolId, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void InitializeScanDirectories()
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var claudeGlobalSkills = Path.Combine(userProfile, ".claude", "skills");
+        var claudeGlobalPlugins = Path.Combine(userProfile, ".claude", "plugins");
+        var codexGlobalSkills = Path.Combine(userProfile, ".codex", "skills");
+        var openCodeGlobalSkills = Path.Combine(userProfile, ".opencode", "skills");
+        var openCodeGlobalCommands = Path.Combine(userProfile, ".opencode", "commands");
+        var openCodeGlobalPlugins = Path.Combine(userProfile, ".opencode", "plugins");
+        var openCodeConfigSkills = Path.Combine(userProfile, ".config", "opencode", "skills");
+        var openCodeConfigCommands = Path.Combine(userProfile, ".config", "opencode", "commands");
+        var openCodeConfigPlugins = Path.Combine(userProfile, ".config", "opencode", "plugins");
+
+        AddScanDirectory(claudeGlobalSkills, "skills_global", "claude-code");
+        AddScanDirectory(claudeGlobalPlugins, "plugins", "claude-code");
+        AddScanDirectory(codexGlobalSkills, "skills_global", "codex");
+        AddScanDirectory(openCodeGlobalSkills, "skills_global", "opencode");
+        AddScanDirectory(openCodeGlobalCommands, "commands_global", "opencode");
+        AddScanDirectory(openCodeGlobalPlugins, "plugins", "opencode");
+        AddScanDirectory(openCodeConfigSkills, "skills_global", "opencode");
+        AddScanDirectory(openCodeConfigCommands, "commands_global", "opencode");
+        AddScanDirectory(openCodeConfigPlugins, "plugins", "opencode");
+
+        var projectClaudeSkills = FindProjectDirectory("skills", "claude");
+        var projectCodexSkills = FindProjectDirectory("skills", "codex");
+        var projectOpenCodeSkills = FindProjectDirectory(".opencode", "skills");
+        var projectOpenCodeCommands = FindProjectDirectory(".opencode", "commands");
+        var projectOpenCodePlugins = FindProjectDirectory(".opencode", "plugins");
+
+        if (!string.IsNullOrWhiteSpace(projectClaudeSkills))
+        {
+            AddScanDirectory(projectClaudeSkills, "skills_project", "claude-code");
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectCodexSkills))
+        {
+            AddScanDirectory(projectCodexSkills, "skills_project", "codex");
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectOpenCodeSkills))
+        {
+            AddScanDirectory(projectOpenCodeSkills, "skills_project", "opencode");
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectOpenCodeCommands))
+        {
+            AddScanDirectory(projectOpenCodeCommands, "commands_project", "opencode");
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectOpenCodePlugins))
+        {
+            AddScanDirectory(projectOpenCodePlugins, "plugins", "opencode");
+        }
+
+        if (ShouldIncludeClaudeSkillsForOpenCode())
+        {
+            AddScanDirectory(claudeGlobalSkills, "skills_global", "opencode");
+            if (!string.IsNullOrWhiteSpace(projectClaudeSkills))
+            {
+                AddScanDirectory(projectClaudeSkills, "skills_project", "opencode");
+            }
+        }
+    }
+
+    private void AddScanDirectory(string? path, string category, string toolId)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (_scanDirectories.Any(x =>
+                x.Path.Equals(path, StringComparison.OrdinalIgnoreCase)
+                && x.Category.Equals(category, StringComparison.OrdinalIgnoreCase)
+                && x.ToolId.Equals(toolId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        _scanDirectories.Add(new CommandScanDirectory(path, category, NormalizeToolId(toolId)!));
+    }
+
+    private static bool ShouldIncludeClaudeSkillsForOpenCode()
+    {
+        var rawValue = Environment.GetEnvironmentVariable("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS");
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        return !rawValue.Equals("1", StringComparison.OrdinalIgnoreCase)
+            && !rawValue.Equals("true", StringComparison.OrdinalIgnoreCase)
+            && !rawValue.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? FindProjectDirectory(params string[] segments)
+    {
+        var currentDir = AppContext.BaseDirectory;
+        while (!string.IsNullOrWhiteSpace(currentDir))
+        {
+            var candidate = Path.Combine(new[] { currentDir }.Concat(segments).ToArray());
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            var parent = Directory.GetParent(currentDir);
+            currentDir = parent?.FullName ?? string.Empty;
+        }
+
+        return null;
+    }
+
+    private void ScanDirectory(CommandScanDirectory directory)
+    {
+        var mdFiles = Directory.EnumerateFiles(directory.Path, "*.md", SearchOption.AllDirectories)
+            .Where(IsSupportedCommandMarkdown);
 
         foreach (var file in mdFiles)
         {
             try
             {
-                var commandInfo = ParseMarkdownDocument(file);
+                var commandInfo = ParseMarkdownDocument(file, directory);
                 if (commandInfo != null)
                 {
-                    _commandCache.AddOrUpdate(commandInfo.Name, commandInfo, (k, v) => commandInfo);
+                    _commandCache[BuildCacheKey(commandInfo)] = commandInfo;
                 }
             }
             catch (Exception ex)
             {
-                // 记录日志，单个文件解析失败不影响整体
                 Console.WriteLine($"解析命令文档失败 {file}: {ex.Message}");
             }
         }
     }
 
-    private CommandInfo? ParseMarkdownDocument(string filePath)
+    private static bool IsSupportedCommandMarkdown(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath);
+        return fileName.EndsWith("SKILL.md", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("COMMAND.md", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".command.md", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("README.md", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private CommandInfo? ParseMarkdownDocument(string filePath, CommandScanDirectory directory)
     {
         var content = File.ReadAllText(filePath);
         var commandInfo = new CommandInfo
         {
+            ToolId = directory.ToolId,
             SourcePath = filePath,
             LastUpdated = File.GetLastWriteTime(filePath),
-            Category = GetCategoryFromPath(filePath)
+            Category = directory.Category
         };
 
-        // 匹配YAML Front Matter
         var yamlMatch = Regex.Match(content, @"^---\s*\n(.*?)\n---\s*\n", RegexOptions.Singleline);
         if (yamlMatch.Success)
         {
@@ -112,23 +229,20 @@ public class CommandScannerService : IDisposable
                 commandInfo.Description = frontMatter.Description;
                 commandInfo.Usage = frontMatter.Usage;
 
-                // 移除YAML部分，继续解析正文
                 content = content.Substring(yamlMatch.Length);
             }
             catch
             {
-                // YAML解析失败，继续用正文提取
+                // 忽略 front matter 解析错误，继续使用正文兜底
             }
         }
 
-        // 如果没有从YAML获取到名称，从文件名提取
         if (string.IsNullOrWhiteSpace(commandInfo.Name))
         {
             var fileName = Path.GetFileNameWithoutExtension(filePath);
-            commandInfo.Name = $"/{fileName.ToLowerInvariant().Replace(" ", "-")}";
+            commandInfo.Name = fileName.ToLowerInvariant().Replace(" ", "-");
         }
 
-        // 如果没有从YAML获取到描述，提取正文第一段
         if (string.IsNullOrWhiteSpace(commandInfo.Description))
         {
             var paragraphs = Regex.Split(content, @"\n\s*\n", RegexOptions.Multiline)
@@ -141,46 +255,91 @@ public class CommandScannerService : IDisposable
             }
         }
 
-        // 提取使用示例：查找所有bash/shell代码块
         if (string.IsNullOrWhiteSpace(commandInfo.Usage))
         {
-            var codeBlockMatches = Regex.Matches(content, @"```(bash|shell)\s*\n(.*?)\n```", RegexOptions.Singleline);
+            var codeBlockMatches = Regex.Matches(content, @"```(bash|shell)?\s*\n(.*?)\n```", RegexOptions.Singleline);
             var usages = new List<string>();
             foreach (Match match in codeBlockMatches)
             {
                 usages.Add(match.Groups[2].Value.Trim());
             }
-            commandInfo.Usage = string.Join("\n", usages.Take(3)); // 最多取3个示例
+
+            commandInfo.Usage = string.Join("\n", usages.Take(3));
         }
 
-        // 验证必填字段
         if (string.IsNullOrWhiteSpace(commandInfo.Name) || string.IsNullOrWhiteSpace(commandInfo.Description))
         {
             return null;
         }
 
+        commandInfo.Invocation = BuildInvocationText(commandInfo.Name, directory.Category, filePath);
+        if (string.IsNullOrWhiteSpace(commandInfo.Usage))
+        {
+            commandInfo.Usage = commandInfo.Invocation;
+        }
+
         return commandInfo;
     }
 
-    private string GetCategoryFromPath(string filePath)
+    private static string BuildInvocationText(string name, string category, string filePath)
     {
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var globalSkillsPath = Path.Combine(userProfile, ".claude", "skills").ToLowerInvariant();
-        var globalPluginsPath = Path.Combine(userProfile, ".claude", "plugins").ToLowerInvariant();
-        var projectSkillsPath = Path.Combine(AppContext.BaseDirectory, ".claude", "skills").ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return string.Empty;
+        }
 
-        var lowerPath = filePath.ToLowerInvariant();
+        if (name.StartsWith("/") || name.StartsWith("$"))
+        {
+            return name;
+        }
 
-        if (lowerPath.StartsWith(globalSkillsPath)) return "全局技能";
-        if (lowerPath.StartsWith(globalPluginsPath)) return "插件命令";
-        if (lowerPath.StartsWith(projectSkillsPath)) return "项目技能";
+        var fileName = Path.GetFileName(filePath);
+        if (category.StartsWith("skills", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("SKILL.md", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"${name}";
+        }
 
-        return "其他命令";
+        if (category.StartsWith("commands", StringComparison.OrdinalIgnoreCase)
+            || category.Equals("plugins", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("COMMAND.md", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".command.md", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"/{name}";
+        }
+
+        return name;
+    }
+
+    private static string BuildCacheKey(CommandInfo commandInfo)
+        => $"{NormalizeToolId(commandInfo.ToolId)}::{commandInfo.Name}::{commandInfo.SourcePath}";
+
+    private static string? NormalizeToolId(string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return null;
+        }
+
+        if (toolId.Equals("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-code";
+        }
+
+        if (toolId.Equals("opencode-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return "opencode";
+        }
+
+        return toolId;
     }
 
     private void StartFileSystemWatchers()
     {
-        foreach (var directory in _scanDirectories.Where(Directory.Exists))
+        foreach (var directory in _scanDirectories
+                     .Select(d => d.Path)
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .Where(Directory.Exists))
         {
             try
             {
@@ -210,25 +369,24 @@ public class CommandScannerService : IDisposable
     {
         try
         {
-            // 防抖处理：延迟500ms处理，避免频繁修改导致多次扫描
             Task.Delay(500).Wait();
 
-            if (File.Exists(e.FullPath))
+            RemoveCachedEntriesForFile(e.FullPath);
+            if (!File.Exists(e.FullPath) || !IsSupportedCommandMarkdown(e.FullPath))
             {
-                // 文件新增或修改，重新解析
-                var commandInfo = ParseMarkdownDocument(e.FullPath);
+                return;
+            }
+
+            var matchedDirectories = _scanDirectories
+                .Where(d => IsPathInsideDirectory(e.FullPath, d.Path))
+                .ToList();
+
+            foreach (var directory in matchedDirectories)
+            {
+                var commandInfo = ParseMarkdownDocument(e.FullPath, directory);
                 if (commandInfo != null)
                 {
-                    _commandCache.AddOrUpdate(commandInfo.Name, commandInfo, (k, v) => commandInfo);
-                }
-            }
-            else
-            {
-                // 文件删除，从缓存移除
-                var toRemove = _commandCache.Where(c => c.Value.SourcePath.Equals(e.FullPath, StringComparison.OrdinalIgnoreCase)).ToList();
-                foreach (var item in toRemove)
-                {
-                    _commandCache.TryRemove(item.Key, out _);
+                    _commandCache[BuildCacheKey(commandInfo)] = commandInfo;
                 }
             }
         }
@@ -240,15 +398,31 @@ public class CommandScannerService : IDisposable
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        // 先删除旧文件
-        var toRemove = _commandCache.Where(c => c.Value.SourcePath.Equals(e.OldFullPath, StringComparison.OrdinalIgnoreCase)).ToList();
-        foreach (var item in toRemove)
-        {
-            _commandCache.TryRemove(item.Key, out _);
-        }
-
-        // 再处理新文件
+        RemoveCachedEntriesForFile(e.OldFullPath);
         OnFileChanged(sender, new FileSystemEventArgs(WatcherChangeTypes.Changed, Path.GetDirectoryName(e.FullPath)!, Path.GetFileName(e.FullPath)));
+    }
+
+    private void RemoveCachedEntriesForFile(string filePath)
+    {
+        var keysToRemove = _commandCache
+            .Where(c => c.Value.SourcePath.Equals(filePath, StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Key)
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            _commandCache.TryRemove(key, out _);
+        }
+    }
+
+    private static bool IsPathInsideDirectory(string filePath, string directoryPath)
+    {
+        var normalizedDirectory = Path.GetFullPath(directoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        var normalizedFilePath = Path.GetFullPath(filePath);
+
+        return normalizedFilePath.StartsWith(normalizedDirectory, StringComparison.OrdinalIgnoreCase);
     }
 
     public void Dispose()
@@ -259,18 +433,23 @@ public class CommandScannerService : IDisposable
 
     protected virtual void Dispose(bool disposing)
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
 
         if (disposing)
         {
-            // 释放文件监听器
             foreach (var watcher in _watchers)
             {
                 watcher.Dispose();
             }
+
             _watchers.Clear();
         }
 
         _disposed = true;
     }
+
+    private sealed record CommandScanDirectory(string Path, string Category, string ToolId);
 }

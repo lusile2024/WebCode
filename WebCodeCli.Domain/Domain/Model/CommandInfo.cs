@@ -6,9 +6,20 @@ namespace WebCodeCli.Domain.Domain.Model;
 public class CommandInfo
 {
     /// <summary>
+    /// 归属的 CLI 工具 ID（如 claude-code / codex / opencode）
+    /// </summary>
+    public string ToolId { get; set; } = string.Empty;
+
+    /// <summary>
     /// 命令名称（如 /feishuhelp）
     /// </summary>
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 实际建议执行的文本
+    /// 对于技能，通常会补成 $skill-name；对于内置命令则与 Name 相同
+    /// </summary>
+    public string Invocation { get; set; } = string.Empty;
 
     /// <summary>
     /// 命令描述

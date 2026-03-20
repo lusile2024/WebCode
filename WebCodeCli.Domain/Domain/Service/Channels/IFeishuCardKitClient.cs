@@ -1,5 +1,6 @@
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model.Channels;
+using FeishuNetSdk.Im.Dtos;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -89,6 +90,19 @@ public interface IFeishuCardKitClient
     Task<string> SendRawCardAsync(
         string chatId,
         string cardJson,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
+
+    /// <summary>
+    /// 回复 V2 DTO 卡片消息（帮助功能专用）
+    /// </summary>
+    /// <param name="replyMessageId">被回复的消息 ID</param>
+    /// <param name="card">V2 卡片 DTO</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>回复消息 ID</returns>
+    Task<string> ReplyElementsCardAsync(
+        string replyMessageId,
+        ElementsCardV2Dto card,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null);
 

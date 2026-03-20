@@ -11,6 +11,32 @@ namespace WebCodeCli.Domain.Domain.Service;
 [ServiceDescription(typeof(ISessionDirectoryService), Microsoft.Extensions.DependencyInjection.ServiceLifetime.Scoped)]
 public class SessionDirectoryService : ISessionDirectoryService
 {
+    private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9"
+    };
+
     private readonly IChatSessionRepository _chatSessionRepository;
     private readonly IWorkspaceRegistryService _registryService;
     private readonly IWorkspaceAuthorizationService _authorizationService;
@@ -33,7 +59,11 @@ public class SessionDirectoryService : ISessionDirectoryService
         _projectRepository = projectRepository;
         _userWorkspacePolicyService = userWorkspacePolicyService;
         _autoCreateMissingDirectories = configuration.GetValue<bool?>("Workspace:AutoCreateMissingDirectories") ?? true;
-        _allowedRoots = configuration.GetSection("Workspace:AllowedRoots").Get<string[]>() ?? Array.Empty<string>();
+        _allowedRoots = (configuration.GetSection("Workspace:AllowedRoots").Get<string[]>() ?? Array.Empty<string>())
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => _registryService.NormalizePath(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     /// <summary>
@@ -57,11 +87,11 @@ public class SessionDirectoryService : ISessionDirectoryService
                 throw new UnauthorizedAccessException($"禁止访问系统敏感目录: {directoryPath}");
             }
 
-            if (_allowedRoots.Length > 0)
+            var effectiveRoots = await GetEffectiveAllowedRootsAsync(username);
+            if (effectiveRoots.Length > 0)
             {
-                var isUnderAllowedRoots = _allowedRoots
-                    .Select(_registryService.NormalizePath)
-                    .Any(root => normalizedPath.StartsWith(root, StringComparison.OrdinalIgnoreCase));
+                var isUnderAllowedRoots = effectiveRoots
+                    .Any(root => IsPathWithinRoot(root, normalizedPath));
                 if (!isUnderAllowedRoots)
                 {
                     throw new UnauthorizedAccessException($"目录不在允许范围内: {directoryPath}");
@@ -135,7 +165,6 @@ public class SessionDirectoryService : ISessionDirectoryService
 
         if (string.IsNullOrEmpty(session.WorkspacePath))
         {
-            // 没有设置工作区，默认允许访问
             return true;
         }
 
@@ -229,5 +258,161 @@ public class SessionDirectoryService : ISessionDirectoryService
         }
 
         return result.OrderByDescending(x => x.GetType().GetProperty("UpdatedAt")?.GetValue(x) as DateTime? ?? DateTime.MinValue).ToList<object>();
+    }
+
+    public async Task<AllowedDirectoryBrowseResult> BrowseAllowedDirectoriesAsync(string? path, string? username = null)
+    {
+        var effectiveRoots = await GetEffectiveAllowedRootsAsync(username);
+        var availableRoots = effectiveRoots
+            .Where(Directory.Exists)
+            .Select(root => new AllowedDirectoryRootItem
+            {
+                Name = GetDisplayName(root),
+                Path = root
+            })
+            .ToList();
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return new AllowedDirectoryBrowseResult
+            {
+                HasConfiguredRoots = effectiveRoots.Length > 0,
+                Roots = availableRoots
+            };
+        }
+
+        var normalizedPath = _registryService.NormalizePath(path);
+        if (_registryService.IsSensitiveDirectory(normalizedPath))
+        {
+            throw new UnauthorizedAccessException($"禁止访问系统敏感目录: {path}");
+        }
+
+        var matchedRoot = effectiveRoots.FirstOrDefault(root => IsPathWithinRoot(root, normalizedPath));
+        if (string.IsNullOrWhiteSpace(matchedRoot))
+        {
+            throw new UnauthorizedAccessException($"目录不在允许范围内: {path}");
+        }
+
+        if (!Directory.Exists(normalizedPath))
+        {
+            throw new DirectoryNotFoundException($"目录不存在: {path}");
+        }
+
+        var directories = Directory.GetDirectories(normalizedPath)
+            .Select(pathValue => new DirectoryInfo(pathValue))
+            .Where(info => !info.Name.StartsWith(".", StringComparison.Ordinal))
+            .OrderBy(info => info.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(info => new AllowedDirectoryBrowseEntry
+            {
+                Name = info.Name,
+                Path = info.FullName,
+                IsDirectory = true
+            });
+
+        var files = Directory.GetFiles(normalizedPath)
+            .Select(pathValue => new FileInfo(pathValue))
+            .Where(info => !info.Name.StartsWith(".", StringComparison.Ordinal))
+            .Where(info => !IsReservedDeviceName(info.Name))
+            .OrderBy(info => info.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(CreateFileBrowseEntry);
+
+        var parentPath = Directory.GetParent(normalizedPath)?.FullName;
+        if (string.IsNullOrWhiteSpace(parentPath) || !IsPathWithinRoot(matchedRoot, parentPath))
+        {
+            parentPath = null;
+        }
+
+        return new AllowedDirectoryBrowseResult
+        {
+            HasConfiguredRoots = effectiveRoots.Length > 0,
+            CurrentPath = normalizedPath,
+            ParentPath = parentPath,
+            RootPath = matchedRoot,
+            Roots = availableRoots,
+            Entries = directories.Concat(files).ToList()
+        };
+    }
+
+    private async Task<string[]> GetEffectiveAllowedRootsAsync(string? username)
+    {
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            var userAllowedDirectories = await _userWorkspacePolicyService.GetAllowedDirectoriesAsync(username);
+            var normalizedUserRoots = userAllowedDirectories
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => _registryService.NormalizePath(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (normalizedUserRoots.Length > 0)
+            {
+                return normalizedUserRoots;
+            }
+        }
+
+        return _allowedRoots;
+    }
+
+    private static bool IsPathWithinRoot(string rootPath, string targetPath)
+    {
+        var normalizedRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedTarget = Path.GetFullPath(targetPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (string.Equals(normalizedRoot, normalizedTarget, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return normalizedTarget.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || normalizedTarget.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetDisplayName(string path)
+    {
+        var trimmedPath = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fileName = Path.GetFileName(trimmedPath);
+        return string.IsNullOrWhiteSpace(fileName) ? path : fileName;
+    }
+
+    private static AllowedDirectoryBrowseEntry CreateFileBrowseEntry(FileInfo info)
+    {
+        return new AllowedDirectoryBrowseEntry
+        {
+            Name = info.Name,
+            Path = info.FullName,
+            IsDirectory = false,
+            Size = GetFileSizeSafely(info),
+            Extension = info.Extension
+        };
+    }
+
+    private static long GetFileSizeSafely(FileInfo info)
+    {
+        try
+        {
+            return info.Length;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return 0;
+        }
+        catch (ArgumentException)
+        {
+            return 0;
+        }
+        catch (NotSupportedException)
+        {
+            return 0;
+        }
+    }
+
+    private static bool IsReservedDeviceName(string fileName)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        return !string.IsNullOrWhiteSpace(baseName) && ReservedDeviceNames.Contains(baseName);
     }
 }

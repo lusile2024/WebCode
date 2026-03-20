@@ -112,7 +112,7 @@
                                                 <div class="flex items-center gap-3 text-xs text-gray-400">
                                                     @if (!IsZipProject(project))
                                                     {
-                                                        <span>@T("project.branch"): @project.Branch</span>
+                                                        <span>@T("project.branch"): @(string.IsNullOrWhiteSpace(project.Branch) ? T("project.defaultBranch") : project.Branch)</span>
                                                     }
                                                     @if (project.LastSyncAt.HasValue)
                                                     {
@@ -149,6 +149,21 @@
                                                 }
                                                 else if (!IsZipProject(project) && project.Status == "ready")
                                                 {
+                                                    <button @onclick="() => ToggleProjectBranchPicker(project.ProjectId)"
+                                                            disabled="@(_isLoadingProjectBranches || _switchingProjectId == project.ProjectId)"
+                                                            class="p-2 hover:bg-emerald-100 rounded-lg transition-colors disabled:opacity-50"
+                                                            title="@T("project.switchBranch")">
+                                                        @if (_isLoadingProjectBranches && _branchPickerProjectId == project.ProjectId)
+                                                        {
+                                                            <div class="w-4 h-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent"></div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h10M7 12h6m-6 5h10M5 4l3 3-3 3m14-3l-3 3 3 3"></path>
+                                                            </svg>
+                                                        }
+                                                    </button>
                                                     <button @onclick="() => PullProject(project.ProjectId)"
                                                             disabled="@(_pullingProjectId == project.ProjectId)"
                                                             class="p-2 hover:bg-blue-100 rounded-lg transition-colors disabled:opacity-50"
@@ -184,6 +199,66 @@
                                                 </button>
                                             </div>
                                         </div>
+                                        @if (!IsZipProject(project) && project.Status == "ready" && _branchPickerProjectId == project.ProjectId)
+                                        {
+                                            <div class="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                                                <div class="flex items-center justify-between gap-2">
+                                                    <div>
+                                                        <p class="text-sm font-medium text-emerald-900">@T("project.switchBranch")</p>
+                                                        <p class="text-xs text-emerald-700">@T("project.selectBranchToSwitch")</p>
+                                                    </div>
+                                                    <button @onclick="CloseProjectBranchPicker"
+                                                            class="text-xs text-emerald-700 hover:text-emerald-900 transition-colors">
+                                                        @T("common.cancel")
+                                                    </button>
+                                                </div>
+
+                                                @if (_branchPickerError is not null)
+                                                {
+                                                    <div class="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                                                        @_branchPickerError
+                                                    </div>
+                                                }
+                                                else if (_isLoadingProjectBranches)
+                                                {
+                                                    <div class="mt-3 flex items-center gap-2 text-sm text-emerald-700">
+                                                        <div class="w-4 h-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent"></div>
+                                                        <span>@T("project.loadingBranches")</span>
+                                                    </div>
+                                                }
+                                                else if (_branchPickerBranches.Count == 0)
+                                                {
+                                                    <div class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                                                        @T("project.noBranchesAvailable")
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="mt-3 flex flex-wrap gap-2">
+                                                        @foreach (var branch in _branchPickerBranches)
+                                                        {
+                                                            var isCurrentBranch = string.Equals(project.Branch, branch, StringComparison.OrdinalIgnoreCase);
+                                                            var isSwitchingBranch = _switchingProjectId == project.ProjectId && _switchingBranchName == branch;
+                                                            <button @onclick="() => SwitchProjectBranch(project.ProjectId, branch)"
+                                                                    disabled="@(_switchingProjectId == project.ProjectId)"
+                                                                    class="px-3 py-1.5 text-xs rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed @(isCurrentBranch ? "border-emerald-700 bg-emerald-700 text-white" : "border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100")">
+                                                                @if (isSwitchingBranch)
+                                                                {
+                                                                    <span class="inline-flex items-center gap-1">
+                                                                        <span class="w-3 h-3 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+                                                                        <span>@T("project.switchingBranch")</span>
+                                                                    </span>
+                                                                }
+                                                                else
+                                                                {
+                                                                    @branch
+                                                                }
+                                                            </button>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
                                     </div>
                                 }
                             </div>
@@ -516,6 +591,12 @@
     private bool _isLoadingProjects = false;
     private string? _cloningProjectId = null;
     private string? _pullingProjectId = null;
+    private string? _branchPickerProjectId = null;
+    private List<string> _branchPickerBranches = new();
+    private bool _isLoadingProjectBranches = false;
+    private string? _branchPickerError = null;
+    private string? _switchingProjectId = null;
+    private string? _switchingBranchName = null;
     
     // 表单数据
     private ProjectInfo? _editingProject = null;
@@ -526,7 +607,7 @@
     private string? _formHttpsToken = null;
     private string? _formSshPrivateKey = null;
     private string? _formSshPassphrase = null;
-    private string _formBranch = "main";
+    private string _formBranch = string.Empty;
     private string _formError = string.Empty;
     private bool _isSaving = false;
     
@@ -862,6 +943,100 @@
         }
     }
 
+    private async Task ToggleProjectBranchPicker(string projectId)
+    {
+        if (_branchPickerProjectId == projectId)
+        {
+            CloseProjectBranchPicker();
+            return;
+        }
+
+        _branchPickerProjectId = projectId;
+        _branchPickerBranches.Clear();
+        _branchPickerError = null;
+        StateHasChanged();
+
+        await LoadProjectBranches(projectId);
+    }
+
+    private void CloseProjectBranchPicker()
+    {
+        _branchPickerProjectId = null;
+        _branchPickerBranches.Clear();
+        _branchPickerError = null;
+        _switchingProjectId = null;
+        _switchingBranchName = null;
+        StateHasChanged();
+    }
+
+    private async Task LoadProjectBranches(string projectId)
+    {
+        try
+        {
+            _isLoadingProjectBranches = true;
+            _branchPickerError = null;
+            _branchPickerBranches.Clear();
+            StateHasChanged();
+
+            var response = await Http.GetAsync($"/api/project/{projectId}/branches");
+            if (response.IsSuccessStatusCode)
+            {
+                _branchPickerBranches = await response.Content.ReadFromJsonAsync<List<string>>() ?? new();
+                return;
+            }
+
+            var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+            _branchPickerError = error?.Error ?? T("project.loadBranchesFailed");
+        }
+        catch (Exception ex)
+        {
+            _branchPickerError = $"{T("project.loadBranchesFailed")}: {ex.Message}";
+        }
+        finally
+        {
+            _isLoadingProjectBranches = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SwitchProjectBranch(string projectId, string branch)
+    {
+        if (string.IsNullOrWhiteSpace(branch))
+        {
+            return;
+        }
+
+        try
+        {
+            _switchingProjectId = projectId;
+            _switchingBranchName = branch;
+            _branchPickerError = null;
+            StateHasChanged();
+
+            var response = await Http.PostAsJsonAsync($"/api/project/{projectId}/switch-branch", new { Branch = branch });
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+                _branchPickerError = error?.Error ?? T("project.switchBranchFailed");
+                return;
+            }
+
+            await LoadProjects();
+            await OnProjectsChanged.InvokeAsync();
+            CloseProjectBranchPicker();
+        }
+        catch (Exception ex)
+        {
+            _branchPickerError = $"{T("project.switchBranchFailed")}: {ex.Message}";
+        }
+        finally
+        {
+            _switchingProjectId = null;
+            _switchingBranchName = null;
+            StateHasChanged();
+        }
+    }
+
     private async Task DeleteProject(string projectId)
     {
         try
@@ -955,9 +1130,14 @@
         _formHttpsToken = null;
         _formSshPrivateKey = null;
         _formSshPassphrase = null;
-        _formBranch = "main";
+        _formBranch = string.Empty;
         _formError = string.Empty;
         _availableBranches.Clear();
+        _branchPickerProjectId = null;
+        _branchPickerBranches.Clear();
+        _branchPickerError = null;
+        _switchingProjectId = null;
+        _switchingBranchName = null;
         _authTypeSelect?.CloseDropdown();
         
         // 重置 ZIP 上传表单

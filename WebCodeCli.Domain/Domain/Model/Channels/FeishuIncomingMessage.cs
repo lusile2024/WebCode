@@ -21,6 +21,11 @@ public class FeishuIncomingMessage
     public string ChatType { get; set; } = "p2p";
 
     /// <summary>
+    /// 当前接收事件的飞书应用 ID
+    /// </summary>
+    public string? AppId { get; set; }
+
+    /// <summary>
     /// 消息内容
     /// </summary>
     public string Content { get; set; } = string.Empty;

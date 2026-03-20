@@ -32,8 +32,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
     private bool _isRunning = false;
 
-    // 默认使用的 CLI 工具 ID（可配置）
-    private const string DefaultToolId = "claude-code";
+    // 飞书渠道默认回退工具 ID（最终还会检查配置和实际可用工具）
+    private const string FallbackToolId = "claude-code";
 
     // 事件去重缓存，避免重复处理相同event_id的消息
     private readonly ConcurrentDictionary<string, DateTime> _processedEventIds = new();
@@ -266,32 +266,44 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             catch (InvalidOperationException ex)
             {
                 // 没有会话时提示用户
-                await ReplyMessageAsync(message.MessageId, $"⚠️ {ex.Message}", message.SenderName);
+                await ReplyMessageAsync(message.MessageId, $"⚠️ {ex.Message}", message.SenderName, message.AppId);
                 return;
             }
+
+            var toolId = ResolveToolId(message.ChatId, message.SenderName);
 
             // 添加用户消息到会话
             _chatSessionService.AddMessage(sessionId, new ChatMessage
             {
                 Role = "user",
                 Content = message.Content,
+                CliToolId = toolId,
                 CreatedAt = DateTime.UtcNow
             });
 
             // 创建流式回复，立即显示"思考中"状态
-            var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
             var handle = await SendStreamingMessageAsync(
                 message.ChatId,
                 effectiveOptions.ThinkingMessage,
                 message.MessageId,
-                message.SenderName);
+                message.SenderName,
+                message.AppId);
 
             _logger.LogInformation(
                 "🔥 [FeishuChannel] 流式句柄已创建: CardId={CardId}",
                 handle.CardId);
 
             // 执行 CLI 工具并流式更新卡片
-            await ExecuteCliAndStreamAsync(handle, sessionId, message.Content, message.MessageId, effectiveOptions.ThinkingMessage);
+            await ExecuteCliAndStreamAsync(
+                handle,
+                sessionId,
+                toolId,
+                message.Content,
+                message.MessageId,
+                effectiveOptions.ThinkingMessage,
+                message.SenderName,
+                message.AppId);
         }
         catch (Exception ex)
         {
@@ -389,17 +401,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <param name="message">飞书 incoming 消息</param>
     /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
     /// <returns>新会话ID</returns>
-    public string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null)
+    public string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null, string? toolId = null)
     {
         var chatKey = message.ChatId.ToLowerInvariant();
         var username = string.IsNullOrWhiteSpace(message.SenderName) ? "unknown" : message.SenderName;
+        var resolvedToolId = NormalizeToolId(toolId) ?? ResolveToolId(chatKey, username);
 
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
         var newSessionId = repo.CreateFeishuSessionAsync(
             chatKey,
             username,
-            null).GetAwaiter().GetResult();
+            null,
+            resolvedToolId).GetAwaiter().GetResult();
 
         var session = repo.GetByIdAsync(newSessionId).GetAwaiter().GetResult();
         if (session == null)
@@ -412,21 +426,26 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             var sessionDirectoryService = scope.ServiceProvider.GetRequiredService<ISessionDirectoryService>();
             sessionDirectoryService.SetSessionWorkspaceAsync(newSessionId, username, customWorkspacePath, true)
                 .GetAwaiter().GetResult();
+            session.ToolId = resolvedToolId;
+            session.UpdatedAt = DateTime.Now;
+            repo.UpdateAsync(session).GetAwaiter().GetResult();
         }
         else
         {
             var workspacePath = _cliExecutor.InitializeSessionWorkspaceAsync(newSessionId).GetAwaiter().GetResult();
             session.WorkspacePath = workspacePath;
             session.IsCustomWorkspace = false;
+            session.ToolId = resolvedToolId;
             session.UpdatedAt = DateTime.Now;
             repo.UpdateAsync(session).GetAwaiter().GetResult();
         }
 
         _logger.LogInformation(
-            "Created new session: {SessionId} for chat: {ChatId} (user: {UserName}, workspace: {WorkspacePath})",
+            "Created new session: {SessionId} for chat: {ChatId} (user: {UserName}, tool: {ToolId}, workspace: {WorkspacePath})",
             newSessionId,
             message.ChatId,
             username,
+            resolvedToolId,
             customWorkspacePath ?? session.WorkspacePath ?? string.Empty);
         return newSessionId;
     }
@@ -438,6 +457,35 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
         var session = GetValidFeishuSessions(repo, bindingService, chatKey).FirstOrDefault();
         return session?.Username;
+    }
+
+    public string ResolveToolId(string chatKey, string? username = null)
+    {
+        var normalizedChatKey = chatKey.ToLowerInvariant();
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+        var sessions = GetValidFeishuSessions(repo, bindingService, normalizedChatKey, username);
+
+        var activeToolId = sessions
+            .Where(s => s.IsFeishuActive)
+            .Select(s => NormalizeToolId(s.ToolId))
+            .FirstOrDefault(IsConfiguredToolAvailable);
+        if (!string.IsNullOrWhiteSpace(activeToolId))
+        {
+            return activeToolId;
+        }
+
+        var historicalToolId = sessions
+            .Select(s => NormalizeToolId(s.ToolId))
+            .FirstOrDefault(IsConfiguredToolAvailable);
+        if (!string.IsNullOrWhiteSpace(historicalToolId))
+        {
+            return historicalToolId;
+        }
+
+        return ResolveDefaultToolId();
     }
 
     private List<ChatSessionEntity> GetValidFeishuSessions(
@@ -482,19 +530,23 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
         string sessionId,
+        string toolId,
         string userPrompt,
         string messageId,
-        string thinkingMessage)
+        string thinkingMessage,
+        string? username = null,
+        string? appId = null)
     {
         var outputBuilder = new StringBuilder();
         var assistantMessageBuilder = new StringBuilder();
         var jsonlBuffer = new StringBuilder(); // JSONL 缓冲区，处理不完整的行
-        var tool = _cliExecutor.GetTool(DefaultToolId);
+        var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
+        var tool = _cliExecutor.GetTool(resolvedToolId);
 
         if (tool == null)
         {
-            await handle.FinishAsync($"错误：未找到 CLI 工具 '{DefaultToolId}'，请在配置中添加该工具。");
-            _logger.LogWarning("CLI tool not found: {ToolId}", DefaultToolId);
+            await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
+            _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
             return;
         }
 
@@ -576,6 +628,15 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
 
+            try
+            {
+                await ReplyMessageAsync(messageId, "已完成", username, appId);
+            }
+            catch (Exception notificationEx)
+            {
+                _logger.LogWarning(notificationEx, "发送完成通知失败: MessageId={MessageId}", messageId);
+            }
+
             await handle.FinishAsync(finalOutput);
 
             // 添加助手回复到会话
@@ -583,7 +644,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             {
                 Role = "assistant",
                 Content = finalOutput,
-                CliToolId = DefaultToolId,
+                CliToolId = tool.Id,
                 IsCompleted = true,
                 CreatedAt = DateTime.UtcNow
             });
@@ -594,6 +655,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             var session = await repo.GetByIdAsync(sessionId);
             if (session != null)
             {
+                session.ToolId = tool.Id;
                 session.UpdatedAt = DateTime.UtcNow;
                 await repo.UpdateAsync(session);
             }
@@ -666,6 +728,52 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         return formatted.Trim();
     }
 
+    private string ResolveDefaultToolId()
+    {
+        var configured = NormalizeToolId(_options.DefaultToolId);
+        if (IsConfiguredToolAvailable(configured))
+        {
+            return configured!;
+        }
+
+        foreach (var candidate in new[] { FallbackToolId, "codex", "opencode" })
+        {
+            var normalized = NormalizeToolId(candidate);
+            if (IsConfiguredToolAvailable(normalized))
+            {
+                return normalized!;
+            }
+        }
+
+        return _cliExecutor.GetAvailableTools().FirstOrDefault()?.Id ?? FallbackToolId;
+    }
+
+    private bool IsConfiguredToolAvailable(string? toolId)
+    {
+        var normalized = NormalizeToolId(toolId);
+        return !string.IsNullOrWhiteSpace(normalized) && _cliExecutor.GetTool(normalized) != null;
+    }
+
+    private static string? NormalizeToolId(string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return null;
+        }
+
+        if (toolId.Equals("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-code";
+        }
+
+        if (toolId.Equals("opencode-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return "opencode";
+        }
+
+        return toolId;
+    }
+
     private static string? ExtractFallbackOutput(string fullOutput, ICliToolAdapter adapter)
     {
         if (string.IsNullOrWhiteSpace(fullOutput))
@@ -701,10 +809,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <summary>
     /// 发送文本消息
     /// </summary>
-    public async Task<string> SendMessageAsync(string chatId, string content, string? username = null)
+    public async Task<string> SendMessageAsync(string chatId, string content, string? username = null, string? appId = null)
     {
         _logger.LogDebug("Sending message to chat {ChatId}: {Content}", chatId, content);
-        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId);
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId, appId);
 
         // 创建卡片
         var cardId = await _cardKit.CreateCardAsync(content, effectiveOptions.DefaultCardTitle, optionsOverride: effectiveOptions);
@@ -723,10 +831,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// <summary>
     /// 回复消息
     /// </summary>
-    public async Task<string> ReplyMessageAsync(string messageId, string content, string? username = null)
+    public async Task<string> ReplyMessageAsync(string messageId, string content, string? username = null, string? appId = null)
     {
         _logger.LogDebug("Replying to message {MessageId}: {Content}", messageId, content);
-        var effectiveOptions = await ResolveEffectiveOptionsAsync(username);
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId: appId);
 
         // 创建卡片
         var cardId = await _cardKit.CreateCardAsync(content, effectiveOptions.DefaultCardTitle, optionsOverride: effectiveOptions);
@@ -750,13 +858,14 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         string chatId,
         string initialContent,
         string? replyToMessageId = null,
-        string? username = null)
+        string? username = null,
+        string? appId = null)
     {
         _logger.LogDebug(
             "Creating streaming message for chat {ChatId} (reply to: {ReplyMessageId})",
             chatId,
             replyToMessageId ?? "none");
-        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId);
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId, appId);
 
         // 通过 CardKit 客户端创建流式句柄
         var handle = await _cardKit.CreateStreamingHandleAsync(
@@ -774,9 +883,20 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         return handle;
     }
 
-    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username = null, string? chatId = null)
+    private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username = null, string? chatId = null, string? appId = null)
     {
         using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+
+        if (!string.IsNullOrWhiteSpace(appId))
+        {
+            var appOptions = await userFeishuBotConfigService.GetEffectiveOptionsByAppIdAsync(appId);
+            if (appOptions != null)
+            {
+                return appOptions;
+            }
+        }
+
         var resolvedUsername = username;
 
         if (string.IsNullOrWhiteSpace(resolvedUsername) && !string.IsNullOrWhiteSpace(chatId))
@@ -793,7 +913,6 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             }
         }
 
-        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
         return await userFeishuBotConfigService.GetEffectiveOptionsAsync(resolvedUsername);
     }
 

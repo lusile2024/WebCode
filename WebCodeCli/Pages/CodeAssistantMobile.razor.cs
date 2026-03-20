@@ -1673,6 +1673,14 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         }
     }
 
+    private async Task ShowAdminUserManagementModal()
+    {
+        if (_adminUserManagementModal != null)
+        {
+            await _adminUserManagementModal.ShowAsync();
+        }
+    }
+
     /// <summary>
     /// 项目列表变更回调
     /// </summary>
@@ -2834,6 +2842,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     
     private bool _showUserInfo = false;
     private string _currentUsername = string.Empty;
+    private bool _isAdmin = false;
 
     // 设备类型检测（用于PC/移动端路由跳转）
     private bool _hasCheckedDevice = false;
@@ -2845,6 +2854,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private UpdateNotificationModal _updateNotificationModal = default!;
     private ProjectSelectModal _projectSelectModal = default!;
     private ProjectManageModal _projectManageModal = default!;
+    private AdminUserManagementModal _adminUserManagementModal = default!;
     private CreateSessionModal _createSessionModal = default!;
     
     // 版本相关
@@ -3078,6 +3088,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     {
         public bool IsAuthenticated { get; set; }
         public string? Username { get; set; }
+        public string? Role { get; set; }
     }
     
     #endregion
@@ -3139,6 +3150,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
                 }
                 
                 _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
                 _showUserInfo = true;
             }
             catch
@@ -3156,6 +3168,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
                 _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
                 UserContextService.SetCurrentUsername(authState.Username);
                 Console.WriteLine($"[用户上下文] 从认证状态设置当前用户: {authState.Username}");
             }
