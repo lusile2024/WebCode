@@ -5,210 +5,170 @@
 </p>
 
 <p align="center">
-  <strong>🚀 随时随地，AI 工作助手 | Your AI Workspace, Anywhere</strong>
+  <strong>一个把 AI CLI、Web 会话、多用户权限和飞书机器人串起来的工作平台</strong>
 </p>
 
 <p align="center">
-  <em>远程驱动 AI 助手，支持编程、文档处理、需求分析、报告撰写等全方位工作场景</em>
+  通过浏览器或飞书卡片管理 AI 会话、工作区、项目和命令执行，支持桌面和移动端。
 </p>
 
 ---
 
-## 🌐 在线试用
+## 项目简介
 
-想要快速体验？无需安装，直接访问在线演示版：
+WebCode 是一个基于 `Blazor Server + .NET 10` 的 AI 工作平台，目标不是单纯做聊天界面，而是把本地/服务器上的 AI CLI 工具包装成一个可管理、可协作、可远程访问的工作系统。
 
-| 试用地址 | 账号 | 密码 |
-|----------|------|------|
-| **[https://webcode.tree456.com/](https://webcode.tree456.com/)** | `treechat` | `treechat@123` |
+它当前覆盖的核心场景包括：
 
-> ⚠️ **注意**：试用环境为演示用途，请勿存储敏感信息
+- 在 Web 端创建和管理 AI 会话
+- 为不同会话绑定独立工作区
+- 在飞书中通过机器人和卡片完成会话、项目、目录等操作
+- 为不同用户配置各自的 CLI 环境、飞书机器人、可访问目录和工具权限
+- 在手机、平板和桌面浏览器中持续使用同一套工作流
 
----
+如果你需要一个“可部署的 AI CLI 控制台”，而不是单机本地的命令行包装器，这个项目就是为这个目标设计的。
 
-## 💬 交流群
+## 核心能力
 
-扫码加入微信交流群，获取最新动态、反馈问题、交流使用心得：
+### 1. 多 AI CLI 接入
 
-<p align="center">
-  <img src="images/qrcode.jpg" alt="微信群二维码" width="200" />
-</p>
+当前仓库内已经围绕以下工具做了适配或运行支持：
 
----
+| 工具 | 说明 | 状态 |
+|------|------|------|
+| `Claude Code` | 会话管理、流式输出、适配器解析 | 可用 |
+| `Codex CLI` | JSONL 输出、沙箱/审批模式、会话执行 | 可用 |
+| `OpenCode` | 多模型工作流集成 | 可用 |
+| 其他 CLI | 可按适配器模式继续扩展 | 可扩展 |
 
-## ✨ 核心特色
+相关实现主要位于 [WebCodeCli.Domain/Domain/Service/Adapters](./WebCodeCli.Domain/Domain/Service/Adapters)。
 
-WebCode 是一个**在线 AI 全能工作平台**，让你可以通过 Web 浏览器远程控制各种 AI CLI 助手，实现真正的**随时随地智能办公**——无论你在地铁上、咖啡馆里，还是躺在沙发上，只要有浏览器就能完成编程、文档处理、需求分析等各种工作！
+### 2. Web 会话与工作区管理
 
-### 🎯 主要功能
+- 每个会话可绑定独立工作区
+- 支持默认目录、已有目录、项目目录、自定义目录
+- 支持文件浏览、预览、上传、复制路径等工作区操作
+- 支持历史会话切换、关闭、隔离和清理
+- 可与项目管理联动，从项目直接创建会话
 
-#### 💻 编程开发
-- **🤖 多 AI 助手支持** - 集成 Claude Code CLI、Codex CLI、GitHub Copilot CLI 等主流 AI 编程工具
-- **⚡ 实时流式输出** - 即时看到 AI 的思考和编码过程，打字机效果展示
-- **🎨 代码高亮预览** - Monaco Editor 代码高亮，支持多种编程语言
+### 3. 多用户与权限控制
 
-#### 📄 文档处理
-- **📝 文档撰写** - 支持 Markdown、Word、PDF 等格式的文档生成与编辑
-- **🔄 格式转换** - 文档格式互转，满足不同场景需求
-- **📊 数据可视化** - 表格数据处理与图表生成
+当前系统已经具备多用户基础能力：
 
-#### 🎯 需求分析
-- **📋 需求文档生成** - 自动生成 PRD、用户故事、功能规格说明
-- **🔍 需求澄清** - AI 辅助需求分析与优化建议
-- **📈 优先级评估** - 智能评估需求优先级与工作量
+- 用户启用/禁用
+- 用户可用 CLI 工具限制
+- 用户白名单目录策略
+- 用户级 CLI 环境变量配置
+- 用户级飞书机器人配置
+- 默认共享配置 + 用户覆盖配置
 
-#### 📊 报告撰写
-- **📈 项目报告** - 项目进度、总结报告自动生成
-- **📉 数据分析报告** - 数据洞察与可视化报告
-- **💼 商务文档** - 商业计划书、提案文档等
+这意味着系统已经不再是单用户本地玩具，而是可以作为团队内的 AI 工作平台运行。
 
-#### 🛠️ 通用特性
-- **📱 全平台支持** - 完整的移动端适配，手机、平板、电脑无缝切换
-- **📂 会话工作区** - 每个会话独立工作目录，文件隔离，安全可靠
-- **🔐 安全执行** - 沙箱环境，命令白名单，防注入保护
+### 4. 飞书机器人与卡片工作流
 
-## 🖥️ 支持的 AI CLI 工具
+飞书侧不是简单消息转发，而是一套完整的工作入口：
 
-### ✅ 已完整支持（流式JSON解析）
+- 用户绑定自己的飞书机器人
+- 会话管理卡片
+- 项目管理卡片
+- 白名单目录浏览
+- 项目克隆 / 拉取 / 分支切换
+- 会话完成后的普通文本提醒
 
-| 工具 | 命令 | 特点 | 状态 |
-|------|------|------|------|
-| **Claude Code CLI** | `claude` | MCP 服务器、会话恢复、stream-json 输出、代理系统 | 🟢 已启用 |
-| **Codex CLI** | `codex` | 沙箱执行、网络搜索、Git 集成、JSONL 输出 | 🟢 已启用 |
-| **OpenCode CLI** | `opencode` | GitHub Models 集成、多模型支持、流式输出 | 🟢 已启用 |
+适配代码主要位于：
 
-### 🔧 待扩展支持
+- [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels)
 
-| 工具 | 命令 | 特点 | 状态 |
-|------|------|------|------|
-| **GitHub Copilot CLI** | `copilot` | GitHub 集成、细粒度权限 | 🟡 已配置，待适配 |
-| **Qwen CLI** | `qwen` | YOLO 模式、检查点、扩展系统 | 🟡 已配置，待适配 |
-| **Gemini CLI** | `gemini` | Google AI、简洁配置 | 🟡 已配置，待适配 |
+### 5. 桌面与移动端统一体验
 
-> 📚 详细的 CLI 工具使用说明请查看 [cli/README.md](./cli/README.md)
-> 
-> 💡 **扩展支持**：如需添加新的 CLI 工具适配器，请参考 `WebCode.Domain/Domain/Service/Adapters/` 目录下的现有实现
+- 响应式布局
+- 移动端导航与输入区域优化
+- 适配手机和平板
+- 同一套会话、文件、预览、设置工作流
 
-## 📱 移动端支持
-
-WebCode 针对移动设备进行了全面优化：
-
-- **响应式布局** - 自适应手机、平板、桌面各种屏幕
-- **触摸优化** - 44px 触摸目标，手势支持，按压反馈
-- **iOS 适配** - 解决 Safari 100vh 问题，适配刘海屏
-- **横竖屏切换** - 无缝切换，内容不丢失
-- **虚拟键盘适配** - 输入时自动调整视口
-
-### 📱 移动端兼容界面
-
-- **顶部导航与工具入口** - 小屏优先布局，常用功能一键触达
-- **对话区气泡样式** - 阅读清晰、滚动顺滑
-- **底部输入栏与快捷操作** - 触摸友好，减少误触
-- **底部导航栏** - 对话/输出/文件/预览/设置快速切换
+移动端界面示意：
 
 ![移动端界面](images/mobile.png)
 
-### 测试设备支持
+## 产品截图
 
-- ✅ iPhone SE / iPhone 12-14 / iPhone Pro Max
-- ✅ iPad Mini / iPad Pro
-- ✅ Android 手机（各尺寸）
-- ✅ Chrome / Safari / Firefox / Edge 移动版
-
-## 🧭 首次安装设置向导
-
-首次安装会进入设置界面（/setup），按步骤完成初始化配置：
-
-![设置向导 - 第一步](images/setup1.png)
-![设置向导 - 第二步](images/setup2.png)
-![设置向导 - 第三步](images/setup3.png)
-
-## 🖼️ 产品截图
-
-> 以下截图来自项目内置演示素材，实际界面以当前版本为准。
+> 以下图片来自仓库内置素材，用于说明典型界面和使用方式。
 
 ![代码编程助手](images/coding.png)
 ![PPT/文档辅助](images/ppt.png)
 ![Skills/工作流](images/skill.png)
 ![游戏/创意示例](images/games.png)
 
-## 🚀 快速开始
+## 快速开始
 
-### 方式一：Docker 一键部署（推荐）
+### 方式一：Docker 部署
 
-**无需任何配置，30 秒启动！** 首次访问时，系统会自动引导您完成所有配置。
-
-```bash
-# 克隆项目
-git clone https://github.com/shuyu-labs/WebCode.git
-cd WebCode
-
-# 一键启动
-docker compose up -d
-
-# 访问 http://localhost:5000
-# 首次访问会自动进入设置向导
-```
-
-> 📖 详细部署文档请参考 [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
->
-> 🔧 需要预置环境变量/无人值守部署与内置 CLI 验证：参考 [docs/Docker-CLI-集成部署指南.md](./docs/Docker-CLI-集成部署指南.md)
-
-#### 更新 Docker 部署
-
-更新到最新版本的步骤：
+这是最直接的启动方式，适合试用、内网部署和小团队使用。
 
 ```bash
-# 进入项目目录
+git clone https://github.com/lusile2024/WebCode.git
 cd WebCode
-
-# 拉取最新代码
-git pull
-
-# 停止并移除容器
-docker compose down
-
-# 删除旧镜像
-docker rmi webcodecli:latest
-
-# 重新构建并启动
 docker compose up -d
 ```
+
+启动后访问：
+
+- `http://localhost:5000`
+
+首次访问会进入初始化流程。
+
+更多部署细节可查看：
+
+- [QUICKSTART.md](./QUICKSTART.md)
+- [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
+- [docs/Docker-CLI-集成部署指南.md](./docs/Docker-CLI-集成部署指南.md)
 
 ### 方式二：本地开发运行
 
+适合调试、二次开发和本地联调。
+
 #### 环境要求
 
-- .NET 10.0 SDK
-- 已安装的 AI CLI 工具（如 Claude Code CLI、Codex CLI）
+- `.NET 10 SDK`
+- 已安装目标 AI CLI，例如 `claude`、`codex`、`opencode`
 
-#### 安装运行
+#### 启动命令
 
 ```bash
-# 克隆项目
-git clone https://github.com/shuyu-labs/WebCode.git
+git clone https://github.com/lusile2024/WebCode.git
 cd WebCode
-
-# 恢复依赖
 dotnet restore
-
-# 运行应用
 dotnet run --project WebCodeCli
 ```
 
-应用将在 `http://localhost:5000` 启动，访问 `/code-assistant` 开始编程！
+默认访问地址：
 
-### 配置 Claude/Codex 等 CLI（推荐界面配置）
+- `http://localhost:5000`
 
-默认情况下无需编辑 appsettings.json：首次启动会进入设置向导（/setup），在 Web 界面完成初始化；之后可在“系统设置”中随时调整 Claude/Codex/OpenCode 等参数。
+## 首次初始化建议
 
-仅在以下场景建议使用 appsettings.json / 环境变量进行预置：
+首次启动建议按下面顺序完成配置：
 
-- 需要无人值守部署（CI/CD）
-- 需要把配置写死在镜像/配置文件中
-- 进行本地开发调试且希望用文件快速切换配置
+1. 创建管理员账户
+2. 确认是否开启登录认证
+3. 配置至少一个可用 CLI 工具的环境变量
+4. 验证工作区根目录和存储目录
+5. 如需飞书集成，再配置飞书机器人参数
+6. 如需多用户，进入管理界面配置用户、目录白名单和工具权限
 
-示例（高级用法）：
+初始化向导界面示意：
+
+![设置向导 - 第一步](images/setup1.png)
+![设置向导 - 第二步](images/setup2.png)
+![设置向导 - 第三步](images/setup3.png)
+
+## 配置说明
+
+### CLI 配置
+
+CLI 工具配置支持通过界面和配置文件两种方式维护。
+
+典型配置结构如下：
 
 ```json
 {
@@ -223,7 +183,7 @@ dotnet run --project WebCodeCli
       },
       {
         "Id": "codex",
-        "Name": "OpenAI Codex",
+        "Name": "Codex",
         "Command": "codex",
         "ArgumentTemplate": "exec \"{prompt}\"",
         "Enabled": true
@@ -233,152 +193,115 @@ dotnet run --project WebCodeCli
 }
 ```
 
-## 🏗️ 技术架构
+更详细的配置与说明可参考：
 
-```
+- [cli/README.md](./cli/README.md)
+- [docs/CLI工具配置说明.md](./docs/CLI工具配置说明.md)
+- [docs/Codex配置说明.md](./docs/Codex配置说明.md)
+
+### Docker 数据目录
+
+`docker-compose.yml` 默认会挂载以下目录：
+
+- `./webcodecli-data`：数据库与运行数据
+- `./webcodecli-workspaces`：工作区目录
+- `./webcodecli-logs`：日志
+
+### 数据库
+
+默认使用 SQLite：
+
+- `WebCodeCli.db`
+
+本地开发默认连接字符串来自根目录 [appsettings.json](./appsettings.json)。
+
+## 多用户与飞书建议
+
+如果你准备把它作为团队服务运行，建议优先关注这几项：
+
+- 为每个用户设置独立的白名单目录
+- 为每个用户限制可用 CLI 工具
+- 为每个用户配置自己的飞书机器人
+- 避免把数据库文件提交到 Git
+- 明确区分“共享默认配置”和“用户覆盖配置”
+
+飞书和多用户能力相关代码分布在：
+
+- [WebCodeCli/Controllers](./WebCodeCli/Controllers)
+- [WebCodeCli/Components](./WebCodeCli/Components)
+- [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels)
+- [WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig](./WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig)
+
+## 项目结构
+
+当前仓库的主要结构如下：
+
+```text
 WebCode/
-├── WebCode/              # 主项目 (Blazor Server)
-│   ├── Components/          # Blazor 组件
-│   ├── Pages/               # 页面
-│   │   └── CodeAssistant/   # 编程助手页面
-│   ├── wwwroot/             # 静态资源
-│   └── Program.cs           # 应用入口
-├── WebCode.Domain/       # 领域层 (DDD)
-│   ├── Domain/
-│   │   ├── Model/           # 领域模型
-│   │   └── Service/         # 领域服务
-│   │       └── Adapters/    # CLI 适配器
-│   └── Repositories/        # 数据仓储
-└── cli/                     # CLI 工具文档
+├── WebCodeCli/                # Web 应用（Blazor Server）
+├── WebCodeCli.Domain/         # 领域服务、仓储、CLI/飞书适配
+├── WebCodeCli.Domain.Tests/   # 领域层测试
+├── tests/WebCodeCli.Tests/    # Web / 集成相关测试
+├── cli/                       # CLI 使用说明
+├── docs/                      # 额外文档
+├── docker-compose.yml         # Docker 部署入口
+└── README.md
 ```
 
-### 技术栈
+和旧版文档相比，当前实际项目名已经是：
+
+- `WebCodeCli`
+- `WebCodeCli.Domain`
+
+如果你在二次开发时看到 `WebCode` / `WebCode.Domain` 这类旧路径描述，请以仓库真实目录为准。
+
+## 技术栈
 
 | 类别 | 技术 |
 |------|------|
-| **前端框架** | Blazor Server + Tailwind CSS |
-| **代码编辑器** | Monaco Editor |
-| **AI 功能** | Microsoft Semantic Kernel |
-| **数据访问** | SqlSugar ORM (Sqlite/PostgreSQL) |
-| **实时通信** | Server-Sent Events (SSE) |
-| **进程管理** | System.Diagnostics.Process |
+| Web 框架 | Blazor Server |
+| 运行时 | .NET 10 |
+| 编辑器 | Monaco Editor |
+| 数据访问 | SqlSugar |
+| 默认数据库 | SQLite |
+| 反向代理 | YARP |
+| Markdown | Markdig |
+| AI CLI 集成 | Claude Code / Codex / OpenCode 等 |
 
-## 📋 功能特性
+## 常用文档
 
-### 聊天与交互
-- ✅ 左右分栏布局（移动端上下布局）
-- ✅ 消息历史记录
-- ✅ 流式输出（打字机效果）
-- ✅ 快捷键发送 (Ctrl+Enter)
-- ✅ 清空会话
+- [QUICKSTART.md](./QUICKSTART.md)
+- [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
+- [docs/QUICKSTART_CodeAssistant.md](./docs/QUICKSTART_CodeAssistant.md)
+- [docs/README_CodeAssistant.md](./docs/README_CodeAssistant.md)
+- [docs/workspace-management-guide.md](./docs/workspace-management-guide.md)
+- [docs/workspace-management-deployment-guide.md](./docs/workspace-management-deployment-guide.md)
 
-### 预览与展示
-- ✅ 代码高亮预览 (Monaco Editor)
-- ✅ Markdown 渲染
-- ✅ HTML 实时预览
-- ✅ 原始输出查看
-- ✅ 多 Tab 切换
+## 在线试用与交流
 
-### 工作区管理
-- ✅ 会话隔离工作区
-- ✅ 文件上传/下载
-- ✅ 文件树浏览
-- ✅ 自动清理过期工作区
+如果你保留当前公开体验入口，可以继续使用下面的信息：
 
-### 安全特性
-- ✅ 命令白名单验证
-- ✅ 输入转义（防注入）
-- ✅ 并发限制
-- ✅ 超时控制
+| 地址 | 用户名 | 密码 |
+|------|--------|------|
+| [https://webcode.tree456.com/](https://webcode.tree456.com/) | `treechat` | `treechat@123` |
 
-## 📚 文档
+> 这类公开演示环境仅适合体验，不适合存放敏感数据。
 
-- [快速启动指南](./docs/QUICKSTART_CodeAssistant.md)
-- [编程助手使用说明](./docs/README_CodeAssistant.md)
-- [CLI 工具配置说明](./docs/CLI工具配置说明.md)
-- [移动端兼容性说明](./docs/移动端兼容性优化说明.md)
-- [Codex 配置说明](./docs/Codex配置说明.md)
-- [环境变量配置](./docs/环境变量配置功能说明.md)
+交流群二维码：
 
-## 💡 推荐 Skills
+<p align="center">
+  <img src="images/qrcode.jpg" alt="微信群二维码" width="200" />
+</p>
 
-提升 AI 编程助手能力的优秀 Skills 资源：
+## 许可证
 
-- [**planning-with-files**](https://github.com/OthmanAdi/planning-with-files) - 基于文件的项目规划与任务管理技能
-- [**Anthropic Skills**](https://github.com/anthropics/skills) - Anthropic 官方 Skills 集合，提供多种 Claude 增强能力
-- [**UI/UX Pro Max Skill**](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) - 专业的 UI/UX 设计与开发技能
+本项目采用 [AGPLv3](LICENSE)。
 
-> 💡 **提示**：这些 Skills 可以与 Claude Code CLI 等 AI 助手配合使用，增强代码生成、项目规划、UI 设计等能力。
-
-## 🛠️ 使用场景
-
-### 💻 编程开发
-- **移动编程** - 手机上随时处理代码任务，紧急 bug 修复不再受限
-- **远程开发** - 通过浏览器远程驱动 AI 助手，无需本地开发环境
-- **代码审查** - AI 辅助代码审查、测试用例生成、代码重构
-- **学习编程** - 初学者通过 AI 互动学习，获得即时反馈
-
-### 📄 文档工作
-- **技术文档** - API 文档、技术规范、系统设计文档撰写
-- **项目文档** - 项目计划、进度报告、总结文档生成
-- **用户手册** - 产品使用手册、操作指南、FAQ 文档
-- **内部文档** - 会议纪要、工作日志、知识库整理
-
-### 🎯 产品管理
-- **需求分析** - PRD 撰写、用户故事拆分、需求优先级评估
-- **功能设计** - 功能规格说明、交互设计文档、原型说明
-- **项目规划** - 里程碑规划、任务分解、资源评估
-- **数据分析** - 用户反馈分析、数据报告生成、趋势洞察
-
-### 💼 商务办公
-- **商业文档** - 商业计划书、项目提案、合作方案
-- **报告撰写** - 工作总结、分析报告、述职报告
-- **沟通协作** - 邮件撰写、通知公告、培训材料
-- **创意策划** - 营销方案、活动策划、内容创作
-
-## 🛠️ 高级配置
-
-### 工作区配置
-
-```json
-"CliTools": {
-  "TempWorkspaceRoot": "D:\\Temp\\WebCode\\Workspaces",
-  "WorkspaceExpirationHours": 24,
-  "NpmGlobalPath": "",
-  "MaxConcurrentExecutions": 3,
-  "DefaultTimeoutSeconds": 300
-}
-```
-
-| 配置项 | 说明 | 示例值 |
-|--------|------|--------|
-| `TempWorkspaceRoot` | 临时工作区根目录，用于存放会话隔离的工作文件 | `D:\\Temp\\WebCode\\Workspaces` |
-| `WorkspaceExpirationHours` | 工作区过期时间（小时），过期后自动清理 | `24` |
-| `NpmGlobalPath` | NPM 全局安装路径（可选，留空则自动检测） | `C:\\Users\\YourUsername\\AppData\\Roaming\\npm\\` 或留空 `""` |
-| `MaxConcurrentExecutions` | 最大并发执行数 | `3` |
-| `DefaultTimeoutSeconds` | 默认超时时间（秒） | `300` |
-
-> 💡 **提示**：
-> - **Windows 用户**：NPM 全局路径通常为 `C:\Users\{用户名}\AppData\Roaming\npm\`
-> - **Linux/Mac 用户**：NPM 全局路径通常为 `/usr/local/bin/` 或 `~/.npm-global/bin/`
-> - 工作区目录建议使用绝对路径，确保有足够的磁盘空间
-
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-本项目采用 **AGPLv3** 开源许可证。
-
-- 开源使用：遵循 [AGPLv3](https://www.gnu.org/licenses/agpl-3.0.html) 协议
-- 商业授权：如需商业授权，请联系 **antskpro@qq.com**
-
-详细信息请查看 [LICENSE](LICENSE) 文件。
+- 开源使用：遵循 AGPLv3
+- 商业授权：请联系仓库维护者或相关商务渠道
 
 ---
 
 <p align="center">
-  <strong>🌟 让 AI 成为你的编程伙伴，随时随地，代码随行 🌟</strong>
+  <strong>让 AI CLI 从“本地命令”升级为“可管理的工作平台”</strong>
 </p>
