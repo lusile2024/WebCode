@@ -5,206 +5,168 @@
 </p>
 
 <p align="center">
-  <strong>🚀 Your AI Workspace, Anywhere | 随时随地，AI 工作助手</strong>
+  <strong>A workspace platform that connects AI CLIs, web sessions, multi-user controls, and Feishu bots</strong>
 </p>
 
 <p align="center">
-  <em>Remote AI Assistant supporting coding, document processing, requirement analysis, report writing, and more across all platforms</em>
+  Manage AI sessions, workspaces, projects, and command execution from the browser or Feishu cards, with desktop and mobile support.
 </p>
 
 ---
 
-## 🌐 Online Demo
+## Overview
 
-Want to try it quickly? No installation required, just visit the online demo:
+WebCode is an AI workspace platform built on `Blazor Server + .NET 10`. It is not just a chat UI. The goal is to turn local or server-side AI CLI tools into a manageable, collaborative, remotely accessible working system.
 
-| Demo URL | Username | Password |
-|----------|----------|----------|
-| **[https://webcode.tree456.com/](https://webcode.tree456.com/)** | `treechat` | `treechat@123` |
+Typical scenarios already covered by the project include:
 
-> ⚠️ **Note**: This demo environment is for demonstration purposes only. Please do not store sensitive information.
+- Creating and managing AI sessions from the web UI
+- Binding a dedicated workspace to each session
+- Managing sessions, projects, and directories through Feishu bots and cards
+- Configuring per-user CLI environments, Feishu bots, workspace allowlists, and tool permissions
+- Using the same workflow across desktop, tablet, and mobile browsers
 
----
+If you need a deployable control plane for AI CLIs instead of a single-user local wrapper, this repository is designed for that use case.
 
-## 💬 Community
+## Core Capabilities
 
-Join our WeChat group to get the latest updates, report issues, and share your experiences:
+### 1. Multiple AI CLI integrations
 
-<p align="center">
-  <img src="images/qrcode.jpg" alt="WeChat Group QR Code" width="200" />
-</p>
+The repository already includes adapters or runtime support for the following tools:
 
----
+| Tool | Notes | Status |
+|------|-------|--------|
+| `Claude Code` | Session management, streaming output, adapter parsing | Available |
+| `Codex CLI` | JSONL output, sandbox/approval modes, session execution | Available |
+| `OpenCode` | Multi-model workflow integration | Available |
+| Other CLIs | Can be added with the same adapter pattern | Extensible |
 
-## ✨ Core Features
+Related implementations are primarily located in [WebCodeCli.Domain/Domain/Service/Adapters](./WebCodeCli.Domain/Domain/Service/Adapters).
 
-WebCodeCli is an **online AI-powered workspace platform** that allows you to remotely control various AI CLI assistants through a web browser, enabling **true work anywhere, anytime** - whether you're on the subway, in a coffee shop, or lounging on the sofa, you can code, write documents, analyze requirements, and more with just a browser!
+### 2. Web session and workspace management
 
-### 🎯 Main Features
+- Each session can use its own workspace
+- Supports default directories, existing folders, project folders, and custom paths
+- Supports file browsing, preview, upload, and path copy operations
+- Supports session history, switching, closing, isolation, and cleanup
+- Can create sessions directly from project management flows
 
-#### 💻 Programming & Development
-- **🤖 Multiple AI Assistant Support** - Integration with mainstream AI programming tools like Claude Code CLI, Codex CLI, GitHub Copilot CLI, etc.
-- **⚡ Real-time Streaming Output** - Instantly see AI's thinking and coding process with typewriter effect
-- **🎨 Code Highlighting Preview** - Monaco Editor with syntax highlighting for multiple languages
+### 3. Multi-user controls and permissions
 
-#### 📄 Document Processing
-- **📝 Document Creation** - Generate and edit documents in Markdown, Word, PDF, and more
-- **🔄 Format Conversion** - Convert between different document formats seamlessly
-- **📊 Data Visualization** - Process tabular data and generate charts
+The current system already includes the foundations for multi-user operation:
 
-#### 🎯 Requirement Analysis
-- **📋 Requirements Documentation** - Auto-generate PRDs, user stories, and feature specifications
-- **🔍 Requirement Clarification** - AI-assisted requirement analysis and optimization suggestions
-- **📈 Priority Assessment** - Smart evaluation of requirement priorities and workload
+- Enable or disable users
+- Restrict which CLI tools each user can use
+- Configure per-user workspace allowlists
+- Configure per-user CLI environment variables
+- Configure per-user Feishu bot settings
+- Use shared defaults with user-level overrides
 
-#### 📊 Report Writing
-- **📈 Project Reports** - Auto-generate project progress and summary reports
-- **📉 Data Analysis Reports** - Data insights and visualization reports
-- **💼 Business Documents** - Business plans, proposals, and more
+That means the project is no longer just a local single-user tool. It can already operate as an internal team platform.
 
-#### 🛠️ Universal Features
-- **📱 Cross-Platform Support** - Full mobile optimization, seamless experience across phones, tablets, and computers
-- **📂 Session Workspace** - Isolated working directories for each session, secure and reliable
-- **🔐 Secure Execution** - Sandbox environment, command whitelist, injection protection
+### 4. Feishu bots and card-driven workflows
 
-## 🖥️ Supported AI CLI Tools
+The Feishu integration is more than simple message forwarding. It acts as a full operational entry point:
 
-### ✅ Fully Supported (Streaming JSON Parsing)
+- Users can bind their own Feishu bots
+- Session management cards
+- Project management cards
+- Workspace allowlist browsing
+- Project clone, pull, and branch switching
+- Plain text completion notifications after session work finishes
 
-| Tool | Command | Features | Status |
-|------|---------|----------|--------|
-| **Claude Code CLI** | `claude` | MCP server, session recovery, stream-json output, proxy system | 🟢 Enabled |
-| **Codex CLI** | `codex` | Sandbox execution, web search, Git integration, JSONL output | 🟢 Enabled |
-| **OpenCode CLI** | `opencode` | GitHub Models integration, multi-model support, streaming output | 🟢 Enabled |
+Relevant code is mainly located in [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels).
 
-### 🔧 To Be Extended
+### 5. Unified desktop and mobile experience
 
-| Tool | Command | Features | Status |
-|------|---------|----------|--------|
-| **GitHub Copilot CLI** | `copilot` | GitHub integration, fine-grained permissions | 🟡 Configured, pending adaptation |
-| **Qwen CLI** | `qwen` | YOLO mode, checkpoints, extension system | 🟡 Configured, pending adaptation |
-| **Gemini CLI** | `gemini` | Google AI, simple configuration | 🟡 Configured, pending adaptation |
+- Responsive layouts
+- Mobile-friendly navigation and input areas
+- Works on phones and tablets
+- Shares the same session, file, preview, and settings workflow across devices
 
-> 📚 For detailed CLI tool usage instructions, please refer to [cli/README.md](./cli/README.md)
-> 
-> 💡 **Extension Support**: To add new CLI tool adapters, please refer to the existing implementations in the `WebCodeCli.Domain/Domain/Service/Adapters/` directory
-
-## 📱 Mobile Support
-
-WebCodeCli is fully optimized for mobile devices:
-
-- **Responsive Layout** - Adapts to phones, tablets, and desktop screens
-- **Touch Optimization** - 44px touch targets, gesture support, press feedback
-- **iOS Adaptation** - Solves Safari 100vh issue, adapts to notch screens
-- **Portrait/Landscape Switching** - Seamless switching without content loss
-- **Virtual Keyboard Adaptation** - Auto-adjusts viewport during input
-
-### 📱 Mobile-Compatible UI
-
-- **Top navigation & quick actions** - Small-screen-first layout with fast access to core tools
-- **Chat bubble layout** - Clear reading and smooth scrolling
-- **Bottom input & shortcuts** - Touch-friendly controls that reduce mis-taps
-- **Bottom tab bar** - Quick access to Chat / Output / Files / Preview / Settings
+Mobile UI preview:
 
 ![Mobile UI](images/mobile.png)
 
-### Tested Device Support
+## Screenshots
 
-- ✅ iPhone SE / iPhone 12-14 / iPhone Pro Max
-- ✅ iPad Mini / iPad Pro
-- ✅ Android phones (various sizes)
-- ✅ Chrome / Safari / Firefox / Edge mobile versions
+> The images below are bundled repo assets used to illustrate the product and workflow.
 
-## 🧭 First-Run Setup Wizard
+![Coding assistant](images/coding.png)
+![PPT and document helper](images/ppt.png)
+![Skills and workflows](images/skill.png)
+![Games and creative examples](images/games.png)
 
-On first install, you will be guided through the setup page (/setup) to complete initialization:
+## Quick Start
+
+### Option 1: Docker deployment
+
+This is the most direct way to start the system and is suitable for trials, internal deployment, and small team usage.
+
+```bash
+git clone https://github.com/lusile2024/WebCode.git
+cd WebCode
+docker compose up -d
+```
+
+After startup, open:
+
+- `http://localhost:5000`
+
+The first visit will guide you through initialization.
+
+For more deployment details, see:
+
+- [QUICKSTART.md](./QUICKSTART.md)
+- [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
+- [docs/Docker-CLI-集成部署指南.md](./docs/Docker-CLI-集成部署指南.md)
+
+### Option 2: Local development
+
+This is the better option for debugging, customization, and local integration work.
+
+#### Requirements
+
+- `.NET 10 SDK`
+- Installed target AI CLIs such as `claude`, `codex`, or `opencode`
+
+#### Start commands
+
+```bash
+git clone https://github.com/lusile2024/WebCode.git
+cd WebCode
+dotnet restore
+dotnet run --project WebCodeCli
+```
+
+Default local URL:
+
+- `http://localhost:5000`
+
+## Recommended first-time setup
+
+For the initial setup, the recommended order is:
+
+1. Create the administrator account.
+2. Decide whether login authentication should be enabled.
+3. Configure environment variables for at least one usable CLI tool.
+4. Verify the workspace root and storage directories.
+5. Configure Feishu bot settings if Feishu integration is needed.
+6. Open the management UI to configure users, workspace allowlists, and tool permissions if multi-user mode is needed.
+
+Setup wizard preview:
 
 ![Setup wizard - Step 1](images/setup1.png)
 ![Setup wizard - Step 2](images/setup2.png)
 ![Setup wizard - Step 3](images/setup3.png)
 
-## 🖼️ Screenshots
+## Configuration
 
-> These images are demo assets included in the repo; the actual UI may vary by version.
+### CLI configuration
 
-![Coding assistant](images/coding.png)
-![PPT / document helper](images/ppt.png)
-![Skills / workflows](images/skill.png)
-![Games / creative examples](images/games.png)
+CLI tool configuration can be maintained through either the UI or configuration files.
 
-## 🚀 Quick Start
-
-### Option 1: Docker One-Click Deployment (Recommended)
-
-**No configuration required, start in 30 seconds!** The system will automatically guide you through all configuration on first visit.
-
-```bash
-# Clone the project
-git clone https://github.com/shuyu-labs/WebCode.git
-cd WebCode
-
-# One-click start
-docker compose up -d
-
-# Visit http://localhost:5000
-# First visit will automatically enter the setup wizard
-```
-
-> 📖 For detailed deployment documentation, see [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
->
-> 🔧 For pre-provisioning (env vars / unattended deploy) and built-in CLI verification, see [docs/Docker-CLI-集成部署指南.md](./docs/Docker-CLI-集成部署指南.md)
-
-#### Updating Docker Deployment
-
-To update to the latest version:
-
-```bash
-# Navigate to project directory
-cd WebCode
-
-# Pull latest code
-git pull
-
-# Stop and remove containers
-docker compose down
-
-# Remove old image
-docker rmi webcodecli:latest
-
-# Rebuild and start
-docker compose up -d
-```
-
-### Option 2: Local Development
-
-#### Requirements
-
-- .NET 10.0 SDK
-- Installed AI CLI tools (such as Claude Code CLI, Codex CLI)
-
-#### Installation and Running
-
-```bash
-# Clone the project
-git clone https://github.com/shuyu-labs/WebCode.git
-cd WebCode
-
-# Restore dependencies
-dotnet restore
-
-# Run the application
-dotnet run --project WebCodeCli
-```
-
-The application will start at `http://localhost:5000`, visit `/code-assistant` to start coding!
-
-### Configure CLI Tools
-
-By default, you do not need to edit appsettings.json. On first visit, you will enter the setup wizard (/setup) to initialize settings in the Web UI; later you can adjust Claude/Codex/OpenCode in System Settings.
-
-Use appsettings.json / environment variables only if you want pre-provisioning (CI/CD, unattended deployment, or fast local switching).
-
-Example (advanced):
+A typical configuration shape looks like this:
 
 ```json
 {
@@ -219,7 +181,7 @@ Example (advanced):
       },
       {
         "Id": "codex",
-        "Name": "OpenAI Codex",
+        "Name": "Codex",
         "Command": "codex",
         "ArgumentTemplate": "exec \"{prompt}\"",
         "Enabled": true
@@ -229,152 +191,115 @@ Example (advanced):
 }
 ```
 
-## 🏗️ Technical Architecture
+More detailed references:
 
-```
-WebCodeCli/
-├── WebCodeCli/              # Main project (Blazor Server)
-│   ├── Components/          # Blazor components
-│   ├── Pages/               # Pages
-│   │   └── CodeAssistant/   # Programming assistant page
-│   ├── wwwroot/             # Static resources
-│   └── Program.cs           # Application entry
-├── WebCodeCli.Domain/       # Domain layer (DDD)
-│   ├── Domain/
-│   │   ├── Model/           # Domain models
-│   │   └── Service/         # Domain services
-│   │       └── Adapters/    # CLI adapters
-│   └── Repositories/        # Data repositories
-└── cli/                     # CLI tools documentation
+- [cli/README.md](./cli/README.md)
+- [docs/CLI工具配置说明.md](./docs/CLI工具配置说明.md)
+- [docs/Codex配置说明.md](./docs/Codex配置说明.md)
+
+### Docker data directories
+
+By default, `docker-compose.yml` mounts the following directories:
+
+- `./webcodecli-data` for database and runtime data
+- `./webcodecli-workspaces` for workspace storage
+- `./webcodecli-logs` for logs
+
+### Database
+
+The default database is SQLite:
+
+- `WebCodeCli.db`
+
+For local development, the default connection string comes from [appsettings.json](./appsettings.json).
+
+## Multi-user and Feishu deployment notes
+
+If you plan to run WebCode as a team service, these points matter first:
+
+- Define separate workspace allowlists for each user
+- Restrict which CLI tools each user may use
+- Bind a dedicated Feishu bot per user
+- Keep database files out of Git
+- Separate shared default settings from user-specific overrides
+
+Code related to multi-user and Feishu capabilities is mainly distributed across:
+
+- [WebCodeCli/Controllers](./WebCodeCli/Controllers)
+- [WebCodeCli/Components](./WebCodeCli/Components)
+- [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels)
+- [WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig](./WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig)
+
+## Project structure
+
+The main repository structure is:
+
+```text
+WebCode/
+├── WebCodeCli/                # Web application (Blazor Server)
+├── WebCodeCli.Domain/         # Domain services, repositories, CLI and Feishu adapters
+├── WebCodeCli.Domain.Tests/   # Domain-layer tests
+├── tests/WebCodeCli.Tests/    # Web and integration-related tests
+├── cli/                       # CLI usage documentation
+├── docs/                      # Additional documentation
+├── docker-compose.yml         # Docker deployment entrypoint
+└── README.md
 ```
 
-### Tech Stack
+Compared with older documentation, the actual project names are now:
+
+- `WebCodeCli`
+- `WebCodeCli.Domain`
+
+If you still see old references such as `WebCode` or `WebCode.Domain` in historical docs or notes, use the real repository structure instead.
+
+## Tech stack
 
 | Category | Technology |
 |----------|------------|
-| **Frontend Framework** | Blazor Server + Tailwind CSS |
-| **Code Editor** | Monaco Editor |
-| **AI Features** | Microsoft Semantic Kernel |
-| **Data Access** | SqlSugar ORM (Sqlite/PostgreSQL) |
-| **Real-time Communication** | Server-Sent Events (SSE) |
-| **Process Management** | System.Diagnostics.Process |
+| Web framework | Blazor Server |
+| Runtime | .NET 10 |
+| Editor | Monaco Editor |
+| Data access | SqlSugar |
+| Default database | SQLite |
+| Reverse proxy | YARP |
+| Markdown | Markdig |
+| AI CLI integration | Claude Code, Codex, OpenCode, and more |
 
-## 📋 Features
+## Useful documentation
 
-### Chat & Interaction
-- ✅ Left-right split layout (top-bottom on mobile)
-- ✅ Message history
-- ✅ Streaming output (typewriter effect)
-- ✅ Shortcut send (Ctrl+Enter)
-- ✅ Clear session
+- [QUICKSTART.md](./QUICKSTART.md)
+- [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
+- [docs/QUICKSTART_CodeAssistant.md](./docs/QUICKSTART_CodeAssistant.md)
+- [docs/README_CodeAssistant.md](./docs/README_CodeAssistant.md)
+- [docs/workspace-management-guide.md](./docs/workspace-management-guide.md)
+- [docs/workspace-management-deployment-guide.md](./docs/workspace-management-deployment-guide.md)
 
-### Preview & Display
-- ✅ Code highlighting preview (Monaco Editor)
-- ✅ Markdown rendering
-- ✅ HTML live preview
-- ✅ Raw output view
-- ✅ Multi-tab switching
+## Public demo and community
 
-### Workspace Management
-- ✅ Session-isolated workspace
-- ✅ File upload/download
-- ✅ File tree browsing
-- ✅ Auto-cleanup of expired workspaces
+If you keep the current public demo online, the following information can still be used:
 
-### Security Features
-- ✅ Command whitelist validation
-- ✅ Input escaping (injection prevention)
-- ✅ Concurrency limits
-- ✅ Timeout control
+| URL | Username | Password |
+|-----|----------|----------|
+| [https://webcode.tree456.com/](https://webcode.tree456.com/) | `treechat` | `treechat@123` |
 
-## 📚 Documentation
+> Public demo environments are for evaluation only and should not be used for sensitive data.
 
-- [Quick Start Guide](./docs/QUICKSTART_CodeAssistant.md)
-- [Code Assistant Usage Guide](./docs/README_CodeAssistant.md)
-- [CLI Tool Configuration Guide](./docs/CLI工具配置说明.md)
-- [Mobile Compatibility Guide](./docs/移动端兼容性优化说明.md)
-- [Codex Configuration Guide](./docs/Codex配置说明.md)
-- [Environment Variables Configuration](./docs/环境变量配置功能说明.md)
+Community QR code:
 
-## 💡 Recommended Skills
+<p align="center">
+  <img src="images/qrcode.jpg" alt="WeChat group QR code" width="200" />
+</p>
 
-Excellent Skills resources to enhance AI programming assistant capabilities:
+## License
 
-- [**planning-with-files**](https://github.com/OthmanAdi/planning-with-files) - File-based project planning and task management skill
-- [**Anthropic Skills**](https://github.com/anthropics/skills) - Official Anthropic Skills collection providing various Claude enhancement capabilities
-- [**UI/UX Pro Max Skill**](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) - Professional UI/UX design and development skill
+This project is licensed under [AGPLv3](LICENSE).
 
-> 💡 **Tip**: These Skills can be used with AI assistants like Claude Code CLI to enhance code generation, project planning, UI design capabilities, and more.
-
-## 🔧 Use Cases
-
-### 💻 Programming & Development
-- **Mobile Coding** - Handle code tasks on your phone anytime, emergency bug fixes without limits
-- **Remote Development** - Drive AI assistants via browser, no local environment needed
-- **Code Review** - AI-assisted code review, test case generation, and refactoring
-- **Learning Programming** - Interactive learning with AI, instant feedback for beginners
-
-### 📄 Documentation Work
-- **Technical Documentation** - API docs, technical specs, system design documents
-- **Project Documentation** - Project plans, progress reports, summary documents
-- **User Manuals** - Product guides, operation manuals, FAQ documentation
-- **Internal Documentation** - Meeting minutes, work logs, knowledge base organization
-
-### 🎯 Product Management
-- **Requirement Analysis** - PRD writing, user story breakdown, priority assessment
-- **Feature Design** - Feature specifications, interaction design docs, prototype descriptions
-- **Project Planning** - Milestone planning, task decomposition, resource estimation
-- **Data Analysis** - User feedback analysis, data reports, trend insights
-
-### 💼 Business Office
-- **Business Documents** - Business plans, project proposals, partnership agreements
-- **Report Writing** - Work summaries, analysis reports, performance reviews
-- **Communication** - Email writing, announcements, training materials
-- **Creative Planning** - Marketing proposals, event planning, content creation
-
-## 🛠️ Advanced Configuration
-
-### Workspace Configuration
-
-```json
-"CliTools": {
-  "TempWorkspaceRoot": "D:\\Temp\\WebCodeCli\\Workspaces",
-  "WorkspaceExpirationHours": 24,
-  "NpmGlobalPath": "",
-  "MaxConcurrentExecutions": 3,
-  "DefaultTimeoutSeconds": 300
-}
-```
-
-| Configuration | Description | Example Value |
-|---------------|-------------|---------------|
-| `TempWorkspaceRoot` | Temporary workspace root directory for storing session-isolated working files | `D:\\Temp\\WebCodeCli\\Workspaces` |
-| `WorkspaceExpirationHours` | Workspace expiration time (hours), automatically cleaned after expiration | `24` |
-| `NpmGlobalPath` | NPM global installation path (optional, leave empty for auto-detection) | `C:\\Users\\YourUsername\\AppData\\Roaming\\npm\\` or leave empty `""` |
-| `MaxConcurrentExecutions` | Maximum concurrent executions | `3` |
-| `DefaultTimeoutSeconds` | Default timeout (seconds) | `300` |
-
-> 💡 **Tips**:
-> - **Windows Users**: NPM global path is typically `C:\Users\{username}\AppData\Roaming\npm\`
-> - **Linux/Mac Users**: NPM global path is typically `/usr/local/bin/` or `~/.npm-global/bin/`
-> - Workspace directory should use absolute path with sufficient disk space
-
-
-## 🤝 Contributing
-
-Issues and Pull Requests are welcome!
-
-## 📄 License
-
-This project uses the **AGPLv3** open source license.
-
-- Open Source Usage: Follow the [AGPLv3](https://www.gnu.org/licenses/agpl-3.0.html) agreement
-- Commercial Licensing: For commercial licensing, please contact **antskpro@qq.com**
-
-For details, please refer to the [LICENSE](LICENSE) file.
+- Open source use: follow AGPLv3
+- Commercial licensing: contact the repository maintainer or relevant business channel
 
 ---
 
 <p align="center">
-  <strong>🌟 Let AI be your coding companion, anytime, anywhere 🌟</strong>
+  <strong>Turn AI CLIs from local commands into a manageable working platform</strong>
 </p>
