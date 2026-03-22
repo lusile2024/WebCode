@@ -44,6 +44,11 @@ public class SessionHistory
     /// 工作区是否有效
     /// </summary>
     public bool IsWorkspaceValid { get; set; } = true;
+
+    /// <summary>
+    /// 是否为自定义工作目录（非系统自动生成的临时目录）
+    /// </summary>
+    public bool IsCustomWorkspace { get; set; } = false;
     
     /// <summary>
     /// 关联的项目ID（可选）

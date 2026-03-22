@@ -42,21 +42,21 @@ public interface ISessionShareService
     /// </summary>
     /// <param name="sessionId">会话ID</param>
     /// <returns>分享列表</returns>
-    Task<List<ShareInfoResponse>> GetSessionSharesAsync(string sessionId);
+    Task<List<ShareInfoResponse>> GetSessionSharesAsync(string sessionId, string? createdBy = null);
     
     /// <summary>
     /// 停用分享
     /// </summary>
     /// <param name="shareCode">分享码</param>
     /// <returns>是否成功</returns>
-    Task<bool> DeactivateShareAsync(string shareCode);
+    Task<bool> DeactivateShareAsync(string shareCode, string? createdBy = null);
     
     /// <summary>
     /// 删除分享
     /// </summary>
     /// <param name="shareCode">分享码</param>
     /// <returns>是否成功</returns>
-    Task<bool> DeleteShareAsync(string shareCode);
+    Task<bool> DeleteShareAsync(string shareCode, string? createdBy = null);
     
     /// <summary>
     /// 删除会话的所有分享
@@ -101,5 +101,5 @@ public interface ISessionShareService
     /// <param name="shareCode">分享码</param>
     /// <param name="request">更新请求</param>
     /// <returns>是否成功</returns>
-    Task<bool> UpdateShareSnapshotAsync(string shareCode, UpdateShareSnapshotRequest request);
+    Task<bool> UpdateShareSnapshotAsync(string shareCode, UpdateShareSnapshotRequest request, string? createdBy = null);
 }

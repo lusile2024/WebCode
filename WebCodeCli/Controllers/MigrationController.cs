@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using SqlSugar;
@@ -19,6 +20,7 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
+[Authorize(Roles = UserAccessConstants.AdminRole)]
 public class MigrationController : ControllerBase
 {
     private readonly ILogger<MigrationController> _logger;

@@ -61,21 +61,21 @@ public interface ICliExecutorService
     /// 获取所有可用的 CLI 工具
     /// </summary>
     /// <returns>CLI 工具列表</returns>
-    List<CliToolConfig> GetAvailableTools();
+    List<CliToolConfig> GetAvailableTools(string? username = null);
 
     /// <summary>
     /// 获取指定的 CLI 工具配置
     /// </summary>
     /// <param name="toolId">工具ID</param>
     /// <returns>CLI 工具配置</returns>
-    CliToolConfig? GetTool(string toolId);
+    CliToolConfig? GetTool(string toolId, string? username = null);
 
     /// <summary>
     /// 验证 CLI 工具是否可用
     /// </summary>
     /// <param name="toolId">工具ID</param>
     /// <returns>是否可用</returns>
-    bool ValidateTool(string toolId);
+    bool ValidateTool(string toolId, string? username = null);
 
     /// <summary>
     /// 清理指定会话的工作区
@@ -100,7 +100,7 @@ public interface ICliExecutorService
     /// </summary>
     /// <param name="toolId">工具ID</param>
     /// <returns>环境变量字典</returns>
-    Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId);
+    Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null);
 
     /// <summary>
     /// 保存指定工具的环境变量配置到数据库
@@ -108,7 +108,7 @@ public interface ICliExecutorService
     /// <param name="toolId">工具ID</param>
     /// <param name="envVars">环境变量字典</param>
     /// <returns>是否保存成功</returns>
-    Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars);
+    Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null);
 
     /// <summary>
     /// 获取会话工作区的文件内容

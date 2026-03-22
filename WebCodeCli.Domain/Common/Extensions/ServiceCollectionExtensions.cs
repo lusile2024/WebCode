@@ -1,10 +1,14 @@
 ﻿using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Utils;
+using WebCodeCli.Domain.Domain.Service.Channels;
 using WebCodeCli.Repositories.Demo;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using SqlSugar;
 using System.Reflection;
 using System;
+using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Domain.Common.Extensions
 {
@@ -51,6 +55,55 @@ namespace WebCodeCli.Domain.Common.Extensions
 
            return services;
         }
-      
+
+        /// <summary>
+        /// 添加飞书渠道服务
+        /// </summary>
+        /// <param name="services">服务集合</param>
+        /// <param name="configuration">配置</param>
+        /// <returns>服务集合</returns>
+        public static IServiceCollection AddFeishuChannel(
+            this IServiceCollection services,
+            IConfiguration configuration)
+        {
+            var feishuSection = configuration.GetSection("Feishu");
+
+            // 绑定配置选项
+            services.Configure<FeishuOptions>(feishuSection);
+
+            // 注册 HttpClient 工厂（用于 CardKit API 调用）
+            services.AddHttpClient("FeishuClient")
+                .ConfigureHttpClient(client =>
+                {
+                    client.Timeout = TimeSpan.FromSeconds(30);
+                });
+
+            // 显式注册卡片动作事件处理器（让 FeishuNetSdk 能够发现它）
+            services.AddSingleton<FeishuCardActionHandler>();
+
+            // 注册消息处理器（Singleton，需要在整个应用生命周期内保持实例）
+            services.AddSingleton<FeishuMessageHandler>();
+
+            // 注册本地 CLI 配置检测服务（Singleton）
+            services.AddSingleton<ILocalCliConfigDetector, LocalCliConfigDetector>();
+
+            // 注册 CardKit 客户端（Singleton）
+            services.AddSingleton<IFeishuCardKitClient, FeishuCardKitClient>();
+
+            // 注册主服务（Singleton，同时作为 HostedService 运行）
+            services.AddSingleton<IFeishuChannelService, FeishuChannelService>();
+            services.AddHostedService<FeishuChannelService>();
+
+            // 注册帮助功能服务
+            services.AddSingleton<FeishuCommandService>();
+            services.AddSingleton<FeishuHelpCardBuilder>();
+            services.AddSingleton<FeishuCardActionService>();
+
+            services.AddSingleton<IUserFeishuBotRuntimeService, UserFeishuBotRuntimeService>();
+            services.AddHostedService(sp => (UserFeishuBotRuntimeService)sp.GetRequiredService<IUserFeishuBotRuntimeService>());
+
+            return services;
+        }
+
     }
 }

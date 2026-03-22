@@ -17,11 +17,12 @@ public class ProjectService : IProjectService
     private readonly IUserContextService _userContextService;
     private readonly ISystemSettingsService _systemSettingsService;
     private readonly IGitService _gitService;
+    private readonly IWorkspaceRegistryService _workspaceRegistryService;
     private readonly ILogger<ProjectService> _logger;
-    
+
     // 项目目录在工作区根目录下的子文件夹名
     private const string ProjectsFolder = "projects";
-    
+
     // 简单的 AES 加密密钥（实际生产环境应该使用更安全的密钥管理）
     private const string EncryptionKey = "WebCode2024!Proj";
 
@@ -30,12 +31,14 @@ public class ProjectService : IProjectService
         IUserContextService userContextService,
         ISystemSettingsService systemSettingsService,
         IGitService gitService,
+        IWorkspaceRegistryService workspaceRegistryService,
         ILogger<ProjectService> logger)
     {
         _projectRepository = projectRepository;
         _userContextService = userContextService;
         _systemSettingsService = systemSettingsService;
         _gitService = gitService;
+        _workspaceRegistryService = workspaceRegistryService;
         _logger = logger;
     }
 
@@ -120,7 +123,7 @@ public class ProjectService : IProjectService
                 HttpsToken = EncryptIfNotEmpty(request.HttpsToken),
                 SshPrivateKey = EncryptIfNotEmpty(request.SshPrivateKey),
                 SshPassphrase = EncryptIfNotEmpty(request.SshPassphrase),
-                Branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch.Trim(),
+                Branch = request.Branch?.Trim() ?? string.Empty,
                 LocalPath = localPath,
                 Status = "pending",
                 CreatedAt = DateTime.Now,
@@ -243,7 +246,38 @@ public class ProjectService : IProjectService
                 }
                 return (null, "保存项目失败");
             }
-            
+
+            // 自动注册ZIP项目目录到工作区注册表
+            try
+            {
+                // 确保目录存在
+                if (!Directory.Exists(entity.LocalPath))
+                {
+                    Directory.CreateDirectory(entity.LocalPath);
+                }
+
+                // 检查是否已经注册过
+                var existingRegistration = await _workspaceRegistryService.GetDirectoryOwnerAsync(entity.LocalPath);
+                if (existingRegistration == null)
+                {
+                    await _workspaceRegistryService.RegisterDirectoryAsync(
+                        directoryPath: entity.LocalPath,
+                        username: username,
+                        alias: entity.Name,
+                        isTrusted: true);
+                    _logger.LogInformation("ZIP项目目录已自动注册到工作区: {ProjectId}, 别名: {Name}, 路径: {LocalPath}", projectId, projectName, entity.LocalPath);
+                }
+                else
+                {
+                    _logger.LogInformation("ZIP项目目录已存在于工作区注册表，无需重复注册: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                // 注册失败不影响创建结果，仅记录日志
+                _logger.LogWarning(ex, "ZIP项目目录注册到工作区失败: {ProjectId}, 路径: {LocalPath}", projectId, localPath);
+            }
+
             _logger.LogInformation("ZIP 项目创建成功: {ProjectId}, {Name}", projectId, projectName);
             return (MapToProjectInfo(entity), null);
         }
@@ -333,7 +367,7 @@ public class ProjectService : IProjectService
                 entity.SshPassphrase = EncryptIfNotEmpty(request.SshPassphrase);
             }
             
-            if (!string.IsNullOrWhiteSpace(request.Branch))
+            if (request.Branch != null)
             {
                 entity.Branch = request.Branch.Trim();
             }
@@ -448,9 +482,41 @@ public class ProjectService : IProjectService
                 if (success)
                 {
                     entity.Status = "ready";
+                    entity.Branch = _gitService.GetCurrentBranch(entity.LocalPath) ?? entity.Branch;
                     entity.LastSyncAt = DateTime.Now;
                     entity.ErrorMessage = null;
                     _logger.LogInformation("项目克隆成功: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+
+                    // 自动注册项目目录到工作区注册表，方便新建会话时直接选择
+                    try
+                    {
+                        // 确保目录存在（防止Git克隆刚完成时的延迟问题）
+                        if (!Directory.Exists(entity.LocalPath))
+                        {
+                            Directory.CreateDirectory(entity.LocalPath);
+                        }
+
+                        // 检查是否已经注册过，避免重复注册
+                        var existingRegistration = await _workspaceRegistryService.GetDirectoryOwnerAsync(entity.LocalPath);
+                        if (existingRegistration == null)
+                        {
+                            await _workspaceRegistryService.RegisterDirectoryAsync(
+                                directoryPath: entity.LocalPath,
+                                username: username,
+                                alias: entity.Name,
+                                isTrusted: true);
+                            _logger.LogInformation("项目目录已自动注册到工作区: {ProjectId}, 别名: {Name}, 路径: {LocalPath}", projectId, entity.Name, entity.LocalPath);
+                        }
+                        else
+                        {
+                            _logger.LogInformation("项目目录已存在于工作区注册表，无需重复注册: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // 注册失败不影响克隆结果，仅记录日志，用户可手动注册
+                        _logger.LogWarning(ex, "项目目录注册到工作区失败: {ProjectId}, 路径: {LocalPath}", projectId, entity.LocalPath);
+                    }
                 }
                 else
                 {
@@ -561,6 +627,95 @@ public class ProjectService : IProjectService
         {
             _logger.LogError(ex, "获取分支列表失败");
             return (new List<string>(), $"获取分支列表失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 获取已保存项目的远程分支列表
+    /// </summary>
+    public async Task<(List<string> Branches, string? ErrorMessage)> GetProjectBranchesAsync(string projectId)
+    {
+        try
+        {
+            var username = _userContextService.GetCurrentUsername();
+            var entity = await _projectRepository.GetByIdAndUsernameAsync(projectId, username);
+
+            if (entity == null)
+            {
+                return (new List<string>(), "项目不存在");
+            }
+
+            if (string.IsNullOrWhiteSpace(entity.GitUrl))
+            {
+                return (new List<string>(), "本地 ZIP 项目不支持分支切换");
+            }
+
+            var credentials = BuildCredentials(entity);
+            return await _gitService.ListRemoteBranchesAsync(entity.GitUrl, credentials);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取项目分支列表失败: {ProjectId}", projectId);
+            return (new List<string>(), $"获取项目分支列表失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 切换已克隆项目的当前分支
+    /// </summary>
+    public async Task<(bool Success, string? ErrorMessage)> SwitchProjectBranchAsync(string projectId, string branch)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(branch))
+            {
+                return (false, "分支不能为空");
+            }
+
+            var username = _userContextService.GetCurrentUsername();
+            var entity = await _projectRepository.GetByIdAndUsernameAsync(projectId, username);
+
+            if (entity == null)
+            {
+                return (false, "项目不存在");
+            }
+
+            if (string.IsNullOrWhiteSpace(entity.GitUrl))
+            {
+                return (false, "本地 ZIP 项目不支持分支切换");
+            }
+
+            if (!string.Equals(entity.Status, "ready", StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, "项目尚未就绪，请先完成克隆");
+            }
+
+            if (string.IsNullOrWhiteSpace(entity.LocalPath) || !Directory.Exists(entity.LocalPath))
+            {
+                return (false, "项目本地目录不存在，请重新克隆");
+            }
+
+            var credentials = BuildCredentials(entity);
+            var (success, errorMessage) = await _gitService.SwitchBranchAsync(entity.LocalPath, branch.Trim(), credentials);
+
+            if (!success)
+            {
+                _logger.LogWarning("项目切换分支失败: {ProjectId}, Branch={Branch}, Error={Error}", projectId, branch, errorMessage);
+                return (false, errorMessage);
+            }
+
+            entity.Branch = _gitService.GetCurrentBranch(entity.LocalPath) ?? branch.Trim();
+            entity.ErrorMessage = null;
+            entity.UpdatedAt = DateTime.Now;
+            await _projectRepository.UpdateAsync(entity);
+
+            _logger.LogInformation("项目切换分支成功: {ProjectId}, Branch={Branch}", projectId, entity.Branch);
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "项目切换分支失败: {ProjectId}, Branch={Branch}", projectId, branch);
+            return (false, $"切换分支失败: {ex.Message}");
         }
     }
 

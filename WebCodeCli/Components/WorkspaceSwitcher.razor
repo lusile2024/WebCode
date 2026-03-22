@@ -1,0 +1,307 @@
+@using WebCodeCli.Domain.Domain.Model
+@using WebCodeCli.Models
+@inject HttpClient Http
+@inject IUserContextService UserContextService
+
+@if (ShowSwitcher)
+{
+    <div class="relative">
+        <!-- 触发按钮 -->
+        <button @onclick="ToggleDropdown"
+                class="flex items-center gap-2 px-3 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
+                title="当前工作目录">
+            <div class="flex-shrink-0">
+                @GetDirectoryIcon(CurrentDirectoryType)
+            </div>
+            <div class="text-left max-w-[200px]">
+                <div class="font-medium text-gray-800 truncate">@CurrentDirectoryName</div>
+                <div class="text-xs text-gray-500 truncate">@CurrentDirectoryPath</div>
+            </div>
+            <svg class="w-4 h-4 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+        </button>
+
+        <!-- 下拉菜单 -->
+        @if (ShowDropdown)
+        {
+            <div class="absolute top-full right-0 mt-2 w-96 bg-white rounded-lg shadow-xl border border-gray-200 z-50 overflow-hidden">
+                <!-- 头部 -->
+                <div class="p-4 border-b border-gray-200 bg-gray-50">
+                    <h4 class="font-semibold text-gray-800">切换工作目录</h4>
+                    <p class="text-xs text-gray-500 mt-1">选择一个目录作为当前会话的工作区</p>
+                </div>
+
+                <!-- 搜索框 -->
+                <div class="p-3 border-b border-gray-200">
+                    <div class="relative">
+                        <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                        <input type="text"
+                               @bind-value="SearchQuery"
+                               @input="FilterDirectories"
+                               class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                               placeholder="搜索目录..." />
+                    </div>
+                </div>
+
+                <!-- 目录列表 -->
+                <div class="max-h-[400px] overflow-y-auto">
+                    @if (IsLoading)
+                    {
+                        <div class="text-center py-8">
+                            <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-300 border-t-blue-600 mb-3"></div>
+                            <p class="text-gray-500 text-sm">加载目录列表中...</p>
+                        </div>
+                    }
+                    else if (FilteredDirectories.Any())
+                    {
+                        <div class="p-2">
+                            @foreach (var dir in FilteredDirectories)
+                            {
+                                <div @onclick='() => SelectDirectory(dir)'
+                                     class='p-3 rounded-lg cursor-pointer transition-all @(SelectedDirectory?.Id == dir.Id ? "bg-blue-50 border border-blue-200" : "hover:bg-gray-50 border border-transparent")'>
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex-shrink-0">
+                                            @GetDirectoryIcon(dir.Type)
+                                        </div>
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-center gap-2">
+                                                <h5 class="font-medium text-gray-800 truncate">@(dir.Alias ?? Path.GetFileName(dir.Path))</h5>
+                                                <span class="px-2 py-0.5 text-xs rounded-full @GetDirectoryTypeBadgeClass(dir.Type)">
+                                                    @GetDirectoryTypeText(dir.Type)
+                                                </span>
+                                                @if (dir.Type == "authorized")
+                                                {
+                                                    <span class="px-2 py-0.5 text-xs bg-purple-100 text-purple-700 rounded-full">
+                                                        @dir.Permission
+                                                    </span>
+                                                }
+                                            </div>
+                                            <p class="text-xs text-gray-500 mt-1 truncate" title="@dir.Path">
+                                                @dir.Path
+                                            </p>
+                                            @if (dir.Type == "authorized")
+                                            {
+                                                <p class="text-xs text-gray-500 mt-0.5">
+                                                    所有者: @dir.GrantedBy
+                                                </p>
+                                            }
+                                        </div>
+                                        @if (dir.Id == CurrentDirectoryId)
+                                        {
+                                            <span class="text-xs text-green-600 font-medium flex-shrink-0">当前</span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-8">
+                            <svg class="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+                            </svg>
+                            <p class="text-gray-500 text-sm">@(string.IsNullOrEmpty(SearchQuery) ? "暂无可用目录" : "没有找到匹配的目录")</p>
+                        </div>
+                    }
+                </div>
+
+                <!-- 底部操作栏 -->
+                <div class="p-3 border-t border-gray-200 bg-gray-50 flex justify-between items-center">
+                    <button @onclick="OpenAuthorizationModal"
+                            class="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1.5">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                        管理授权
+                    </button>
+                    <div class="flex gap-2">
+                        <button @onclick="CloseDropdown" class="px-4 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors">
+                            取消
+                        </button>
+                        <button @onclick="ConfirmSwitch"
+                                disabled="@(SelectedDirectory == null || SelectedDirectory.Id == CurrentDirectoryId || IsSwitching)"
+                                class="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2">
+                            @if (IsSwitching)
+                            {
+                                <div class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                                <span>切换中...</span>
+                            }
+                            else
+                            {
+                                <span>切换目录</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public bool ShowSwitcher { get; set; } = true;
+    [Parameter] public long? CurrentDirectoryId { get; set; }
+    [Parameter] public string CurrentDirectoryName { get; set; } = "默认工作区";
+    [Parameter] public string CurrentDirectoryPath { get; set; } = string.Empty;
+    [Parameter] public string CurrentDirectoryType { get; set; } = "Default";
+    [Parameter] public string SessionId { get; set; } = string.Empty;
+    [Parameter] public EventCallback<AccessibleDirectoryDto> OnDirectorySwitched { get; set; }
+    [Parameter] public EventCallback OnOpenAuthorizationModal { get; set; }
+
+    private bool ShowDropdown { get; set; } = false;
+    private bool IsLoading { get; set; } = false;
+    private bool IsSwitching { get; set; } = false;
+    private string SearchQuery { get; set; } = string.Empty;
+    private List<AccessibleDirectoryDto> AllDirectories { get; set; } = new();
+    private List<AccessibleDirectoryDto> FilteredDirectories { get; set; } = new();
+    private AccessibleDirectoryDto? SelectedDirectory { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ShowDropdown && !AllDirectories.Any())
+        {
+            await LoadDirectoriesAsync();
+        }
+    }
+
+    private async Task ToggleDropdown()
+    {
+        ShowDropdown = !ShowDropdown;
+        if (ShowDropdown && !AllDirectories.Any())
+        {
+            await LoadDirectoriesAsync();
+        }
+    }
+
+    private void CloseDropdown()
+    {
+        ShowDropdown = false;
+        SelectedDirectory = null;
+        SearchQuery = string.Empty;
+    }
+
+    private async Task LoadDirectoriesAsync()
+    {
+        IsLoading = true;
+        try
+        {
+            var response = await Http.GetFromJsonAsync<ApiResponse<List<AccessibleDirectoryDto>>>("/api/workspace/my-accessible-directories");
+            AllDirectories = response?.Data ?? new();
+            FilteredDirectories = AllDirectories.ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载目录列表失败: {ex.Message}");
+            AllDirectories = new();
+            FilteredDirectories = new();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private void FilterDirectories()
+    {
+        if (string.IsNullOrWhiteSpace(SearchQuery))
+        {
+            FilteredDirectories = AllDirectories.ToList();
+            return;
+        }
+
+        var query = SearchQuery.Trim().ToLower();
+        FilteredDirectories = AllDirectories
+            .Where(d =>
+                (d.Alias?.ToLower().Contains(query) ?? false) ||
+                d.Path.ToLower().Contains(query) ||
+                (d.GrantedBy?.ToLower().Contains(query) ?? false))
+            .ToList();
+    }
+
+    private void SelectDirectory(AccessibleDirectoryDto directory)
+    {
+        if (directory.Id == CurrentDirectoryId)
+        {
+            return;
+        }
+        SelectedDirectory = directory;
+    }
+
+    private async Task ConfirmSwitch()
+    {
+        if (SelectedDirectory == null || SelectedDirectory.Id == CurrentDirectoryId)
+        {
+            return;
+        }
+
+        IsSwitching = true;
+        try
+        {
+            // 调用切换目录API
+            var request = new UpdateSessionWorkspaceRequest
+            {
+                DirectoryPath = SelectedDirectory.Path
+            };
+
+            var response = await Http.PutAsJsonAsync($"/api/session/{SessionId}/workspace", request);
+            response.EnsureSuccessStatusCode();
+
+            await OnDirectorySwitched.InvokeAsync(SelectedDirectory);
+            CloseDropdown();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"切换目录失败: {ex.Message}");
+        }
+        finally
+        {
+            IsSwitching = false;
+        }
+    }
+
+    private void OpenAuthorizationModal()
+    {
+        CloseDropdown();
+        OnOpenAuthorizationModal.InvokeAsync();
+    }
+
+    private MarkupString GetDirectoryIcon(string directoryType)
+    {
+        return directoryType switch
+        {
+            "Project" => (MarkupString)"<svg class=\"w-5 h-5 text-purple-600\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10\"></path></svg>",
+            "Custom" => (MarkupString)"<svg class=\"w-5 h-5 text-blue-600\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z\"></path></svg>",
+            "Shared" => (MarkupString)"<svg class=\"w-5 h-5 text-green-600\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4\"></path></svg>",
+            _ => (MarkupString)"<svg class=\"w-5 h-5 text-gray-600\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z\"></path></svg>"
+        };
+    }
+
+    private string GetDirectoryTypeText(string directoryType)
+    {
+        return directoryType switch
+        {
+            "Project" => "项目",
+            "Custom" => "自定义",
+            "Shared" => "共享",
+            "Default" => "默认",
+            _ => "未知"
+        };
+    }
+
+    private string GetDirectoryTypeBadgeClass(string directoryType)
+    {
+        return directoryType switch
+        {
+            "Project" => "bg-purple-100 text-purple-700",
+            "Custom" => "bg-blue-100 text-blue-700",
+            "Shared" => "bg-green-100 text-green-700",
+            "Default" => "bg-gray-100 text-gray-700",
+            _ => "bg-gray-100 text-gray-700"
+        };
+    }
+}
+

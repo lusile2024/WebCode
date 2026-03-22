@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
@@ -9,6 +10,7 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/project")]
+[Authorize]
 public class ProjectController : ControllerBase
 {
     private readonly IProjectService _projectService;
@@ -273,6 +275,59 @@ public class ProjectController : ControllerBase
         {
             _logger.LogError(ex, "获取分支列表失败");
             return StatusCode(500, new { Error = "获取分支列表失败" });
+        }
+    }
+
+    /// <summary>
+    /// 获取已保存项目的远程分支列表
+    /// </summary>
+    [HttpGet("{projectId}/branches")]
+    public async Task<ActionResult<List<string>>> GetProjectBranches(string projectId)
+    {
+        try
+        {
+            var (branches, errorMessage) = await _projectService.GetProjectBranchesAsync(projectId);
+
+            if (errorMessage != null)
+            {
+                return BadRequest(new { Error = errorMessage, Branches = branches });
+            }
+
+            return Ok(branches);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取项目分支列表失败: {ProjectId}", projectId);
+            return StatusCode(500, new { Error = "获取项目分支列表失败" });
+        }
+    }
+
+    /// <summary>
+    /// 切换项目分支
+    /// </summary>
+    [HttpPost("{projectId}/switch-branch")]
+    public async Task<ActionResult> SwitchProjectBranch(string projectId, [FromBody] SwitchProjectBranchRequest request)
+    {
+        try
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Branch))
+            {
+                return BadRequest(new { Error = "分支不能为空" });
+            }
+
+            var (success, errorMessage) = await _projectService.SwitchProjectBranchAsync(projectId, request.Branch);
+
+            if (!success)
+            {
+                return BadRequest(new { Error = errorMessage ?? "切换分支失败" });
+            }
+
+            return Ok(new { Success = true, Message = "项目分支切换成功" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "切换项目分支失败: {ProjectId}", projectId);
+            return StatusCode(500, new { Error = "切换项目分支失败" });
         }
     }
 }

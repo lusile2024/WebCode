@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
 
@@ -9,20 +11,32 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/session")]
+[Authorize]
 public class SessionController : ControllerBase
 {
     private readonly ISessionHistoryManager _sessionHistoryManager;
     private readonly ISessionOutputService _sessionOutputService;
+    private readonly ISessionDirectoryService _sessionDirectoryService;
     private readonly ILogger<SessionController> _logger;
 
     public SessionController(
         ISessionHistoryManager sessionHistoryManager,
         ISessionOutputService sessionOutputService,
+        ISessionDirectoryService sessionDirectoryService,
         ILogger<SessionController> logger)
     {
         _sessionHistoryManager = sessionHistoryManager;
         _sessionOutputService = sessionOutputService;
+        _sessionDirectoryService = sessionDirectoryService;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// 获取当前用户名
+    /// </summary>
+    private string GetCurrentUsername()
+    {
+        return User.FindFirstValue(ClaimTypes.Name) ?? "default";
     }
 
     /// <summary>
@@ -204,6 +218,94 @@ public class SessionController : ControllerBase
             return StatusCode(500, new { Error = "保存输出状态失败" });
         }
     }
+
+    #region 会话工作区管理API
+
+    /// <summary>
+    /// 更新会话的工作区目录
+    /// </summary>
+    /// <param name="sessionId">会话ID</param>
+    /// <param name="request">更新请求参数</param>
+    [HttpPut("{sessionId}/workspace")]
+    public async Task<IActionResult> UpdateSessionWorkspace(string sessionId, [FromBody] UpdateSessionWorkspaceRequest request)
+    {
+        try
+        {
+            // 已禁用切换目录功能：会话绑定后不允许更改工作目录
+            return BadRequest(new { error = "会话目录已绑定，不允许切换。如需使用其他目录，请创建新会话。" });
+
+            // var currentUser = GetCurrentUsername();
+            // await _sessionDirectoryService.SwitchSessionWorkspaceAsync(
+            //     sessionId,
+            //     currentUser,
+            //     request.DirectoryPath);
+            //
+            // return Ok(new { success = true });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Forbid(ex.Message);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "更新会话工作区失败: {SessionId}", sessionId);
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 获取会话的工作区信息
+    /// </summary>
+    /// <param name="sessionId">会话ID</param>
+    [HttpGet("{sessionId}/workspace")]
+    public async Task<IActionResult> GetSessionWorkspace(string sessionId)
+    {
+        try
+        {
+            var currentUser = GetCurrentUsername();
+            var workspacePath = await _sessionDirectoryService.GetSessionWorkspaceAsync(sessionId, currentUser);
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    sessionId,
+                    workspacePath
+                }
+            });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "获取会话工作区失败: {SessionId}", sessionId);
+            return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    #endregion
+}
+
+/// <summary>
+/// 更新会话工作区请求参数
+/// </summary>
+public class UpdateSessionWorkspaceRequest
+{
+    /// <summary>
+    /// 新的工作区目录路径
+    /// </summary>
+    public string DirectoryPath { get; set; } = string.Empty;
 }
 
 /// <summary>

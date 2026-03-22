@@ -11,6 +11,8 @@ using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
+using WebCodeCli.Components.Dialogs;
+using WebCodeCli.Models;
 
 namespace WebCodeCli.Pages;
 
@@ -168,6 +170,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     
     // 项目管理模态框
     private ProjectManageModal _projectManageModal = default!;
+    private AdminUserManagementModal _adminUserManagementModal = default!;
     
     // 项目选择模态框
     private ProjectSelectModal _projectSelectModal = default!;
@@ -195,6 +198,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     // 用户信息
     private bool _showUserInfo = false;
     private string _currentUsername = string.Empty;
+    private bool _isAdmin = false;
     private bool _showUserDropdown = false; // 用户头像下拉菜单
     
     // 键盘事件状态
@@ -227,7 +231,17 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private string _newSessionTitle = string.Empty;
     private bool _isRenamingSession = false;
     private string _renameError = string.Empty;
-    
+
+    // 授权对话框（会话）
+    private bool _showAuthorizeDialog = false;
+    private SessionHistory? _sessionToAuthorize = null;
+    private List<WorkspaceAuthorizationDto> _authorizedUsers = new();
+    private bool _isLoadingAuthorization = false;
+    private string _authorizationError = string.Empty;
+    private string _newAuthUsername = string.Empty;
+    private string _newAuthPermission = "read";
+    private DateTime? _newAuthExpireTime = null;
+
     // 会话历史管理
     private List<SessionHistory> _sessions = new();
     private SessionHistory? _currentSession = null;
@@ -269,6 +283,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private QuickActionsPanel _quickActionsPanel = default!;
     private TemplateLibraryModal _templateLibraryModal = default!;
     private AutoCompleteDropdown _autoCompleteDropdown = default!;
+    private CreateSessionModal _createSessionModal = default!;
     
     // 自动补全相关
     private System.Threading.Timer? _autoCompleteDebounceTimer;
@@ -311,15 +326,15 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         {
             try
             {
-                var isAuthenticated = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "isAuthenticated");
-                if (isAuthenticated != "true")
+                var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+                if (!authState.IsAuthenticated || string.IsNullOrWhiteSpace(authState.Username))
                 {
                     NavigationManager.NavigateTo("/login");
                     return;
                 }
                 
-                // 获取当前用户名
-                _currentUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username") ?? "用户";
+                _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
                 _showUserInfo = true;
             }
             catch
@@ -333,13 +348,13 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         // 无论认证是否启用，都需要设置用户上下文
         try
         {
-            // 尝试从 sessionStorage 获取用户名
-            var storedUsername = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "username");
-            if (!string.IsNullOrWhiteSpace(storedUsername))
+            var authState = await JSRuntime.InvokeAsync<ClientAuthState>("authHelper.getCurrentUser");
+            if (authState.IsAuthenticated && !string.IsNullOrWhiteSpace(authState.Username))
             {
-                _currentUsername = storedUsername;
-                UserContextService.SetCurrentUsername(storedUsername);
-                Console.WriteLine($"[用户上下文] 从sessionStorage设置当前用户: {storedUsername}");
+                _currentUsername = authState.Username;
+                _isAdmin = string.Equals(authState.Role, UserAccessConstants.AdminRole, StringComparison.OrdinalIgnoreCase);
+                UserContextService.SetCurrentUsername(authState.Username);
+                Console.WriteLine($"[用户上下文] 从认证状态设置当前用户: {authState.Username}");
             }
             else
             {
@@ -542,7 +557,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         try
         {
             // 获取所有可用的 CLI 工具
-            _allTools = CliExecutorService.GetAvailableTools();
+            _allTools = CliExecutorService.GetAvailableTools(_currentUsername);
             
             // 获取启用的助手列表
             _enabledAssistants = await SystemSettingsService.GetEnabledAssistantsAsync();
@@ -1596,7 +1611,32 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             return string.Empty;
         }
 
-        return _jsonlAssistantMessageBuilder.ToString().TrimEnd();
+        var content = _jsonlAssistantMessageBuilder.ToString().TrimEnd();
+        if (!string.IsNullOrWhiteSpace(content))
+        {
+            return content;
+        }
+
+        return GetJsonlFallbackMessage();
+    }
+
+    private string GetJsonlFallbackMessage()
+    {
+        for (var i = _jsonlEvents.Count - 1; i >= 0; i--)
+        {
+            var evt = _jsonlEvents[i];
+            if (string.IsNullOrWhiteSpace(evt.Content))
+            {
+                continue;
+            }
+
+            if (evt.Type is "result" or "error" or "raw" or "assistant" or "assistant:message" or "stream_event")
+            {
+                return evt.Content.TrimEnd();
+            }
+        }
+
+        return string.Empty;
     }
 
     private string GetEventContainerAccent(JsonlDisplayItem item)
@@ -1810,12 +1850,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 : T("cliEvent.content.turnCompletedWithUsage");
         }
 
-        // result 类型事件与 turn.completed 类似，有 Usage 时不显示内容，避免重复
+        // result 类型事件保留最终文本，便于在缺少 assistant 事件时兜底展示
         if (string.Equals(outputEvent.EventType, "result", StringComparison.OrdinalIgnoreCase))
         {
-            return outputEvent.Usage is null
-                ? (fallbackContent ?? T("cliEvent.content.turnCompleted"))
-                : string.Empty;
+            return fallbackContent ?? T("cliEvent.content.turnCompleted");
         }
 
         if (string.Equals(outputEvent.EventType, "turn.started", StringComparison.OrdinalIgnoreCase))
@@ -3196,11 +3234,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     {
         try
         {
-            // 清除会话存储
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "isAuthenticated");
-            await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "username");
-            
-            // 跳转到登录页
+            await JSRuntime.InvokeVoidAsync("authHelper.logout");
             NavigationManager.NavigateTo("/login", forceLoad: true);
         }
         catch (Exception ex)
@@ -3214,6 +3248,13 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     {
         _showUserDropdown = !_showUserDropdown;
         StateHasChanged();
+    }
+
+    private sealed class ClientAuthState
+    {
+        public bool IsAuthenticated { get; set; }
+        public string? Username { get; set; }
+        public string? Role { get; set; }
     }
     
     private void CloseUserDropdown()
@@ -3951,7 +3992,84 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         // 直接创建空白会话，不显示项目选择
         await CreateNewSessionWithProjectAsync(null, includeGit: false);
     }
-    
+
+    /// <summary>
+    /// 新建会话（支持自定义工作区）
+    /// </summary>
+    private async Task<SessionHistory> CreateNewSessionAsync(bool useDefaultDirectory, string workspacePath)
+    {
+        // 创建新会话
+        var newSession = new SessionHistory
+        {
+            SessionId = Guid.NewGuid().ToString(),
+            Title = "新会话",
+            CreatedAt = DateTime.Now,
+            UpdatedAt = DateTime.Now,
+            ToolId = _selectedToolId,
+            WorkspacePath = useDefaultDirectory ? string.Empty : workspacePath,
+            IsCustomWorkspace = !useDefaultDirectory
+        };
+
+        // 保存会话
+        await SessionHistoryManager.SaveSessionImmediateAsync(newSession);
+
+        // 重新加载会话列表
+        await LoadSessionsAsync();
+
+        return newSession;
+    }
+
+    /// <summary>
+    /// 处理工作区切换
+    /// </summary>
+    private async Task HandleDirectorySwitched(AccessibleDirectoryDto directory)
+    {
+        // 更新会话工作区
+        if (_currentSession != null)
+        {
+            _currentSession.WorkspacePath = directory.Path;
+            _currentSession.IsCustomWorkspace = true;
+            await SessionHistoryManager.SaveSessionImmediateAsync(_currentSession);
+
+            // 重新加载工作区文件
+            await LoadWorkspaceFiles();
+
+            // 刷新前端项目检测
+            await DetectFrontendProjects();
+
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 显示授权管理模态框
+    /// </summary>
+    private void ShowAuthorizationModal()
+    {
+        // TODO: 实现授权管理模态框
+        Console.WriteLine("显示授权管理模态框");
+    }
+
+    /// <summary>
+    /// 处理新建会话
+    /// </summary>
+    private async Task HandleSessionCreated(CreateSessionOptions options)
+    {
+        // 创建新会话
+        var newSession = await CreateNewSessionAsync(options.UseDefaultDirectory, options.WorkspacePath);
+
+        // 加载新会话
+        await LoadSession(newSession.SessionId);
+    }
+
+    /// <summary>
+    /// 关闭新建会话模态框
+    /// </summary>
+    private void CloseCreateSessionModal()
+    {
+        StateHasChanged();
+    }
+
     /// <summary>
     /// 切换会话列表显示状态
     /// </summary>
@@ -4102,10 +4220,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     /// </summary>
     private async Task CreateNewSession()
     {
-        // 显示项目选择对话框
+        // 显示工作区选择对话框
         _showSessionList = false;
         StateHasChanged();
-        await _projectSelectModal.ShowAsync();
+        await _createSessionModal.ShowAsync();
     }
     
     /// <summary>
@@ -4209,6 +4327,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private async Task ShowProjectManageModal()
     {
         await _projectManageModal.ShowAsync();
+    }
+
+    private async Task ShowAdminUserManagementModal()
+    {
+        await _adminUserManagementModal.ShowAsync();
     }
     
     /// <summary>
@@ -4413,8 +4536,17 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     /// <summary>
     /// 显示删除确认对话框
     /// </summary>
-    private void ShowDeleteDialog(SessionHistory session)
+    private async void ShowDeleteDialog(SessionHistory session)
     {
+        // 自定义目录/项目目录会话：直接删除，无需确认（仅解除绑定，不删内容）
+        if (session.IsCustomWorkspace)
+        {
+            _sessionToDelete = session;
+            await DeleteSession();
+            return;
+        }
+
+        // 临时目录会话：显示确认弹窗（删除会清除目录内容）
         _sessionToDelete = session;
         _showSessionDeleteDialog = true;
         _sessionDeleteError = string.Empty;
@@ -4723,7 +4855,217 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         _isRenamingSession = false;
         StateHasChanged();
     }
-    
+
+    /// <summary>
+    /// 显示授权对话框
+    /// </summary>
+    private async void ShowAuthorizeDialog(SessionHistory session)
+    {
+        _sessionToAuthorize = session;
+        _showAuthorizeDialog = true;
+        _authorizationError = string.Empty;
+        _newAuthUsername = string.Empty;
+        _newAuthPermission = "read";
+        _newAuthExpireTime = DateTime.Now.AddDays(7);
+
+        // 加载已授权用户列表
+        await LoadAuthorizedUsers();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 关闭授权对话框
+    /// </summary>
+    private void CloseAuthorizeDialog()
+    {
+        _showAuthorizeDialog = false;
+        _sessionToAuthorize = null;
+        _authorizedUsers.Clear();
+        _newAuthUsername = string.Empty;
+        _authorizationError = string.Empty;
+        _isLoadingAuthorization = false;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// 加载已授权用户列表
+    /// </summary>
+    private async Task LoadAuthorizedUsers()
+    {
+        if (_sessionToAuthorize == null || string.IsNullOrEmpty(_sessionToAuthorize.WorkspacePath))
+            return;
+
+        _isLoadingAuthorization = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.GetAsync($"/api/workspace/directory-authorizations?directoryPath={Uri.EscapeDataString(_sessionToAuthorize.WorkspacePath)}");
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<ApiResponse<List<WorkspaceAuthorizationDto>>>();
+                _authorizedUsers = result?.Data ?? new List<WorkspaceAuthorizationDto>();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"加载授权用户失败: {ex.Message}");
+        }
+        finally
+        {
+            _isLoadingAuthorization = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 添加新授权
+    /// </summary>
+    private async Task AddAuthorization()
+    {
+        if (_sessionToAuthorize == null || string.IsNullOrEmpty(_newAuthUsername))
+        {
+            _authorizationError = "请输入用户名";
+            StateHasChanged();
+            return;
+        }
+
+        _isLoadingAuthorization = true;
+        _authorizationError = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/workspace/authorize", new AuthorizeDirectoryRequest
+            {
+                DirectoryPath = _sessionToAuthorize.WorkspacePath,
+                AuthorizedUsername = _newAuthUsername,
+                Permission = _newAuthPermission,
+                ExpiresAt = _newAuthExpireTime
+            });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _newAuthUsername = string.Empty;
+                await LoadAuthorizedUsers();
+            }
+            else
+            {
+                _authorizationError = $"授权失败: {await ExtractErrorMessageAsync(response)}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _authorizationError = $"授权失败: {ex.Message}";
+        }
+        finally
+        {
+            _isLoadingAuthorization = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// 撤销授权
+    /// </summary>
+    private async Task RevokeAuthorization(string username)
+    {
+        if (_sessionToAuthorize == null)
+            return;
+
+        _isLoadingAuthorization = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/workspace/revoke-authorization", new RevokeAuthorizationRequest
+            {
+                DirectoryPath = _sessionToAuthorize.WorkspacePath,
+                AuthorizedUsername = username
+            });
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadAuthorizedUsers();
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"撤销授权失败: {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"撤销授权失败: {ex.Message}");
+        }
+        finally
+        {
+            _isLoadingAuthorization = false;
+            StateHasChanged();
+        }
+    }
+
+    private static async Task<string> ExtractErrorMessageAsync(HttpResponseMessage response)
+    {
+        var content = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return $"HTTP {(int)response.StatusCode}";
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(content);
+            if (json.RootElement.TryGetProperty("error", out var errorElement))
+            {
+                return errorElement.GetString() ?? content;
+            }
+
+            if (json.RootElement.TryGetProperty("message", out var messageElement))
+            {
+                return messageElement.GetString() ?? content;
+            }
+        }
+        catch
+        {
+        }
+
+        return content;
+    }
+
+    /// <summary>
+    /// 获取权限标签
+    /// </summary>
+    private string GetPermissionLabel(string permission)
+    {
+        return permission switch
+        {
+            "read" => "只读",
+            "write" => "读写",
+            "admin" => "管理员",
+            _ => permission
+        };
+    }
+
+    /// <summary>
+    /// 格式化日期
+    /// </summary>
+    private string FormatDate(DateTime date)
+    {
+        var now = DateTime.Now;
+        var diff = now - date;
+
+        if (diff.TotalSeconds < 60)
+            return "刚刚";
+        if (diff.TotalMinutes < 60)
+            return $"{(int)diff.TotalMinutes} 分钟前";
+        if (diff.TotalHours < 24)
+            return $"{(int)diff.TotalHours} 小时前";
+        if (diff.TotalDays < 30)
+            return $"{(int)diff.TotalDays} 天前";
+
+        return date.ToString("yyyy-MM-dd");
+    }
+
     /// <summary>
     /// 处理重命名输入框的键盘事件
     /// </summary>
@@ -5852,6 +6194,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             {
                 filtered = filtered.Where(s => s.Source.Equals("codex", StringComparison.OrdinalIgnoreCase));
             }
+            else if (selectedTool.Id.Contains("opencode", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered = filtered.Where(s => s.Source.Equals("opencode", StringComparison.OrdinalIgnoreCase));
+            }
         }
         
         // 用户输入的搜索词过滤（仅搜索名称和描述）
@@ -5874,6 +6220,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         {
             "claude" => "text-orange-500",
             "codex" => "text-blue-500",
+            "opencode" => "text-emerald-500",
             _ => "text-gray-500"
         };
     }
@@ -5887,6 +6234,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         {
             "claude" => "bg-orange-100 text-orange-700",
             "codex" => "bg-blue-100 text-blue-700",
+            "opencode" => "bg-emerald-100 text-emerald-700",
             _ => "bg-gray-100 text-gray-700"
         };
     }
@@ -5909,6 +6257,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         else if (selectedTool.Id.Contains("codex", StringComparison.OrdinalIgnoreCase))
         {
             return "Codex";
+        }
+        else if (selectedTool.Id.Contains("opencode", StringComparison.OrdinalIgnoreCase))
+        {
+            return "OpenCode";
         }
         else
         {
@@ -5934,6 +6286,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         else if (selectedTool.Id.Contains("codex", StringComparison.OrdinalIgnoreCase))
         {
             return "bg-blue-100 text-blue-700";
+        }
+        else if (selectedTool.Id.Contains("opencode", StringComparison.OrdinalIgnoreCase))
+        {
+            return "bg-emerald-100 text-emerald-700";
         }
         else
         {

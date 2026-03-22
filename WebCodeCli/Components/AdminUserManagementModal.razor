@@ -1,0 +1,239 @@
+@namespace WebCodeCli.Components
+@using Microsoft.AspNetCore.Components.Forms
+@using WebCodeCli.Domain.Domain.Model
+
+@if (_isVisible)
+{
+    <div class="fixed inset-0 z-[90]">
+        <div class="absolute inset-0 bg-black/60" @onclick="CloseAsync"></div>
+        <div class="relative z-[91] flex h-full md:items-center md:justify-center md:p-4">
+            <div class="w-full h-full bg-white shadow-2xl overflow-hidden flex flex-col md:max-w-6xl md:h-[90vh] md:rounded-2xl" @onclick:stopPropagation="true">
+                <div class="px-4 py-4 border-b border-gray-200 flex items-center justify-between gap-3 md:px-6">
+                    <div class="min-w-0">
+                        <h2 class="text-lg font-semibold text-gray-900 truncate">@Tx("adminUserManagement.title", "用户管理", "User Management")</h2>
+                        <p class="text-xs text-gray-500 truncate">@Tx("adminUserManagement.subtitle", "管理账号、工具权限、白名单目录和飞书机器人。", "Manage accounts, tool policies, workspace whitelists, and Feishu bots.")</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button @onclick="RefreshAsync" disabled="@IsBusy" class="hidden sm:inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors disabled:opacity-50">
+                            @Tx("adminUserManagement.refresh", "刷新", "Refresh")
+                        </button>
+                        <button @onclick="CloseAsync" class="inline-flex items-center justify-center w-10 h-10 rounded-xl hover:bg-gray-100 transition-colors">
+                            <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_errorMessage))
+                {
+                    <div class="mx-4 mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 md:mx-6">@_errorMessage</div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_successMessage))
+                {
+                    <div class="mx-4 mt-4 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 md:mx-6">@_successMessage</div>
+                }
+
+                <div class="flex-1 min-h-0 flex flex-col md:flex-row">
+                    <aside class="border-b border-gray-200 md:w-80 md:border-b-0 md:border-r flex flex-col min-h-0">
+                        <div class="p-4 border-b border-gray-100 space-y-3">
+                            <button @onclick="PrepareNewUser" disabled="@IsBusy" class="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-gray-900 text-white text-sm font-medium hover:bg-black transition-colors disabled:opacity-50">
+                                @Tx("adminUserManagement.newUser", "新建用户", "New User")
+                            </button>
+                            <input @bind="_userSearch" @bind:event="oninput" type="text" placeholder="@Tx("adminUserManagement.searchPlaceholder", "搜索用户名或显示名", "Search username or display name")" class="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                        </div>
+
+                        <div class="flex-1 min-h-0 overflow-y-auto bg-gray-50/60">
+                            @if (_isLoadingUsers)
+                            {
+                                <div class="h-full flex items-center justify-center p-6 text-sm text-gray-500">@Tx("adminUserManagement.loadingUsers", "正在加载用户列表...", "Loading users...")</div>
+                            }
+                            else if (!FilteredUsers.Any())
+                            {
+                                <div class="p-6 text-center text-sm text-gray-500">@Tx("adminUserManagement.noUsers", "没有找到匹配的用户。", "No matching users.")</div>
+                            }
+                            else
+                            {
+                                <div class="p-3 space-y-2">
+                                    @foreach (var user in FilteredUsers)
+                                    {
+                                        var isSelected = string.Equals(_selectedUsername, user.Username, StringComparison.OrdinalIgnoreCase);
+                                        <button @onclick="() => SelectUserAsync(user.Username)" class="w-full rounded-2xl border px-4 py-3 text-left transition @(isSelected ? "border-gray-900 bg-white shadow-sm" : "border-transparent bg-white/70 hover:border-gray-200 hover:bg-white")">
+                                            <div class="flex items-start justify-between gap-3">
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-semibold text-gray-900 truncate">@user.Username</div>
+                                                    <div class="text-xs text-gray-500 truncate">@GetDisplayName(user)</div>
+                                                </div>
+                                                <div class="flex items-center gap-2 flex-shrink-0">
+                                                    <span class="@GetRoleBadgeClass(user.Role)">@GetRoleLabel(user.Role)</span>
+                                                    <span class="@GetStatusBadgeClass(user.Status)">@GetStatusLabel(user.Status)</span>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </aside>
+
+                    <main class="flex-1 min-h-0 overflow-y-auto bg-gray-50/80">
+                        <div class="p-4 md:p-6 space-y-4">
+                            @if (_isLoadingDetail)
+                            {
+                                <div class="rounded-3xl bg-white border border-gray-200 shadow-sm p-8 text-sm text-gray-500">@Tx("adminUserManagement.loadingUserDetail", "正在加载用户详情...", "Loading user details...")</div>
+                            }
+                            else
+                            {
+                                <section class="rounded-3xl bg-white border border-gray-200 shadow-sm p-5 space-y-4">
+                                    <div>
+                                        <h3 class="text-base font-semibold text-gray-900">@Tx("adminUserManagement.basicInfo", "基本信息", "Basic Information")</h3>
+                                        <p class="text-xs text-gray-500">@Tx("adminUserManagement.basicInfoHint", "新建用户时需要设置密码；已存在用户留空密码则不修改。", "A password is required for new users; leave it blank to keep the current password.")</p>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <label class="space-y-2">
+                                            <span class="text-sm font-medium text-gray-700">@Tx("adminUserManagement.username", "用户名", "Username")</span>
+                                            <input @bind="_editor.Username" @bind:event="oninput" disabled="@_editor.IsExistingUser" type="text" class="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white disabled:bg-gray-100 disabled:text-gray-500" />
+                                        </label>
+                                        <label class="space-y-2">
+                                            <span class="text-sm font-medium text-gray-700">@Tx("adminUserManagement.displayName", "显示名", "Display Name")</span>
+                                            <input @bind="_editor.DisplayName" @bind:event="oninput" type="text" class="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        </label>
+                                        <label class="space-y-2">
+                                            <span class="text-sm font-medium text-gray-700">@Tx("adminUserManagement.password", "密码", "Password")</span>
+                                            <input @bind="_editor.Password" @bind:event="oninput" type="password" placeholder="@(_editor.IsExistingUser ? Tx("adminUserManagement.passwordKeepHint", "留空表示保持原密码", "Leave blank to keep current password") : string.Empty)" class="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        </label>
+                                        <label class="space-y-2">
+                                            <span class="text-sm font-medium text-gray-700">@Tx("adminUserManagement.role", "角色", "Role")</span>
+                                            <select @bind="_editor.Role" class="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white">
+                                                <option value="@UserAccessConstants.UserRole">@Tx("adminUserManagement.roleUser", "普通用户", "User")</option>
+                                                <option value="@UserAccessConstants.AdminRole">@Tx("adminUserManagement.roleAdmin", "管理员", "Admin")</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <label class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between gap-3">
+                                            <span class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.enabled", "启用账号", "Enabled")</span>
+                                            <input type="checkbox" @bind="_editor.Enabled" class="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                        </label>
+                                        <div class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
+                                            <div class="text-xs text-gray-500">@Tx("adminUserManagement.createdAt", "创建时间", "Created at")</div>
+                                            <div class="mt-1 text-sm font-medium text-gray-800">@GetMetaValue(_editor.CreatedAt)</div>
+                                        </div>
+                                        <div class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
+                                            <div class="text-xs text-gray-500">@Tx("adminUserManagement.lastLogin", "最近登录", "Last login")</div>
+                                            <div class="mt-1 text-sm font-medium text-gray-800">@GetMetaValue(_editor.LastLoginAt)</div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section class="rounded-3xl bg-white border border-gray-200 shadow-sm p-5 space-y-4">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <h3 class="text-base font-semibold text-gray-900">@Tx("adminUserManagement.tools", "CLI 工具权限", "CLI Tool Access")</h3>
+                                            <p class="text-xs text-gray-500">@Tx("adminUserManagement.toolsHint", "选择该用户允许使用的 CLI 工具。", "Select which CLI tools the user can access.")</p>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <button @onclick="AllowAllTools" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors">@Tx("adminUserManagement.allowAll", "全选", "Allow all")</button>
+                                            <button @onclick="ClearAllTools" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors">@Tx("adminUserManagement.clearTools", "清空", "Clear")</button>
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                        @foreach (var tool in OrderedTools)
+                                        {
+                                            <label class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 flex items-start gap-3">
+                                                <input type="checkbox" checked="@_editor.AllowedToolIds.Contains(tool.Id)" @onchange="(ChangeEventArgs e) => SetToolSelection(tool.Id, e.Value is bool value && value)" class="mt-1 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-medium text-gray-800">@tool.Name</div>
+                                                    <div class="text-xs text-gray-500 break-all">@tool.Id</div>
+                                                </div>
+                                            </label>
+                                        }
+                                    </div>
+                                </section>
+
+                                <section class="rounded-3xl bg-white border border-gray-200 shadow-sm p-5 space-y-4">
+                                    <div>
+                                        <h3 class="text-base font-semibold text-gray-900">@Tx("adminUserManagement.workspacePolicies", "白名单目录", "Workspace Whitelist")</h3>
+                                        <p class="text-xs text-gray-500">@Tx("adminUserManagement.workspacePoliciesHint", "每行一个目录，留空表示不额外限制。", "One directory per line. Leave blank for no extra restriction.")</p>
+                                    </div>
+                                    <textarea @bind="_editor.AllowedDirectoriesText" @bind:event="oninput" rows="6" spellcheck="false" class="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white font-mono"></textarea>
+                                </section>
+
+                                <section class="rounded-3xl bg-white border border-gray-200 shadow-sm p-5 space-y-4">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <h3 class="text-base font-semibold text-gray-900">@Tx("adminUserManagement.feishuTitle", "飞书机器人配置", "Feishu Bot Configuration")</h3>
+                                            <p class="text-xs text-gray-500">@Tx("adminUserManagement.feishuHint", "平台不提供默认机器人。保存只会写入配置，点击启动后才会建立连接。", "There is no platform-wide default bot. Saving only stores the credentials; click Start to establish the connection.")</p>
+                                        </div>
+                                        @if (_editor.IsExistingUser && _editor.HasStoredFeishuConfig)
+                                        {
+                                            <button @onclick="ResetFeishuConfigAsync" disabled="@_isDeletingFeishuConfig" class="px-3 py-2 rounded-xl bg-red-50 text-sm text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50">
+                                                @(_isDeletingFeishuConfig ? Tx("adminUserManagement.resettingFeishu", "清空中...", "Clearing...") : Tx("adminUserManagement.resetFeishu", "清空用户配置", "Clear credentials"))
+                                            </button>
+                                        }
+                                    </div>
+                                    <div class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4 space-y-3">
+                                        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                            <div class="space-y-1">
+                                                <div class="text-xs text-gray-500">@Tx("adminUserManagement.feishuRuntime", "连接状态", "Connection status")</div>
+                                                <div class="flex items-center gap-2">
+                                                    <span class="@GetFeishuRuntimeBadgeClass(_feishuBotStatus.State)">@GetFeishuRuntimeLabel(_feishuBotStatus.State)</span>
+                                                    @if (!string.IsNullOrWhiteSpace(_feishuBotStatus.AppId))
+                                                    {
+                                                        <span class="text-xs text-gray-500 font-mono">@_feishuBotStatus.AppId</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                            <div class="flex flex-wrap items-center gap-2">
+                                                <button @onclick="RefreshFeishuBotStatusAsync" disabled="@(!_editor.IsExistingUser || _isRefreshingFeishuStatus)" type="button" class="px-3 py-2 rounded-xl bg-gray-100 text-sm text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">
+                                                    @(_isRefreshingFeishuStatus ? Tx("adminUserManagement.refreshingFeishuStatus", "刷新中...", "Refreshing...") : Tx("adminUserManagement.refreshFeishuStatus", "刷新状态", "Refresh status"))
+                                                </button>
+                                                <button @onclick="StartFeishuBotAsync" disabled="@(!CanStartFeishuBot)" type="button" class="px-3 py-2 rounded-xl bg-emerald-600 text-sm text-white hover:bg-emerald-700 transition-colors disabled:opacity-50">
+                                                    @(_isStartingFeishuBot ? Tx("adminUserManagement.startingFeishu", "启动中...", "Starting...") : Tx("adminUserManagement.startFeishu", "启动", "Start"))
+                                                </button>
+                                                <button @onclick="StopFeishuBotAsync" disabled="@(!CanStopFeishuBot)" type="button" class="px-3 py-2 rounded-xl bg-slate-800 text-sm text-white hover:bg-black transition-colors disabled:opacity-50">
+                                                    @(_isStoppingFeishuBot ? Tx("adminUserManagement.stoppingFeishu", "停止中...", "Stopping...") : Tx("adminUserManagement.stopFeishu", "停止", "Stop"))
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="text-sm text-gray-700">@(_feishuBotStatus.Message ?? Tx("adminUserManagement.feishuNotConfigured", "当前用户尚未配置可启动的飞书机器人。", "No runnable Feishu bot is configured for this user."))</div>
+                                        @if (!string.IsNullOrWhiteSpace(_feishuBotStatus.LastError))
+                                        {
+                                            <div class="rounded-2xl border border-red-200 bg-red-50 px-3 py-3 text-xs text-red-700 break-words">@_feishuBotStatus.LastError</div>
+                                        }
+                                        <div class="text-xs text-gray-500">@Tx("adminUserManagement.feishuLastStarted", "最近启动时间", "Last started")：@GetMetaValue(_feishuBotStatus.LastStartedAt)</div>
+                                    </div>
+                                    <label class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between gap-3">
+                                        <span class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.feishuEnabled", "允许此用户机器人被启动", "Allow this user's bot to be started")</span>
+                                        <input type="checkbox" @bind="_editor.FeishuBot.IsEnabled" class="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                    </label>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <input @bind="_editor.FeishuBot.AppId" @bind:event="oninput" type="text" placeholder="App ID" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        <input @bind="_editor.FeishuBot.AppSecret" @bind:event="oninput" type="password" placeholder="App Secret" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        <input @bind="_editor.FeishuBot.EncryptKey" @bind:event="oninput" type="text" placeholder="@Tx("adminUserManagement.encryptKey", "加密 Key", "Encrypt key")" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        <input @bind="_editor.FeishuBot.VerificationToken" @bind:event="oninput" type="password" placeholder="@Tx("adminUserManagement.verificationToken", "验证 Token", "Verification token")" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        <input @bind="_editor.FeishuBot.DefaultCardTitle" @bind:event="oninput" type="text" placeholder="@Tx("adminUserManagement.defaultCardTitle", "默认卡片标题", "Default card title")" class="md:col-span-2 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        <textarea @bind="_editor.FeishuBot.ThinkingMessage" @bind:event="oninput" rows="3" placeholder="@Tx("adminUserManagement.thinkingMessage", "思考中提示语", "Thinking message")" class="md:col-span-2 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white"></textarea>
+                                        <InputNumber @bind-Value="_editor.FeishuBot.HttpTimeoutSeconds" placeholder="@Tx("adminUserManagement.httpTimeoutSeconds", "HTTP 超时（秒）", "HTTP timeout (seconds)")" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                        <InputNumber @bind-Value="_editor.FeishuBot.StreamingThrottleMs" placeholder="@Tx("adminUserManagement.streamingThrottleMs", "流式推送节流（毫秒）", "Streaming throttle (ms)")" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />
+                                    </div>
+                                </section>
+
+                                <div class="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
+                                    <div class="text-xs text-gray-500">@Tx("adminUserManagement.saveHint", "保存会同时更新基本信息、工具权限、白名单目录和飞书配置；飞书机器人不会自动连接。", "Saving updates basic info, tool access, workspace policies, and Feishu settings together; the Feishu bot does not auto-connect.")</div>
+                                    <div class="flex items-center gap-2">
+                                        <button @onclick="RefreshAsync" disabled="@IsBusy" class="sm:hidden inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-gray-100 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">@Tx("adminUserManagement.refresh", "刷新", "Refresh")</button>
+                                        <button @onclick="SaveAsync" disabled="@(_isSaving || _isLoadingDetail)" class="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-gray-900 text-white text-sm font-medium hover:bg-black transition-colors disabled:opacity-50">
+                                            @(_isSaving ? Tx("adminUserManagement.saving", "保存中...", "Saving...") : Tx("adminUserManagement.save", "保存全部", "Save all"))
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </main>
+                </div>
+            </div>
+        </div>
+    </div>
+}

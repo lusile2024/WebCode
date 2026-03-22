@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
+using WebCodeCli.Helpers;
 using Serilog;
 using Log = Serilog.Log;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(CreateBuilderOptions(args));
 
 // 配置 Kestrel 服务器限制
 builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -39,10 +41,35 @@ builder.Services.AddServerSideBlazor(options =>
     options.HandshakeTimeout = TimeSpan.FromMinutes(1);
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
 });
-builder.Services.AddScoped(sp => new HttpClient
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/login";
+        options.LogoutPath = "/login";
+        options.AccessDeniedPath = "/login";
+        options.SlidingExpiration = true;
+        options.ExpireTimeSpan = TimeSpan.FromDays(7);
+        options.Cookie.Name = "WebCode.Auth";
+    });
+builder.Services.AddAuthorization();
+builder.Services.AddScoped(sp =>
 {
-    BaseAddress = new Uri(sp.GetService<NavigationManager>()!.BaseUri),
-    Timeout = TimeSpan.FromMinutes(10) // 增加到 10 分钟，支持长时间运行的 CLI 工具
+    var navigationManager = sp.GetRequiredService<NavigationManager>();
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    var client = new HttpClient
+    {
+        BaseAddress = new Uri(navigationManager.BaseUri),
+        Timeout = TimeSpan.FromMinutes(10)
+    };
+
+    var cookieHeader = httpContextAccessor.HttpContext?.Request.Headers.Cookie.ToString();
+    if (!string.IsNullOrWhiteSpace(cookieHeader))
+    {
+        client.DefaultRequestHeaders.Add("Cookie", cookieHeader);
+    }
+
+    return client;
 });
 builder.Services.Configure<CliToolsOption>(builder.Configuration.GetSection("CliTools"));
 builder.Services.Configure<WebCodeCli.Domain.Common.Options.AuthenticationOption>(builder.Configuration.GetSection("Authentication"));
@@ -53,6 +80,12 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddServicesFromAssemblies("WebCodeCli", "WebCodeCli.Domain");
+
+// 添加 HttpClient 工厂（飞书 CardKit 客户端需要）
+builder.Services.AddHttpClient();
+
+// 添加飞书渠道服务
+builder.Services.AddFeishuChannel(builder.Configuration);
 
 // 添加 YARP 反向代理
 builder.Services.AddHttpForwarder();
@@ -125,7 +158,9 @@ builder.Services.AddCors(options =>
 // 配置 Serilog 静态日志器
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
+    .MinimumLevel.Debug()
     .WriteTo.Console()
+    .WriteTo.File("logs/feishu-.log", rollingInterval: RollingInterval.Day, outputTemplate: "{Timestamp:HH:mm:ss} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
 
 // 将 Serilog 集成到 ASP.NET Core 日志系统
@@ -135,6 +170,14 @@ builder.Logging.AddSerilog(Log.Logger);
 
 
 var app = builder.Build();
+
+// 初始化命令扫描服务
+using (var scope = app.Services.CreateScope())
+{
+    var commandScanner = scope.ServiceProvider.GetRequiredService<CommandScannerService>();
+    commandScanner.Initialize();
+    Log.Information("✅ CommandScannerService 初始化完成，命令扫描和监听已启动");
+}
 
 // 启用响应压缩（必须在其他中间件之前）
 app.UseResponseCompression();
@@ -151,15 +194,33 @@ if (app.Environment.IsDevelopment())
 app.UseStaticFiles();
 
 app.UseRouting();
-
-app.MapBlazorHub();
-
-app.MapFallbackToPage("/_Host");
-
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapBlazorHub();
+app.MapFallbackToPage("/_Host");
 
 app.CodeFirst();
 
+using (var scope = app.Services.CreateScope())
+{
+    var userAccountService = scope.ServiceProvider.GetRequiredService<IUserAccountService>();
+    userAccountService.EnsureSeedDataAsync().GetAwaiter().GetResult();
+}
+
 app.Run();
+
+static WebApplicationOptions CreateBuilderOptions(string[] args)
+{
+    var resolvedWebRoot = WebRootPathResolver.Resolve(
+        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"),
+        Directory.GetCurrentDirectory(),
+        AppContext.BaseDirectory);
+
+    return new WebApplicationOptions
+    {
+        Args = args,
+        WebRootPath = resolvedWebRoot
+    };
+}

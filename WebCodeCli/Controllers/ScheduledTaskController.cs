@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Repositories.Base.ScheduledTask;
@@ -9,18 +10,26 @@ namespace WebCodeCli.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/scheduled-task")]
+[Authorize]
 public class ScheduledTaskController : ControllerBase
 {
     private readonly IScheduledTaskService _taskService;
+    private readonly IUserContextService _userContextService;
     private readonly ILogger<ScheduledTaskController> _logger;
-    private const string DefaultUsername = "default";
 
     public ScheduledTaskController(
         IScheduledTaskService taskService,
+        IUserContextService userContextService,
         ILogger<ScheduledTaskController> logger)
     {
         _taskService = taskService;
+        _userContextService = userContextService;
         _logger = logger;
+    }
+
+    private string GetCurrentUsername()
+    {
+        return _userContextService.GetCurrentUsername();
     }
 
     #region 任务管理
@@ -33,7 +42,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var tasks = await _taskService.GetTasksAsync(DefaultUsername);
+            var tasks = await _taskService.GetTasksAsync(GetCurrentUsername());
             return Ok(tasks);
         }
         catch (Exception ex)
@@ -51,7 +60,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var task = await _taskService.GetTaskByIdAsync(taskId, DefaultUsername);
+            var task = await _taskService.GetTaskByIdAsync(taskId, GetCurrentUsername());
             
             if (task == null)
             {
@@ -81,7 +90,7 @@ public class ScheduledTaskController : ControllerBase
             }
             
             var (success, errorMessage, task) = await _taskService.CreateTaskAsync(
-                DefaultUsername,
+                GetCurrentUsername(),
                 request.Name,
                 request.Description,
                 request.CronExpression,
@@ -121,7 +130,7 @@ public class ScheduledTaskController : ControllerBase
             
             var (success, errorMessage) = await _taskService.UpdateTaskAsync(
                 taskId,
-                DefaultUsername,
+                GetCurrentUsername(),
                 request.Name,
                 request.Description,
                 request.CronExpression,
@@ -154,7 +163,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var (success, errorMessage) = await _taskService.DeleteTaskAsync(taskId, DefaultUsername, deleteExecutions);
+            var (success, errorMessage) = await _taskService.DeleteTaskAsync(taskId, GetCurrentUsername(), deleteExecutions);
             
             if (!success)
             {
@@ -178,7 +187,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var (success, errorMessage) = await _taskService.ToggleTaskAsync(taskId, DefaultUsername, request.IsEnabled);
+            var (success, errorMessage) = await _taskService.ToggleTaskAsync(taskId, GetCurrentUsername(), request.IsEnabled);
             
             if (!success)
             {
@@ -206,7 +215,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var (success, errorMessage, executionId) = await _taskService.TriggerTaskAsync(taskId, DefaultUsername);
+            var (success, errorMessage, executionId) = await _taskService.TriggerTaskAsync(taskId, GetCurrentUsername());
             
             if (!success)
             {
@@ -258,7 +267,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var executions = await _taskService.GetExecutionsAsync(taskId, DefaultUsername, limit);
+            var executions = await _taskService.GetExecutionsAsync(taskId, GetCurrentUsername(), limit);
             return Ok(executions);
         }
         catch (Exception ex)
@@ -300,7 +309,7 @@ public class ScheduledTaskController : ControllerBase
     {
         try
         {
-            var deletedCount = await _taskService.CleanupExecutionsAsync(taskId, DefaultUsername, keepCount);
+            var deletedCount = await _taskService.CleanupExecutionsAsync(taskId, GetCurrentUsername(), keepCount);
             return Ok(new { Success = true, DeletedCount = deletedCount });
         }
         catch (Exception ex)

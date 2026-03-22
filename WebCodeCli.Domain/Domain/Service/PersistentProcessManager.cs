@@ -125,16 +125,27 @@ public class PersistentProcessManager : IDisposable
             WorkingDirectory = workingDirectory
         };
 
-        // 设置环境变量 - 只有在有实际值的变量才设置(避免空值覆盖系统默认配置)
+        // 关键：强制移除 CLAUDECODE 环境变量，避免子进程检测到嵌套 Claude Code 会话
+        // 当 Webcode 本身运行在 Claude Code 中时，会继承此变量，导致子进程启动失败
+        if (startInfo.EnvironmentVariables.ContainsKey("CLAUDECODE"))
+        {
+            startInfo.EnvironmentVariables.Remove("CLAUDECODE");
+            _logger.LogDebug("移除 CLAUDECODE 环境变量，避免嵌套会话检测");
+        }
+
+        // 设置环境变量
         if (environmentVariables != null && environmentVariables.Count > 0)
         {
             foreach (var kvp in environmentVariables)
             {
-                // 跳过空值的环境变量，避免覆盖系统中已存在的配置
-                if (string.IsNullOrWhiteSpace(kvp.Value))
+                // 空字符串表示显式移除环境变量（用于取消继承父进程的环境变量）
+                if (string.IsNullOrEmpty(kvp.Value))
                 {
+                    startInfo.EnvironmentVariables.Remove(kvp.Key);
+                    _logger.LogDebug("移除环境变量: {Key}", kvp.Key);
                     continue;
                 }
+                // 非空值正常设置
                 startInfo.EnvironmentVariables[kvp.Key] = kvp.Value;
             }
             

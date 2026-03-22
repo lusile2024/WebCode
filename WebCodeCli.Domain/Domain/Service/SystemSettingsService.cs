@@ -7,6 +7,7 @@ using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Repositories.Base.CliToolEnv;
 using WebCodeCli.Domain.Repositories.Base.SystemSettings;
+using WebCodeCli.Domain.Repositories.Base.UserAccount;
 
 namespace WebCodeCli.Domain.Domain.Service;
 
@@ -59,6 +60,11 @@ public interface ISystemSettingsService
     /// 保存启用的助手列表
     /// </summary>
     Task<bool> SaveEnabledAssistantsAsync(List<string> assistants);
+
+    /// <summary>
+    /// 检测本地 CLI 配置
+    /// </summary>
+    Task<LocalCliConfigDetectionResult> DetectLocalCliConfigsAsync();
 }
 
 /// <summary>
@@ -164,19 +170,25 @@ public class SystemSettingsService : ISystemSettingsService
     private readonly ICliToolEnvironmentVariableRepository _envRepository;
     private readonly CliToolsOption _cliOptions;
     private readonly AuthenticationOption _authOptions;
+    private readonly ILocalCliConfigDetector _localConfigDetector;
+    private readonly IUserAccountService _userAccountService;
 
     public SystemSettingsService(
         ILogger<SystemSettingsService> logger,
         ISystemSettingsRepository repository,
         ICliToolEnvironmentVariableRepository envRepository,
         IOptions<CliToolsOption> cliOptions,
-        IOptions<AuthenticationOption> authOptions)
+        IOptions<AuthenticationOption> authOptions,
+        ILocalCliConfigDetector localConfigDetector,
+        IUserAccountService userAccountService)
     {
         _logger = logger;
         _repository = repository;
         _envRepository = envRepository;
         _cliOptions = cliOptions.Value;
         _authOptions = authOptions.Value;
+        _localConfigDetector = localConfigDetector;
+        _userAccountService = userAccountService;
     }
 
     /// <summary>
@@ -213,6 +225,13 @@ public class SystemSettingsService : ISystemSettingsService
                 var encryptedPassword = Convert.ToBase64String(
                     System.Text.Encoding.UTF8.GetBytes(config.AdminPassword));
                 await _repository.SetAsync(SystemSettingsKeys.AdminPassword, encryptedPassword, "管理员密码（加密）");
+                await _userAccountService.CreateOrUpdateAsync(new UserAccountEntity
+                {
+                    Username = config.AdminUsername.Trim(),
+                    DisplayName = config.AdminUsername.Trim(),
+                    Role = UserAccessConstants.AdminRole,
+                    Status = UserAccessConstants.EnabledStatus
+                }, config.AdminPassword, overwritePassword: true);
             }
 
             // 2. 保存认证设置
@@ -407,6 +426,13 @@ public class SystemSettingsService : ISystemSettingsService
             var encryptedPassword = Convert.ToBase64String(
                 System.Text.Encoding.UTF8.GetBytes(password));
             await _repository.SetAsync(SystemSettingsKeys.AdminPassword, encryptedPassword, "管理员密码（加密）");
+            await _userAccountService.CreateOrUpdateAsync(new UserAccountEntity
+            {
+                Username = username.Trim(),
+                DisplayName = username.Trim(),
+                Role = UserAccessConstants.AdminRole,
+                Status = UserAccessConstants.EnabledStatus
+            }, password, overwritePassword: true);
             return true;
         }
         catch (Exception ex)
@@ -452,6 +478,14 @@ public class SystemSettingsService : ISystemSettingsService
             _logger.LogError(ex, "保存启用的助手列表失败");
             return false;
         }
+    }
+
+    /// <summary>
+    /// 检测本地 CLI 配置
+    /// </summary>
+    public async Task<LocalCliConfigDetectionResult> DetectLocalCliConfigsAsync()
+    {
+        return await _localConfigDetector.DetectLocalConfigsAsync();
     }
 
     /// <summary>

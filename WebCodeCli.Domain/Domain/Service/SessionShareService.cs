@@ -249,9 +249,15 @@ public class SessionShareService : ISessionShareService
     /// <summary>
     /// 获取会话的所有分享
     /// </summary>
-    public async Task<List<ShareInfoResponse>> GetSessionSharesAsync(string sessionId)
+    public async Task<List<ShareInfoResponse>> GetSessionSharesAsync(string sessionId, string? createdBy = null)
     {
         var shares = await _repository.GetBySessionIdAsync(sessionId);
+        if (!string.IsNullOrWhiteSpace(createdBy))
+        {
+            shares = shares
+                .Where(s => string.Equals(s.CreatedBy, createdBy, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
         
         return shares.Select(s => new ShareInfoResponse
         {
@@ -269,8 +275,14 @@ public class SessionShareService : ISessionShareService
     /// <summary>
     /// 停用分享
     /// </summary>
-    public async Task<bool> DeactivateShareAsync(string shareCode)
+    public async Task<bool> DeactivateShareAsync(string shareCode, string? createdBy = null)
     {
+        var share = await _repository.GetByShareCodeAsync(shareCode);
+        if (!IsOwnedByUser(share, createdBy))
+        {
+            return false;
+        }
+
         var result = await _repository.DeactivateAsync(shareCode);
         
         if (result)
@@ -287,11 +299,11 @@ public class SessionShareService : ISessionShareService
     /// <summary>
     /// 删除分享
     /// </summary>
-    public async Task<bool> DeleteShareAsync(string shareCode)
+    public async Task<bool> DeleteShareAsync(string shareCode, string? createdBy = null)
     {
         var share = await _repository.GetByShareCodeAsync(shareCode);
-        
-        if (share == null)
+
+        if (!IsOwnedByUser(share, createdBy))
         {
             return false;
         }
@@ -396,11 +408,18 @@ public class SessionShareService : ISessionShareService
     /// <summary>
     /// 更新分享的会话数据快照
     /// </summary>
-    public async Task<bool> UpdateShareSnapshotAsync(string shareCode, UpdateShareSnapshotRequest request)
+    public async Task<bool> UpdateShareSnapshotAsync(string shareCode, UpdateShareSnapshotRequest request, string? createdBy = null)
     {
         if (string.IsNullOrWhiteSpace(shareCode))
         {
             _logger.LogWarning("更新分享快照失败：分享码为空");
+            return false;
+        }
+
+        var share = await _repository.GetByShareCodeAsync(shareCode);
+        if (!IsOwnedByUser(share, createdBy))
+        {
+            _logger.LogWarning("更新分享快照失败：未找到可操作的分享, ShareCode={ShareCode}", shareCode);
             return false;
         }
         
@@ -423,6 +442,21 @@ public class SessionShareService : ISessionShareService
         }
         
         return result;
+    }
+
+    private static bool IsOwnedByUser(SessionShare? share, string? createdBy)
+    {
+        if (share == null)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(createdBy))
+        {
+            return true;
+        }
+
+        return string.Equals(share.CreatedBy, createdBy, StringComparison.OrdinalIgnoreCase);
     }
     
     #region 私有方法

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Repositories.Base.SessionShare;
@@ -12,14 +13,22 @@ namespace WebCodeCli.Controllers;
 public class ShareController : ControllerBase
 {
     private readonly ISessionShareService _shareService;
+    private readonly IUserContextService _userContextService;
     private readonly ILogger<ShareController> _logger;
 
     public ShareController(
         ISessionShareService shareService,
+        IUserContextService userContextService,
         ILogger<ShareController> logger)
     {
         _shareService = shareService;
+        _userContextService = userContextService;
         _logger = logger;
+    }
+
+    private string GetCurrentUsername()
+    {
+        return _userContextService.GetCurrentUsername();
     }
 
     private string GetRequestBaseUrl()
@@ -55,6 +64,7 @@ public class ShareController : ControllerBase
     /// 创建分享
     /// POST /api/share
     /// </summary>
+    [Authorize]
     [HttpPost]
     public async Task<IActionResult> CreateShare([FromBody] CreateShareRequest request)
     {
@@ -76,7 +86,7 @@ public class ShareController : ControllerBase
             }
 
             // 使用新的创建方法，包含会话数据
-            var result = await _shareService.CreateShareAsync(request);
+            var result = await _shareService.CreateShareAsync(request, GetCurrentUsername());
 
             // 生成完整的分享链接
             var baseUrl = GetRequestBaseUrl();
@@ -373,12 +383,13 @@ public class ShareController : ControllerBase
     /// 获取会话的所有分享
     /// GET /api/share/session/{sessionId}
     /// </summary>
+    [Authorize]
     [HttpGet("session/{sessionId}")]
     public async Task<IActionResult> GetSessionShares(string sessionId)
     {
         try
         {
-            var shares = await _shareService.GetSessionSharesAsync(sessionId);
+            var shares = await _shareService.GetSessionSharesAsync(sessionId, GetCurrentUsername());
 
             // 生成完整的分享链接
             var baseUrl = GetRequestBaseUrl();
@@ -400,12 +411,13 @@ public class ShareController : ControllerBase
     /// 停用分享
     /// PUT /api/share/{shareCode}/deactivate
     /// </summary>
+    [Authorize]
     [HttpPut("{shareCode}/deactivate")]
     public async Task<IActionResult> DeactivateShare(string shareCode)
     {
         try
         {
-            var result = await _shareService.DeactivateShareAsync(shareCode);
+            var result = await _shareService.DeactivateShareAsync(shareCode, GetCurrentUsername());
 
             if (!result)
             {
@@ -425,12 +437,13 @@ public class ShareController : ControllerBase
     /// 删除分享
     /// DELETE /api/share/{shareCode}
     /// </summary>
+    [Authorize]
     [HttpDelete("{shareCode}")]
     public async Task<IActionResult> DeleteShare(string shareCode)
     {
         try
         {
-            var result = await _shareService.DeleteShareAsync(shareCode);
+            var result = await _shareService.DeleteShareAsync(shareCode, GetCurrentUsername());
 
             if (!result)
             {
@@ -450,6 +463,7 @@ public class ShareController : ControllerBase
     /// 更新分享快照
     /// PUT /api/share/{shareCode}/snapshot
     /// </summary>
+    [Authorize]
     [HttpPut("{shareCode}/snapshot")]
     public async Task<IActionResult> UpdateShareSnapshot(string shareCode, [FromBody] UpdateShareSnapshotRequest request)
     {
@@ -460,7 +474,7 @@ public class ShareController : ControllerBase
                 return BadRequest(new { error = "分享码不能为空" });
             }
 
-            var result = await _shareService.UpdateShareSnapshotAsync(shareCode, request);
+            var result = await _shareService.UpdateShareSnapshotAsync(shareCode, request, GetCurrentUsername());
 
             if (!result)
             {
