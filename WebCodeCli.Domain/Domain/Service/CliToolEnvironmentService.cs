@@ -67,30 +67,13 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     {
         try
         {
-            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
-            if (tool?.EnvironmentVariables != null)
-            {
-                foreach (var kvp in tool.EnvironmentVariables.Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value)))
-                {
-                    result[kvp.Key] = kvp.Value;
-                }
-            }
-
-            var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
-            foreach (var kvp in dbEnvVars.Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value)))
-            {
-                result[kvp.Key] = kvp.Value;
-            }
+            var result = await GetInheritedEnvironmentVariablesAsync(toolId);
 
             var resolvedUsername = ResolveUsername(username);
             if (!string.IsNullOrWhiteSpace(resolvedUsername))
             {
                 var userEnvVars = await _userRepository.GetEnvironmentVariablesAsync(resolvedUsername, toolId);
-                foreach (var kvp in userEnvVars.Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value)))
-                {
-                    result[kvp.Key] = kvp.Value;
-                }
+                ApplyOverrides(result, userEnvVars);
             }
 
             _logger.LogInformation("获取工具 {ToolId} 的环境变量配置，用户={Username}，最终 {Count} 个", toolId, resolvedUsername, result.Count);
@@ -116,10 +99,19 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
                 return false;
             }
 
-            var result = await _userRepository.SaveEnvironmentVariablesAsync(resolvedUsername, toolId, envVars);
+            var normalizedEnvVars = NormalizeEnvVars(envVars, keepEmptyValues: false);
+            var inheritedEnvVars = await GetInheritedEnvironmentVariablesAsync(toolId);
+            var persistedEnvVars = BuildPersistedUserEnvVars(normalizedEnvVars, inheritedEnvVars);
+
+            var result = await _userRepository.SaveEnvironmentVariablesAsync(resolvedUsername, toolId, persistedEnvVars);
             if (result)
             {
-                _logger.LogInformation("成功保存工具 {ToolId} 的用户环境变量配置，用户={Username}", toolId, resolvedUsername);
+                _logger.LogInformation(
+                    "成功保存工具 {ToolId} 的用户环境变量配置，用户={Username}，提交 {SubmittedCount} 个，落库 {PersistedCount} 个",
+                    toolId,
+                    resolvedUsername,
+                    normalizedEnvVars.Count,
+                    persistedEnvVars.Count);
             }
             return result;
         }
@@ -179,5 +171,80 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
         return string.IsNullOrWhiteSpace(username)
             ? _userContextService.GetCurrentUsername()
             : username.Trim();
+    }
+
+    private async Task<Dictionary<string, string>> GetInheritedEnvironmentVariablesAsync(string toolId)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
+        if (tool?.EnvironmentVariables != null)
+        {
+            ApplyOverrides(result, tool.EnvironmentVariables);
+        }
+
+        var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
+        ApplyOverrides(result, dbEnvVars);
+        return result;
+    }
+
+    private static Dictionary<string, string> NormalizeEnvVars(Dictionary<string, string> envVars, bool keepEmptyValues)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in envVars)
+        {
+            var key = kvp.Key?.Trim();
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var value = kvp.Value?.Trim() ?? string.Empty;
+            if (!keepEmptyValues && string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            result[key] = value;
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string> BuildPersistedUserEnvVars(
+        Dictionary<string, string> requestedEnvVars,
+        Dictionary<string, string> inheritedEnvVars)
+    {
+        var result = new Dictionary<string, string>(requestedEnvVars, StringComparer.OrdinalIgnoreCase);
+        foreach (var inheritedKey in inheritedEnvVars.Keys)
+        {
+            if (!requestedEnvVars.ContainsKey(inheritedKey))
+            {
+                // 空字符串表示显式移除继承的环境变量，避免默认值在下次读取时再次合并回来。
+                result[inheritedKey] = string.Empty;
+            }
+        }
+
+        return result;
+    }
+
+    private static void ApplyOverrides(Dictionary<string, string> target, IEnumerable<KeyValuePair<string, string>> envVars)
+    {
+        foreach (var kvp in envVars)
+        {
+            var key = kvp.Key?.Trim();
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var value = kvp.Value?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                target.Remove(key);
+                continue;
+            }
+
+            target[key] = value;
+        }
     }
 }
