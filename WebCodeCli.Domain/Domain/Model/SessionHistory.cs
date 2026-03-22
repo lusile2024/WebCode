@@ -34,6 +34,11 @@ public class SessionHistory
     /// 选中的工具ID
     /// </summary>
     public string ToolId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// CLI 会话/线程 ID（用于恢复外部 CLI 会话，例如 codex thread、claude resume、opencode session）
+    /// </summary>
+    public string? CliThreadId { get; set; }
     
     /// <summary>
     /// 消息列表

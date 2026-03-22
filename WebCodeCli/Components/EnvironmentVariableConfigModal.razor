@@ -156,6 +156,7 @@
     private bool _isVisible = false;
     private bool _isLoading = false;
     private CliToolConfig? _selectedTool;
+    private string? _username;
     private List<EnvVarItem> _envVars = new();
 
     // 本地化相关
@@ -173,9 +174,10 @@
         await LoadTranslationsAsync();
     }
 
-    public async Task ShowAsync(CliToolConfig tool)
+    public async Task ShowAsync(CliToolConfig tool, string? username = null)
     {
         _selectedTool = tool;
+        _username = string.IsNullOrWhiteSpace(username) ? null : username.Trim();
         _isVisible = true;
         _isLoading = true;
         StateHasChanged();
@@ -184,7 +186,7 @@
         {
             _currentLanguage = await L.GetCurrentLanguageAsync();
             await LoadTranslationsAsync();
-            var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(tool.Id);
+            var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(tool.Id, _username);
             _envVars = envVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
         }
         catch (Exception ex)
@@ -249,7 +251,7 @@
                 .Where(ev => !string.IsNullOrWhiteSpace(ev.Key) && !string.IsNullOrWhiteSpace(ev.Value))
                 .ToDictionary(ev => ev.Key.Trim(), ev => ev.Value!.Trim());
 
-            var success = await CliToolEnvironmentService.SaveEnvironmentVariablesAsync(_selectedTool.Id, validEnvVars);
+            var success = await CliToolEnvironmentService.SaveEnvironmentVariablesAsync(_selectedTool.Id, validEnvVars, _username);
             
             if (success)
             {
@@ -281,7 +283,7 @@
 
         try
         {
-            var defaultEnvVars = await CliToolEnvironmentService.ResetToDefaultAsync(_selectedTool.Id);
+            var defaultEnvVars = await CliToolEnvironmentService.ResetToDefaultAsync(_selectedTool.Id, _username);
             _envVars = defaultEnvVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
             Console.WriteLine("已重置为默认配置");
         }

@@ -164,6 +164,9 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
     // 环境变量配置模态框
     private EnvironmentVariableConfigModal _envConfigModal = default!;
+
+    // 外部 CLI 会话导入模态框
+    private ExternalCliSessionImportModal _externalCliSessionImportModal = default!;
     
     // 会话分享模态框
     private ShareSessionModal _shareSessionModal = default!;
@@ -2212,6 +2215,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             _rawOutput = state.RawOutput ?? string.Empty;
             _isJsonlOutputActive = state.IsJsonlOutputActive;
             _activeThreadId = state.ActiveThreadId ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(_activeThreadId))
+            {
+                // 刷新页面/重连后恢复 CLI thread id，保证后续可以 resume
+                CliExecutorService.SetCliThreadId(sessionId, _activeThreadId);
+            }
 
             _jsonlEvents.Clear();
             _jsonlGroupOpenState.Clear();
@@ -2881,7 +2889,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         var selectedTool = _availableTools.FirstOrDefault(t => t.Id == _selectedToolId);
         if (selectedTool != null && _envConfigModal != null)
         {
-            await _envConfigModal.ShowAsync(selectedTool);
+            await _envConfigModal.ShowAsync(selectedTool, _currentUsername);
         }
     }
     
@@ -4186,6 +4194,16 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>
+    /// 从侧边面板打开“外部 CLI 会话导入”
+    /// </summary>
+    private async Task OpenExternalCliSessionImportFromSidePanel()
+    {
+        _showSidePanel = false;
+        StateHasChanged();
+        await OpenExternalCliSessionImportModalAsync();
+    }
+
+    /// <summary>
     /// 从侧边面板检查更新
     /// </summary>
     private async Task CheckForUpdateFromSidePanel()
@@ -4213,6 +4231,35 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         _showSidePanel = false;
         StateHasChanged();
         await HandleLogout();
+    }
+
+    private async Task OpenExternalCliSessionImportModalAsync()
+    {
+        if (_externalCliSessionImportModal == null)
+        {
+            return;
+        }
+
+        await _externalCliSessionImportModal.ShowAsync(_currentUsername);
+    }
+
+    private async Task ReloadSessionsAfterExternalImportAsync(string sessionId)
+    {
+        // 导入成功后刷新会话列表（不强制切换）
+        await LoadSessionsAsync();
+        StateHasChanged();
+    }
+
+    private async Task OpenSessionFromExternalImportAsync(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return;
+        }
+
+        // 打开前先同步刷新一次列表，避免 UI 与 DB 不一致
+        await LoadSessionsAsync();
+        await LoadSession(sessionId);
     }
     
     /// <summary>

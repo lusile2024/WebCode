@@ -1501,6 +1501,11 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             _rawOutput = state.RawOutput ?? string.Empty;
             _isJsonlOutputActive = state.IsJsonlOutputActive;
             _activeThreadId = state.ActiveThreadId ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(_activeThreadId))
+            {
+                // 刷新页面/重连后恢复 CLI thread id，保证后续可以 resume
+                CliExecutorService.SetCliThreadId(sessionId, _activeThreadId);
+            }
 
             _jsonlEvents.Clear();
             if (state.JsonlEvents != null)
@@ -2855,6 +2860,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     
     private CodePreviewModal _codePreviewModal = default!;
     private EnvironmentVariableConfigModal _envConfigModal = default!;
+    private ExternalCliSessionImportModal _externalCliSessionImportModal = default!;
     private ProgressTracker _progressTracker = default!;
     private QuickActionsPanel _quickActionsPanel = default!;
     private UpdateNotificationModal _updateNotificationModal = default!;
@@ -3002,8 +3008,35 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         var selectedTool = _availableTools.FirstOrDefault(t => t.Id == _selectedToolId);
         if (selectedTool != null && _envConfigModal != null)
         {
-            await _envConfigModal.ShowAsync(selectedTool);
+            await _envConfigModal.ShowAsync(selectedTool, _currentUsername);
         }
+    }
+
+    private async Task OpenExternalCliSessionImportModalAsync()
+    {
+        if (_externalCliSessionImportModal == null)
+        {
+            return;
+        }
+
+        await _externalCliSessionImportModal.ShowAsync(_currentUsername);
+    }
+
+    private async Task ReloadSessionsAfterExternalImportAsync(string sessionId)
+    {
+        await LoadSessions();
+        StateHasChanged();
+    }
+
+    private async Task OpenSessionFromExternalImportAsync(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return;
+        }
+
+        await LoadSessions();
+        await LoadSessionFromDrawer(sessionId);
     }
 
     private void OpenToolPicker()

@@ -1,6 +1,7 @@
 using AntSK.Domain.Repositories.Base;
 using Microsoft.Extensions.DependencyInjection;
 using SqlSugar;
+using System.IO;
 using WebCodeCli.Domain.Common.Extensions;
 
 namespace WebCodeCli.Domain.Repositories.Base.ChatSession;
@@ -48,6 +49,80 @@ public class ChatSessionRepository : Repository<ChatSessionEntity>, IChatSession
             .Where(x => x.Username == username)
             .OrderBy(x => x.UpdatedAt, OrderByType.Desc)
             .ToListAsync();
+    }
+
+    /// <summary>
+    /// 根据用户名 + 工具 + CLI ThreadId 查找会话（用于外部会话导入/去重）
+    /// </summary>
+    public async Task<ChatSessionEntity?> GetByUsernameToolAndCliThreadIdAsync(string username, string toolId, string cliThreadId)
+    {
+        if (string.IsNullOrWhiteSpace(username) ||
+            string.IsNullOrWhiteSpace(toolId) ||
+            string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            return null;
+        }
+
+        return await GetDB().Queryable<ChatSessionEntity>()
+            .Where(x => x.Username == username && x.ToolId == toolId && x.CliThreadId == cliThreadId)
+            .FirstAsync();
+    }
+
+    /// <summary>
+    /// 根据工具 + CLI ThreadId 查找会话（跨用户，用于“一个外部会话只能被一个用户占用”约束）
+    /// </summary>
+    public async Task<ChatSessionEntity?> GetByToolAndCliThreadIdAsync(string toolId, string cliThreadId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId) || string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            return null;
+        }
+
+        return await GetDB().Queryable<ChatSessionEntity>()
+            .Where(x => x.ToolId == toolId && x.CliThreadId == cliThreadId)
+            .FirstAsync();
+    }
+
+    /// <summary>
+    /// 更新会话的 CLI ThreadId（用于恢复）
+    /// </summary>
+    public async Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            return false;
+        }
+
+        var rows = await GetDB().Updateable<ChatSessionEntity>()
+            .SetColumns(x => x.CliThreadId == cliThreadId)
+            .SetColumns(x => x.UpdatedAt == DateTime.Now)
+            .Where(x => x.SessionId == sessionId)
+            .ExecuteCommandAsync();
+
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// 更新会话的工作区绑定（仅更新数据库字段，不创建目录）
+    /// </summary>
+    public async Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return false;
+        }
+
+        var isValid = !string.IsNullOrWhiteSpace(workspacePath) && Directory.Exists(workspacePath);
+
+        var rows = await GetDB().Updateable<ChatSessionEntity>()
+            .SetColumns(x => x.WorkspacePath == workspacePath)
+            .SetColumns(x => x.IsCustomWorkspace == isCustomWorkspace)
+            .SetColumns(x => x.IsWorkspaceValid == isValid)
+            .SetColumns(x => x.UpdatedAt == DateTime.Now)
+            .Where(x => x.SessionId == sessionId)
+            .ExecuteCommandAsync();
+
+        return rows > 0;
     }
 
     /// <summary>

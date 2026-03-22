@@ -448,6 +448,11 @@
 <!-- 环境变量配置模态框 -->
 <EnvironmentVariableConfigModal @ref="_envConfigModal" />
 
+<!-- 外部 CLI 会话导入模态框 -->
+<ExternalCliSessionImportModal @ref="_externalCliSessionImportModal"
+                               OnOpenSession="OpenSessionFromExternalImportAsync"
+                               OnImported="ReloadSessionsAfterExternalImportAsync" />
+
 <!-- 代码预览模态框 -->
 @* 代码预览模态框 (已应用Tailwind样式) *@
 <CodePreviewModal @ref="_codePreviewModal" />
@@ -674,6 +679,22 @@
                 <div class="flex-1">
                     <div class="text-sm font-medium text-gray-700">@T("codeAssistant.settings")</div>
                     <div class="text-xs text-gray-400">@T("settings.envConfig")</div>
+                </div>
+                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
+            </button>
+
+            <!-- 导入本地 CLI 会话 -->
+            <button @onclick="OpenExternalCliSessionImportFromSidePanel"
+                    class="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 rounded-lg transition-colors text-left">
+                <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                          d="M8 9l3 3-3 3m5 0h3M4 19h16a2 2 0 002-2V7a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                </svg>
+                <div class="flex-1">
+                    <div class="text-sm font-medium text-gray-700">导入本地会话</div>
+                    <div class="text-xs text-gray-400">发现并导入 OpenCode/Codex/Claude Code</div>
                 </div>
                 <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>

@@ -1183,6 +1183,48 @@ public class FeishuCardActionServiceTests
                 .ToList());
         }
 
+        public Task<ChatSessionEntity?> GetByUsernameToolAndCliThreadIdAsync(string username, string toolId, string cliThreadId)
+        {
+            return Task.FromResult(_sessions.FirstOrDefault(x =>
+                string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public Task<ChatSessionEntity?> GetByToolAndCliThreadIdAsync(string toolId, string cliThreadId)
+        {
+            return Task.FromResult(_sessions.FirstOrDefault(x =>
+                string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.CliThreadId = cliThreadId;
+            session.UpdatedAt = DateTime.Now;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.WorkspacePath = workspacePath;
+            session.IsCustomWorkspace = isCustomWorkspace;
+            session.UpdatedAt = DateTime.Now;
+            return Task.FromResult(true);
+        }
+
         public Task<List<ChatSessionEntity>> GetByFeishuChatKeyAsync(string feishuChatKey)
         {
             return Task.FromResult(_sessions

@@ -1,0 +1,325 @@
+@using WebCodeCli.Domain.Domain.Model
+@using WebCodeCli.Domain.Domain.Service
+@inject IExternalCliSessionService ExternalCliSessionService
+
+<div class="external-cli-session-import-modal">
+    @if (_isVisible)
+    {
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+             @onclick="OnBackgroundClick">
+            <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col border border-gray-300"
+                 @onclick:stopPropagation="true">
+                <div class="flex items-center justify-between p-6 border-b border-gray-300 bg-gray-50 rounded-t-2xl">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="w-10 h-10 bg-gray-700 rounded-xl flex items-center justify-center flex-shrink-0">
+                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M8 9l3 3-3 3m5 0h3M4 19h16a2 2 0 002-2V7a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="text-lg font-bold text-gray-800 truncate">导入本地 CLI 会话</h3>
+                            <p class="text-xs text-gray-500 truncate">
+                                仅显示当前 Windows 账户下、且工作区在允许目录内的会话。
+                            </p>
+                        </div>
+                    </div>
+                    <button @onclick="Close"
+                            class="text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg p-2 transition-all"
+                            title="关闭">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="flex-1 overflow-y-auto p-6 space-y-4">
+                    <div class="flex flex-col md:flex-row md:items-center gap-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-700">工具</span>
+                            <select class="px-3 py-2 border border-gray-300 rounded-xl text-sm bg-white focus:outline-none focus:ring-1 focus:ring-gray-500"
+                                    @bind="_toolFilter">
+                                <option value="">全部</option>
+                                <option value="opencode">OpenCode</option>
+                                <option value="codex">Codex</option>
+                                <option value="claude-code">Claude Code</option>
+                            </select>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-700">数量</span>
+                            <input type="number"
+                                   class="w-24 px-3 py-2 border border-gray-300 rounded-xl text-sm bg-white focus:outline-none focus:ring-1 focus:ring-gray-500"
+                                   min="5" max="100" step="5"
+                                   @bind="_maxCount" />
+                        </div>
+
+                        <div class="flex-1"></div>
+
+                        <button class="btn-default"
+                                disabled="@_isLoading"
+                                @onclick="ReloadAsync">
+                            @if (_isLoading)
+                            {
+                                <div class="flex items-center gap-2">
+                                    <div class="animate-spin h-4 w-4 border-2 border-gray-700 rounded-full border-t-transparent"></div>
+                                    <span>刷新中...</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <span>刷新列表</span>
+                            }
+                        </button>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_errorMessage))
+                    {
+                        <div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+                            @_errorMessage
+                        </div>
+                    }
+
+                    @if (_isLoading)
+                    {
+                        <div class="flex items-center justify-center py-12">
+                            <div class="animate-spin h-8 w-8 border-4 border-gray-700 rounded-full border-t-transparent"></div>
+                        </div>
+                    }
+                    else if (_sessions.Count == 0)
+                    {
+                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center text-sm text-gray-600">
+                            未发现可导入的会话。
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="space-y-3">
+                            @foreach (var item in _sessions)
+                            {
+                                var importingKey = $"{item.ToolId}::{item.CliThreadId}";
+                                var isImporting = _importingKeys.Contains(importingKey);
+
+                                <div class="border border-gray-200 rounded-xl p-4 hover:shadow-sm transition-shadow bg-white">
+                                    <div class="flex flex-col md:flex-row md:items-start gap-3">
+                                        <div class="flex-1 min-w-0">
+                                            <div class="flex items-center gap-2">
+                                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
+                                                    @(!string.IsNullOrWhiteSpace(item.ToolName) ? item.ToolName : item.ToolId)
+                                                </span>
+                                                @if (item.AlreadyImported && !string.IsNullOrWhiteSpace(item.ImportedSessionId))
+                                                {
+                                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                                                        已导入
+                                                    </span>
+                                                }
+                                            </div>
+
+                                            <div class="mt-2 text-sm font-semibold text-gray-900 break-words">
+                                                @(!string.IsNullOrWhiteSpace(item.Title) ? item.Title : item.CliThreadId)
+                                            </div>
+
+                                            <div class="mt-1 text-xs text-gray-500 break-all">
+                                                工作区: @item.WorkspacePath
+                                            </div>
+
+                                            <div class="mt-1 text-xs text-gray-400">
+                                                最近更新: @FormatDateTime(item.UpdatedAt)
+                                            </div>
+                                        </div>
+
+                                        <div class="flex gap-2 md:flex-col md:items-stretch">
+                                            @if (item.AlreadyImported && !string.IsNullOrWhiteSpace(item.ImportedSessionId))
+                                            {
+                                                <button class="btn-primary"
+                                                        @onclick="() => OpenImportedSessionAsync(item.ImportedSessionId!)">
+                                                    打开
+                                                </button>
+                                            }
+                                            else
+                                            {
+                                                <button class="btn-primary"
+                                                        disabled="@isImporting"
+                                                        @onclick="() => ImportAsync(item)">
+                                                    @if (isImporting)
+                                                    {
+                                                        <span>导入中...</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>导入</span>
+                                                    }
+                                                </button>
+                                            }
+
+                                            <button class="btn-default"
+                                                    disabled="@_isLoading"
+                                                    @onclick="ReloadAsync">
+                                                刷新
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="flex items-center justify-between p-6 border-t border-gray-300 bg-gray-50 rounded-b-2xl">
+                    <div class="text-xs text-gray-500">
+                        用户: @_username
+                    </div>
+                    <button class="btn-default" @onclick="Close">关闭</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public EventCallback<string> OnOpenSession { get; set; }
+    [Parameter] public EventCallback<string> OnImported { get; set; }
+
+    private bool _isVisible;
+    private bool _isLoading;
+    private string _username = string.Empty;
+    private string _toolFilter = string.Empty;
+    private int _maxCount = 20;
+
+    private string? _errorMessage;
+    private List<ExternalCliSessionSummary> _sessions = new();
+    private HashSet<string> _importingKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    public async Task ShowAsync(string username)
+    {
+        _username = username?.Trim() ?? string.Empty;
+        _toolFilter = string.Empty;
+        _maxCount = 20;
+        _isVisible = true;
+        _errorMessage = null;
+        _sessions = new List<ExternalCliSessionSummary>();
+        _importingKeys.Clear();
+
+        await ReloadAsync();
+    }
+
+    private void OnBackgroundClick()
+    {
+        Close();
+    }
+
+    private void Close()
+    {
+        _isVisible = false;
+        _errorMessage = null;
+        _importingKeys.Clear();
+        StateHasChanged();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_username))
+        {
+            _errorMessage = "用户名为空，无法发现会话。";
+            StateHasChanged();
+            return;
+        }
+
+        _isLoading = true;
+        _errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var toolId = string.IsNullOrWhiteSpace(_toolFilter) ? null : _toolFilter;
+            var maxCount = _maxCount <= 0 ? 20 : Math.Clamp(_maxCount, 5, 100);
+            _sessions = await ExternalCliSessionService.DiscoverAsync(_username, toolId, maxCount);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"发现会话失败: {ex.Message}";
+            _sessions = new List<ExternalCliSessionSummary>();
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ImportAsync(ExternalCliSessionSummary item)
+    {
+        if (item == null)
+        {
+            return;
+        }
+
+        var importingKey = $"{item.ToolId}::{item.CliThreadId}";
+        if (_importingKeys.Contains(importingKey))
+        {
+            return;
+        }
+
+        _importingKeys.Add(importingKey);
+        _errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var request = new ImportExternalCliSessionRequest
+            {
+                ToolId = item.ToolId,
+                CliThreadId = item.CliThreadId,
+                Title = item.Title,
+                WorkspacePath = item.WorkspacePath
+            };
+
+            var result = await ExternalCliSessionService.ImportAsync(_username, request);
+            if (!result.Success)
+            {
+                _errorMessage = result.ErrorMessage ?? "导入失败，请稍后重试。";
+                return;
+            }
+
+            item.AlreadyImported = true;
+            item.ImportedSessionId = result.SessionId;
+
+            if (!string.IsNullOrWhiteSpace(result.SessionId))
+            {
+                await OnImported.InvokeAsync(result.SessionId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"导入失败: {ex.Message}";
+        }
+        finally
+        {
+            _importingKeys.Remove(importingKey);
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenImportedSessionAsync(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return;
+        }
+
+        await OnOpenSession.InvokeAsync(sessionId);
+        Close();
+    }
+
+    private static string FormatDateTime(DateTime? time)
+    {
+        if (!time.HasValue)
+        {
+            return "-";
+        }
+
+        return time.Value.ToString("yyyy-MM-dd HH:mm");
+    }
+}
+
