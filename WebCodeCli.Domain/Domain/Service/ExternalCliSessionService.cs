@@ -31,7 +31,7 @@ public interface IExternalCliSessionService
 }
 
 [ServiceDescription(typeof(IExternalCliSessionService), ServiceLifetime.Scoped)]
-public sealed class ExternalCliSessionService : IExternalCliSessionService
+public class ExternalCliSessionService : IExternalCliSessionService
 {
     private readonly ILogger<ExternalCliSessionService> _logger;
     private readonly IChatSessionRepository _chatSessionRepository;
@@ -195,6 +195,11 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
             .OrderByDescending(x => x.UpdatedAt ?? DateTime.MinValue)
             .Take(maxCount)
             .ToList();
+    }
+
+    protected virtual string? GetUserProfilePath()
+    {
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     }
 
     public async Task<ImportExternalCliSessionResult> ImportAsync(
@@ -471,7 +476,7 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
 
         try
         {
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var userProfile = GetUserProfilePath();
             if (string.IsNullOrWhiteSpace(userProfile))
             {
                 return Task.FromResult(list);
@@ -525,9 +530,10 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
 
                     var cwd = GetString(payload, "cwd", "workspacePath", "workspace_path", "workspace");
                     var title = GetString(payload, "title", "name", "firstPrompt", "first_prompt");
-                    var updatedAt = GetDateTime(payload, "timestamp") ??
-                                    GetDateTime(root, "timestamp") ??
-                                    fi.LastWriteTime;
+                    var updatedAt = GetMostRecentDateTime(
+                        GetDateTime(payload, "timestamp") ??
+                        GetDateTime(root, "timestamp"),
+                        fi.LastWriteTime);
 
                     list.Add(new ExternalCliSessionSummary
                     {
@@ -559,7 +565,7 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
 
         try
         {
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var userProfile = GetUserProfilePath();
             if (string.IsNullOrWhiteSpace(userProfile))
             {
                 return Task.FromResult(list);
@@ -574,11 +580,9 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
             // 优先使用 sessions-index.json（更快，不需要解析巨大的 session jsonl 文件）
             list.AddRange(DiscoverClaudeCodeSessionsFromIndex(projectsRoot, cancellationToken));
 
-            // 兜底：如果索引缺失/为空，则扫描最近的会话 jsonl
-            if (list.Count == 0)
-            {
-                list.AddRange(DiscoverClaudeCodeSessionsFromJsonlFiles(projectsRoot, maxCount, cancellationToken));
-            }
+            // 额外补扫最近的会话 jsonl。新版本 Claude Code 并不总会更新 sessions-index.json，
+            // 仅依赖索引会漏掉最新会话。
+            list.AddRange(DiscoverClaudeCodeSessionsFromJsonlFiles(projectsRoot, maxCount, cancellationToken));
         }
         catch (Exception ex)
         {
@@ -590,6 +594,7 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
             .Where(x => !string.IsNullOrWhiteSpace(x.CliThreadId))
             .GroupBy(x => x.CliThreadId, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(x => x.UpdatedAt ?? DateTime.MinValue).First())
+            .OrderByDescending(x => x.UpdatedAt ?? DateTime.MinValue)
             .ToList();
 
         return Task.FromResult(dedup);
@@ -646,6 +651,11 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
                     var cwd = GetString(entry, "projectPath", "project_path", "cwd");
                     var title = GetString(entry, "firstPrompt", "first_prompt", "title", "name");
                     var updatedAt = GetDateTime(entry, "modified", "updatedAt", "updated_at", "fileMtime", "file_mtime", "created");
+                    var transcriptPath = GetString(entry, "fullPath", "full_path", "filePath", "file_path");
+                    if (!string.IsNullOrWhiteSpace(transcriptPath) && File.Exists(transcriptPath))
+                    {
+                        updatedAt = GetMostRecentDateTime(updatedAt, File.GetLastWriteTime(transcriptPath));
+                    }
 
                     list.Add(new ExternalCliSessionSummary
                     {
@@ -677,7 +687,7 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
             candidates = Directory.EnumerateFiles(projectsRoot, "*.jsonl", SearchOption.AllDirectories)
                 .Where(IsClaudeSessionTranscriptFile)
                 .OrderByDescending(File.GetLastWriteTimeUtc)
-                .Take(Math.Max(maxCount * 20, 200))
+                .Take(Math.Max(maxCount * 20, 500))
                 .ToList();
         }
         catch
@@ -689,21 +699,15 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var line = ReadFirstNonEmptyLine(file, maxLines: 10);
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
             try
             {
-                using var doc = JsonDocument.Parse(line);
-                var root = doc.RootElement;
+                var metadata = ReadClaudeCodeSessionMetadata(file, maxLines: 40);
+                if (metadata == null)
+                {
+                    continue;
+                }
 
-                var sessionId = GetString(root, "sessionId", "session_id") ?? Path.GetFileNameWithoutExtension(file);
-                var cwd = GetString(root, "cwd", "projectPath", "project_path");
-                var updatedAt = GetDateTime(root, "timestamp") ?? File.GetLastWriteTime(file);
-
+                var sessionId = metadata.SessionId ?? Path.GetFileNameWithoutExtension(file);
                 if (string.IsNullOrWhiteSpace(sessionId))
                 {
                     continue;
@@ -714,8 +718,9 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
                     ToolId = "claude-code",
                     ToolName = "Claude Code",
                     CliThreadId = sessionId,
-                    WorkspacePath = string.IsNullOrWhiteSpace(cwd) ? null : cwd,
-                    UpdatedAt = updatedAt
+                    Title = SanitizeTitle(metadata.Title),
+                    WorkspacePath = string.IsNullOrWhiteSpace(metadata.WorkspacePath) ? null : metadata.WorkspacePath,
+                    UpdatedAt = GetMostRecentDateTime(metadata.UpdatedAt, File.GetLastWriteTime(file))
                 });
             }
             catch (Exception ex)
@@ -725,6 +730,75 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
         }
 
         return list;
+    }
+
+    private static ClaudeCodeSessionMetadata? ReadClaudeCodeSessionMetadata(string filePath, int maxLines)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            string? sessionId = null;
+            string? workspacePath = null;
+            string? title = null;
+            DateTime? updatedAt = null;
+
+            for (var i = 0; i < Math.Max(maxLines, 1); i++)
+            {
+                var line = reader.ReadLine();
+                if (line == null)
+                {
+                    break;
+                }
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+
+                    sessionId ??= GetString(root, "sessionId", "session_id");
+                    workspacePath ??= GetString(root, "cwd", "projectPath", "project_path")
+                                      ?? GetChildObjectString(root, "data", "cwd", "projectPath", "project_path");
+                    title ??= ExtractClaudeCodeSessionTitle(root);
+                    updatedAt = GetMostRecentDateTime(GetDateTime(root, "timestamp"), updatedAt);
+                }
+                catch
+                {
+                    // ignore malformed lines and keep scanning subsequent entries
+                }
+
+                if (!string.IsNullOrWhiteSpace(sessionId) && !string.IsNullOrWhiteSpace(workspacePath) && !string.IsNullOrWhiteSpace(title))
+                {
+                    break;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(sessionId) &&
+                string.IsNullOrWhiteSpace(workspacePath) &&
+                string.IsNullOrWhiteSpace(title) &&
+                !updatedAt.HasValue)
+            {
+                return null;
+            }
+
+            return new ClaudeCodeSessionMetadata
+            {
+                SessionId = sessionId,
+                WorkspacePath = workspacePath,
+                Title = title,
+                UpdatedAt = updatedAt
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static bool IsClaudeSessionTranscriptFile(string filePath)
@@ -769,6 +843,78 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
         catch
         {
             // ignore
+        }
+
+        return null;
+    }
+
+    private static DateTime GetMostRecentDateTime(DateTime? parsedTime, DateTime fallbackTime)
+    {
+        if (!parsedTime.HasValue)
+        {
+            return fallbackTime;
+        }
+
+        return parsedTime.Value >= fallbackTime ? parsedTime.Value : fallbackTime;
+    }
+
+    private static DateTime? GetMostRecentDateTime(DateTime? parsedTime, DateTime? fallbackTime)
+    {
+        if (!parsedTime.HasValue)
+        {
+            return fallbackTime;
+        }
+
+        if (!fallbackTime.HasValue)
+        {
+            return parsedTime.Value;
+        }
+
+        return parsedTime.Value >= fallbackTime.Value ? parsedTime.Value : fallbackTime.Value;
+    }
+
+    private static string? GetChildObjectString(JsonElement element, string childPropertyName, params string[] names)
+    {
+        if (!TryGetProperty(element, childPropertyName, out var child) || child.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return GetString(child, names);
+    }
+
+    private static string? ExtractClaudeCodeSessionTitle(JsonElement root)
+    {
+        var directTitle = GetString(root, "title", "name", "content");
+        if (!string.IsNullOrWhiteSpace(directTitle))
+        {
+            return directTitle;
+        }
+
+        if (TryGetProperty(root, "message", out var messageElement) && messageElement.ValueKind == JsonValueKind.Object)
+        {
+            var messageContent = GetString(messageElement, "content");
+            if (!string.IsNullOrWhiteSpace(messageContent))
+            {
+                return messageContent;
+            }
+
+            if (TryGetProperty(messageElement, "content", out var contentElement) && contentElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in contentElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var text = GetString(item, "text", "thinking");
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        return text;
+                    }
+                }
+            }
         }
 
         return null;
@@ -1088,5 +1234,13 @@ public sealed class ExternalCliSessionService : IExternalCliSessionService
             return text;
         }
         return text.Substring(0, maxLen) + "...";
+    }
+
+    private sealed class ClaudeCodeSessionMetadata
+    {
+        public string? SessionId { get; init; }
+        public string? WorkspacePath { get; init; }
+        public string? Title { get; init; }
+        public DateTime? UpdatedAt { get; init; }
     }
 }

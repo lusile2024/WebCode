@@ -51,7 +51,7 @@
                             <span class="text-sm font-medium text-gray-700">数量</span>
                             <input type="number"
                                    class="w-24 px-3 py-2 border border-gray-300 rounded-xl text-sm bg-white focus:outline-none focus:ring-1 focus:ring-gray-500"
-                                   min="5" max="100" step="5"
+                                   min="5" max="1000" step="5"
                                    @bind="_maxCount" />
                         </div>
 
@@ -233,7 +233,7 @@
         try
         {
             var toolId = string.IsNullOrWhiteSpace(_toolFilter) ? null : _toolFilter;
-            var maxCount = _maxCount <= 0 ? 20 : Math.Clamp(_maxCount, 5, 100);
+            var maxCount = _maxCount <= 0 ? 20 : Math.Clamp(_maxCount, 5, 1000);
             _sessions = await ExternalCliSessionService.DiscoverAsync(_username, toolId, maxCount);
         }
         catch (Exception ex)
@@ -322,4 +322,3 @@
         return time.Value.ToString("yyyy-MM-dd HH:mm");
     }
 }
-
