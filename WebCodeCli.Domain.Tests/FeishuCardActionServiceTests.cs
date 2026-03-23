@@ -1523,6 +1523,12 @@ public class FeishuCardActionServiceTests
         public Task<string?> FindConflictingUsernameByAppIdAsync(string username, string? appId)
             => Task.FromResult<string?>(null);
 
+        public Task<List<UserFeishuBotConfigEntity>> GetAutoStartCandidatesAsync()
+            => Task.FromResult(new List<UserFeishuBotConfigEntity>());
+
+        public Task<bool> UpdateRuntimePreferenceAsync(string username, bool autoStartEnabled, DateTime? lastStartedAt = null)
+            => Task.FromResult(true);
+
         public FeishuOptions GetSharedDefaults() => DefaultOptions;
 
         public Task<FeishuOptions> GetEffectiveOptionsAsync(string? username)

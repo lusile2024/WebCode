@@ -260,6 +260,7 @@ public class AdminController : ControllerBase
             State = status.State.ToString(),
             IsConfigured = status.IsConfigured,
             CanStart = status.CanStart,
+            ShouldAutoStart = status.ShouldAutoStart,
             Message = status.Message,
             LastError = status.LastError,
             LastStartedAt = status.LastStartedAt,
@@ -324,6 +325,7 @@ public sealed class UserFeishuBotRuntimeStatusDto
     public string State { get; set; } = nameof(UserFeishuBotRuntimeState.NotConfigured);
     public bool IsConfigured { get; set; }
     public bool CanStart { get; set; }
+    public bool ShouldAutoStart { get; set; }
     public string? Message { get; set; }
     public string? LastError { get; set; }
     public DateTime? LastStartedAt { get; set; }

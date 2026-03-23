@@ -13,7 +13,7 @@ using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 namespace WebCodeCli.Domain.Domain.Service;
 
 [ServiceDescription(typeof(IUserFeishuBotRuntimeService), ServiceLifetime.Singleton)]
-public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, IHostedService, IDisposable
+public class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, IHostedService, IDisposable
 {
     private readonly IServiceProvider _rootServiceProvider;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -39,7 +39,7 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
         var normalizedUsername = NormalizeUsername(username);
         if (normalizedUsername == null)
         {
-            return CreateStatus(string.Empty, null, UserFeishuBotRuntimeState.NotConfigured, false, false, "用户名不能为空。");
+            return CreateStatus(string.Empty, null, UserFeishuBotRuntimeState.NotConfigured, false, false, false, "用户名不能为空。");
         }
 
         await _mutex.WaitAsync(cancellationToken);
@@ -60,7 +60,7 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
         var normalizedUsername = NormalizeUsername(username);
         if (normalizedUsername == null)
         {
-            return CreateStatus(string.Empty, null, UserFeishuBotRuntimeState.NotConfigured, false, false, "用户名不能为空。");
+            return CreateStatus(string.Empty, null, UserFeishuBotRuntimeState.NotConfigured, false, false, false, "用户名不能为空。");
         }
 
         await _mutex.WaitAsync(cancellationToken);
@@ -73,6 +73,7 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
             var config = await configService.GetByUsernameAsync(normalizedUsername);
             var defaults = configService.GetSharedDefaults();
             var options = UserFeishuBotOptionsFactory.CreateEffectiveOptions(defaults, config);
+            var shouldAutoStart = config?.AutoStartEnabled == true;
 
             if (!defaults.Enabled)
             {
@@ -82,8 +83,10 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                     UserFeishuBotRuntimeState.Failed,
                     UserFeishuBotOptionsFactory.HasUsableCredentials(config),
                     false,
+                    shouldAutoStart,
                     "系统已禁用飞书渠道，当前无法启动机器人。");
                 disabledStatus.LastError = disabledStatus.Message;
+                disabledStatus.LastStartedAt = config?.LastStartedAt;
                 _statusCache[normalizedUsername] = disabledStatus;
                 return disabledStatus;
             }
@@ -98,7 +101,9 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                         UserFeishuBotRuntimeState.NotConfigured,
                         UserFeishuBotOptionsFactory.HasUsableCredentials(config),
                         false,
+                        shouldAutoStart,
                         "当前用户尚未配置可启动的飞书机器人。");
+                    status.LastStartedAt = config?.LastStartedAt;
                     _statusCache[normalizedUsername] = status;
                     return status;
                 }
@@ -112,10 +117,20 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                         UserFeishuBotRuntimeState.Failed,
                         true,
                         false,
+                        shouldAutoStart,
                         $"AppId {options.AppId} 已被用户 {ownerUsername} 启动。");
                     status.LastError = status.Message;
+                    status.LastStartedAt = config?.LastStartedAt;
                     _statusCache[normalizedUsername] = status;
                     return status;
+                }
+
+                var startedAt = DateTime.Now;
+                await TryPersistRuntimePreferenceAsync(configService, normalizedUsername, autoStartEnabled: true, lastStartedAt: startedAt);
+                if (config != null)
+                {
+                    config.AutoStartEnabled = true;
+                    config.LastStartedAt = startedAt;
                 }
 
                 var startingStatus = CreateStatus(
@@ -124,10 +139,9 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                     UserFeishuBotRuntimeState.Starting,
                     true,
                     false,
+                    true,
                     $"正在启动飞书机器人 {options.AppId}。");
-                startingStatus.LastStartedAt = _statusCache.TryGetValue(normalizedUsername, out var cachedBeforeStart)
-                    ? cachedBeforeStart.LastStartedAt
-                    : null;
+                startingStatus.LastStartedAt = startedAt;
                 _statusCache[normalizedUsername] = startingStatus;
 
                 RuntimeEntry entry;
@@ -145,8 +159,10 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                         UserFeishuBotRuntimeState.Failed,
                         true,
                         true,
+                        true,
                         $"初始化飞书机器人失败: {ex.Message}");
                     failedStatus.LastError = failedStatus.Message;
+                    failedStatus.LastStartedAt = startedAt;
                     _statusCache[normalizedUsername] = failedStatus;
                     _logger.LogError(ex, "初始化飞书机器人失败: user={Username}, appId={AppId}", normalizedUsername, options.AppId);
                     return failedStatus;
@@ -174,8 +190,10 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                         UserFeishuBotRuntimeState.Failed,
                         true,
                         true,
+                        true,
                         $"启动飞书机器人失败: {ex.Message}");
                     failedStatus.LastError = failedStatus.Message;
+                    failedStatus.LastStartedAt = startedAt;
                     _statusCache[normalizedUsername] = failedStatus;
                     _logger.LogError(ex, "启动飞书机器人失败: user={Username}, appId={AppId}", normalizedUsername, options.AppId);
                     return failedStatus;
@@ -187,8 +205,9 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                     UserFeishuBotRuntimeState.Connected,
                     true,
                     false,
+                    true,
                     $"飞书机器人 {options.AppId} 已连接。");
-                connectedStatus.LastStartedAt = DateTime.Now;
+                connectedStatus.LastStartedAt = startedAt;
                 _statusCache[normalizedUsername] = connectedStatus;
                 _logger.LogInformation("飞书机器人已启动: user={Username}, appId={AppId}", normalizedUsername, options.AppId);
                 return connectedStatus;
@@ -207,13 +226,13 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
         var normalizedUsername = NormalizeUsername(username);
         if (normalizedUsername == null)
         {
-            return CreateStatus(string.Empty, null, UserFeishuBotRuntimeState.NotConfigured, false, false, "用户名不能为空。");
+            return CreateStatus(string.Empty, null, UserFeishuBotRuntimeState.NotConfigured, false, false, false, "用户名不能为空。");
         }
 
         await _mutex.WaitAsync(cancellationToken);
         try
         {
-            return await StopInternalAsync(normalizedUsername, cancellationToken);
+            return await StopInternalAsync(normalizedUsername, updateRememberedState: true, cancellationToken);
         }
         finally
         {
@@ -223,7 +242,26 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
 
     async Task IHostedService.StartAsync(CancellationToken cancellationToken)
     {
-        await Task.CompletedTask;
+        using var scope = _scopeFactory.CreateScope();
+        var configService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+        var autoStartConfigs = await configService.GetAutoStartCandidatesAsync();
+
+        foreach (var config in autoStartConfigs)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                await StartAsync(config.Username, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "恢复飞书机器人运行状态失败: user={Username}, appId={AppId}", config.Username, config.AppId);
+            }
+        }
     }
 
     async Task IHostedService.StopAsync(CancellationToken cancellationToken)
@@ -242,7 +280,15 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
 
         foreach (var username in usernames)
         {
-            await StopAsync(username, cancellationToken);
+            await _mutex.WaitAsync(cancellationToken);
+            try
+            {
+                await StopInternalAsync(username, updateRememberedState: false, cancellationToken);
+            }
+            finally
+            {
+                _mutex.Release();
+            }
         }
     }
 
@@ -265,17 +311,30 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
         _usernameByAppId.Clear();
     }
 
-    private async Task<UserFeishuBotRuntimeStatus> StopInternalAsync(string username, CancellationToken cancellationToken)
+    private async Task<UserFeishuBotRuntimeStatus> StopInternalAsync(string username, bool updateRememberedState, CancellationToken cancellationToken)
     {
         RefreshCompletedRuntime_NoLock(username);
 
+        using var scope = _scopeFactory.CreateScope();
+        var configService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+
         if (!_entriesByUsername.TryGetValue(username, out var entry))
         {
-            var config = await GetConfigAsync(username, cancellationToken);
+            var config = await configService.GetByUsernameAsync(username);
+            if (updateRememberedState)
+            {
+                await TryPersistRuntimePreferenceAsync(configService, username, autoStartEnabled: false);
+                if (config != null)
+                {
+                    config.AutoStartEnabled = false;
+                }
+            }
+
             var status = BuildStatus_NoLock(username, config);
             if (status.State == UserFeishuBotRuntimeState.Connected || status.State == UserFeishuBotRuntimeState.Starting)
             {
                 status.State = UserFeishuBotRuntimeState.Stopped;
+                status.Message = ResolveStoppedMessage(status.IsConfigured, status.ShouldAutoStart);
             }
 
             _statusCache[username] = status;
@@ -288,6 +347,7 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
             UserFeishuBotRuntimeState.Stopping,
             true,
             false,
+            updateRememberedState ? false : _statusCache.TryGetValue(username, out var cachedBeforeStopping) && cachedBeforeStopping.ShouldAutoStart,
             $"正在停止飞书机器人 {entry.AppId}。");
         stoppingStatus.LastStartedAt = _statusCache.TryGetValue(username, out var cachedBeforeStop)
             ? cachedBeforeStop.LastStartedAt
@@ -305,24 +365,35 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
 
         CleanupEntry_NoLock(username, disposeEntry: true);
 
-        var currentConfig = await GetConfigAsync(username, cancellationToken);
+        var currentConfig = await configService.GetByUsernameAsync(username);
+        if (updateRememberedState)
+        {
+            await TryPersistRuntimePreferenceAsync(configService, username, autoStartEnabled: false);
+            if (currentConfig != null)
+            {
+                currentConfig.AutoStartEnabled = false;
+            }
+        }
+
         var canStart = UserFeishuBotOptionsFactory.HasUsableCredentials(currentConfig);
+        var shouldAutoStart = currentConfig?.AutoStartEnabled == true;
         var stoppedStatus = CreateStatus(
             username,
             currentConfig?.AppId ?? entry.AppId,
             canStart ? UserFeishuBotRuntimeState.Stopped : UserFeishuBotRuntimeState.NotConfigured,
             canStart,
             canStart,
-            canStart ? "飞书机器人已停止，可手动重新启动。" : "当前用户未配置可启动的飞书机器人。");
+            shouldAutoStart,
+            ResolveStoppedMessage(canStart, shouldAutoStart));
         stoppedStatus.LastStartedAt = _statusCache.TryGetValue(username, out var cachedAfterStop)
             ? cachedAfterStop.LastStartedAt
-            : null;
+            : currentConfig?.LastStartedAt;
         _statusCache[username] = stoppedStatus;
         _logger.LogInformation("飞书机器人已停止: user={Username}, appId={AppId}", username, stoppedStatus.AppId);
         return stoppedStatus;
     }
 
-    private RuntimeEntry CreateRuntimeEntry(FeishuOptions options)
+    protected virtual RuntimeEntry CreateRuntimeEntry(FeishuOptions options)
     {
         var services = new ServiceCollection();
         services.AddOptions();
@@ -367,20 +438,25 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
             cached.Username = username;
             cached.AppId = config?.AppId ?? cached.AppId;
             cached.IsConfigured = UserFeishuBotOptionsFactory.HasUsableCredentials(config);
+            cached.ShouldAutoStart = config?.AutoStartEnabled == true;
             cached.CanStart = cached.State is not UserFeishuBotRuntimeState.Starting and not UserFeishuBotRuntimeState.Connected and not UserFeishuBotRuntimeState.Stopping
                 && UserFeishuBotOptionsFactory.HasUsableCredentials(config);
+            cached.LastStartedAt = config?.LastStartedAt ?? cached.LastStartedAt;
             cached.UpdatedAt = DateTime.Now;
             return CloneStatus(cached);
         }
 
         var isConfigured = UserFeishuBotOptionsFactory.HasUsableCredentials(config);
-        return CreateStatus(
+        var status = CreateStatus(
             username,
             config?.AppId,
             isConfigured ? UserFeishuBotRuntimeState.Stopped : UserFeishuBotRuntimeState.NotConfigured,
             isConfigured,
             isConfigured,
-            isConfigured ? "已配置飞书机器人，点击启动后建立连接。" : "当前用户尚未配置可启动的飞书机器人。");
+            config?.AutoStartEnabled == true,
+            ResolveIdleMessage(isConfigured, config?.AutoStartEnabled == true));
+        status.LastStartedAt = config?.LastStartedAt;
+        return status;
     }
 
     private void RefreshCompletedRuntime_NoLock(string username)
@@ -392,6 +468,9 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
 
         if (entry.ExecuteTask.IsFaulted)
         {
+            var previousStatus = _statusCache.TryGetValue(username, out var cachedBeforeFailure)
+                ? cachedBeforeFailure
+                : null;
             CleanupEntry_NoLock(username, disposeEntry: true);
             var failedStatus = CreateStatus(
                 username,
@@ -399,17 +478,19 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                 UserFeishuBotRuntimeState.Failed,
                 true,
                 true,
+                previousStatus?.ShouldAutoStart == true,
                 $"飞书机器人连接已中断: {entry.ExecuteTask.Exception?.GetBaseException().Message}");
             failedStatus.LastError = entry.ExecuteTask.Exception?.GetBaseException().Message;
-            failedStatus.LastStartedAt = _statusCache.TryGetValue(username, out var cachedBeforeFailure)
-                ? cachedBeforeFailure.LastStartedAt
-                : null;
+            failedStatus.LastStartedAt = previousStatus?.LastStartedAt;
             _statusCache[username] = failedStatus;
             return;
         }
 
         if (entry.ExecuteTask.IsCanceled || entry.ExecuteTask.IsCompleted)
         {
+            var previousStatus = _statusCache.TryGetValue(username, out var cachedBeforeStop)
+                ? cachedBeforeStop
+                : null;
             CleanupEntry_NoLock(username, disposeEntry: true);
             var stoppedStatus = CreateStatus(
                 username,
@@ -417,10 +498,9 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
                 UserFeishuBotRuntimeState.Stopped,
                 true,
                 true,
-                "飞书机器人连接已停止。");
-            stoppedStatus.LastStartedAt = _statusCache.TryGetValue(username, out var cachedBeforeStop)
-                ? cachedBeforeStop.LastStartedAt
-                : null;
+                previousStatus?.ShouldAutoStart == true,
+                ResolveStoppedMessage(isConfigured: true, previousStatus?.ShouldAutoStart == true));
+            stoppedStatus.LastStartedAt = previousStatus?.LastStartedAt;
             _statusCache[username] = stoppedStatus;
         }
     }
@@ -437,17 +517,21 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
 
             CleanupEntry_NoLock(username, disposeEntry: true);
 
+            var previousStatus = _statusCache.TryGetValue(username, out var cached)
+                ? cached
+                : null;
             var failedStatus = CreateStatus(
                 username,
                 appId,
                 task.IsFaulted ? UserFeishuBotRuntimeState.Failed : UserFeishuBotRuntimeState.Stopped,
                 true,
                 true,
+                previousStatus?.ShouldAutoStart == true,
                 task.IsFaulted
                     ? $"飞书机器人连接已中断: {task.Exception?.GetBaseException().Message}"
-                    : "飞书机器人连接已停止。");
+                    : ResolveStoppedMessage(isConfigured: true, previousStatus?.ShouldAutoStart == true));
             failedStatus.LastError = task.IsFaulted ? task.Exception?.GetBaseException().Message : null;
-            failedStatus.LastStartedAt = _statusCache.TryGetValue(username, out var cached) ? cached.LastStartedAt : null;
+            failedStatus.LastStartedAt = previousStatus?.LastStartedAt;
             _statusCache[username] = failedStatus;
         }
         finally
@@ -488,6 +572,7 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
             State = status.State,
             IsConfigured = status.IsConfigured,
             CanStart = status.CanStart,
+            ShouldAutoStart = status.ShouldAutoStart,
             Message = status.Message,
             LastError = status.LastError,
             LastStartedAt = status.LastStartedAt,
@@ -501,6 +586,7 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
         UserFeishuBotRuntimeState state,
         bool isConfigured,
         bool canStart,
+        bool shouldAutoStart,
         string message)
     {
         return new UserFeishuBotRuntimeStatus
@@ -510,12 +596,53 @@ public sealed class UserFeishuBotRuntimeService : IUserFeishuBotRuntimeService, 
             State = state,
             IsConfigured = isConfigured,
             CanStart = canStart,
+            ShouldAutoStart = shouldAutoStart,
             Message = message,
             UpdatedAt = DateTime.Now
         };
     }
 
-    private sealed class RuntimeEntry : IDisposable
+    private async Task TryPersistRuntimePreferenceAsync(
+        IUserFeishuBotConfigService configService,
+        string username,
+        bool autoStartEnabled,
+        DateTime? lastStartedAt = null)
+    {
+        var updated = await configService.UpdateRuntimePreferenceAsync(username, autoStartEnabled, lastStartedAt);
+        if (!updated)
+        {
+            _logger.LogWarning(
+                "更新飞书机器人持久化状态失败: user={Username}, autoStartEnabled={AutoStartEnabled}",
+                username,
+                autoStartEnabled);
+        }
+    }
+
+    private static string ResolveIdleMessage(bool isConfigured, bool shouldAutoStart)
+    {
+        if (!isConfigured)
+        {
+            return "当前用户尚未配置可启动的飞书机器人。";
+        }
+
+        return shouldAutoStart
+            ? "已记录为开启状态，服务启动时会自动恢复连接。"
+            : "已配置飞书机器人，点击启动后建立连接。";
+    }
+
+    private static string ResolveStoppedMessage(bool isConfigured, bool shouldAutoStart)
+    {
+        if (!isConfigured)
+        {
+            return "当前用户未配置可启动的飞书机器人。";
+        }
+
+        return shouldAutoStart
+            ? "飞书机器人已停止，服务重启后会自动恢复连接。"
+            : "飞书机器人已停止，可手动重新启动。";
+    }
+
+    protected sealed class RuntimeEntry : IDisposable
     {
         public RuntimeEntry(string appId, ServiceProvider serviceProvider, IHostedService hostedService)
         {
