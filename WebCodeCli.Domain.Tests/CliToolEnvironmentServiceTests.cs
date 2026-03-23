@@ -158,6 +158,7 @@ public class CliToolEnvironmentServiceTests
             NullLogger<CliToolEnvironmentService>.Instance,
             Options.Create(options),
             repository,
+            new FakeCliToolEnvProfileRepository(),
             userRepository,
             userContextService);
     }
@@ -255,5 +256,23 @@ public class CliToolEnvironmentServiceTests
 
             return Task.FromResult(true);
         }
+    }
+
+    private sealed class FakeCliToolEnvProfileRepository : Repository<CliToolEnvProfile>, ICliToolEnvProfileRepository
+    {
+        public Task<List<CliToolEnvProfile>> GetProfilesByToolIdAsync(string toolId)
+            => Task.FromResult(new List<CliToolEnvProfile>());
+
+        public Task<CliToolEnvProfile?> GetActiveProfileAsync(string toolId)
+            => Task.FromResult<CliToolEnvProfile?>(null);
+
+        public Task<bool> ActivateProfileAsync(string toolId, int profileId)
+            => Task.FromResult(true);
+
+        public Task<bool> DeactivateAllProfilesAsync(string toolId)
+            => Task.FromResult(true);
+
+        public Task<bool> DeleteProfileAsync(string toolId, int profileId)
+            => Task.FromResult(true);
     }
 }

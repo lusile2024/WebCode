@@ -38,6 +38,43 @@ public class ExternalCliSessionHistoryServiceTests
     }
 
     [Fact]
+    public async Task GetRecentMessagesAsync_ForCodex_CanReadRolloutFileWhileItIsOpenedForWriting()
+    {
+        using var sandbox = new HistoryTestSandbox();
+        var rolloutPath = sandbox.WriteFile(
+            Path.Combine("codex", "rollout-codex-thread-locked.jsonl"),
+            """
+            {"timestamp":"2026-03-23T01:00:00Z","type":"session_meta","payload":{"id":"codex-thread-locked","cwd":"D:\\repo"}}
+            {"timestamp":"2026-03-23T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"用户提问"}]}}
+            {"timestamp":"2026-03-23T01:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"助手回复"}]}}
+            """);
+
+        using var lockStream = new FileStream(
+            rolloutPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite);
+
+        var service = new TestExternalCliSessionHistoryService(
+            codexSessionsRootPath: Path.GetDirectoryName(rolloutPath)!);
+
+        var messages = await service.GetRecentMessagesAsync("codex", "codex-thread-locked");
+
+        Assert.Collection(
+            messages,
+            message =>
+            {
+                Assert.Equal("user", message.Role);
+                Assert.Equal("用户提问", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal("assistant", message.Role);
+                Assert.Equal("助手回复", message.Content);
+            });
+    }
+
+    [Fact]
     public async Task GetRecentMessagesAsync_ForClaudeCode_ReadsMessagesFromTranscriptFile()
     {
         using var sandbox = new HistoryTestSandbox();
@@ -71,6 +108,59 @@ public class ExternalCliSessionHistoryServiceTests
             claudeProjectsRootPath: projectsRoot);
 
         var messages = await service.GetRecentMessagesAsync("claude-code", "claude-session-1");
+
+        Assert.Collection(
+            messages,
+            message =>
+            {
+                Assert.Equal("user", message.Role);
+                Assert.Equal("用户问题", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal("assistant", message.Role);
+                Assert.Equal("助手回复", message.Content);
+            });
+    }
+
+    [Fact]
+    public async Task GetRecentMessagesAsync_ForClaudeCode_CanReadTranscriptWhenSessionsIndexFileIsOpenedForWriting()
+    {
+        using var sandbox = new HistoryTestSandbox();
+        var projectsRoot = sandbox.CreateDirectory(Path.Combine("claude", "projects"));
+        var transcriptPath = sandbox.WriteFile(
+            Path.Combine("claude", "projects", "sample-project", "claude-session-lock.jsonl"),
+            """
+            {"type":"user","timestamp":"2026-03-23T01:00:01Z","sessionId":"claude-session-lock","message":{"role":"user","content":"用户问题"}}
+            {"type":"assistant","timestamp":"2026-03-23T01:00:02Z","sessionId":"claude-session-lock","message":{"type":"message","role":"assistant","content":[{"type":"text","text":"助手回复"}]}}
+            """);
+
+        var indexPath = sandbox.WriteFile(
+            Path.Combine("claude", "projects", "sample-project", "sessions-index.json"),
+            $$"""
+            {
+              "version": 1,
+              "entries": [
+                {
+                  "sessionId": "claude-session-lock",
+                  "fullPath": "{{transcriptPath.Replace("\\", "\\\\")}}",
+                  "projectPath": "D:\\repo",
+                  "modified": "2026-03-23T01:00:03Z"
+                }
+              ]
+            }
+            """);
+
+        using var lockStream = new FileStream(
+            indexPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite);
+
+        var service = new TestExternalCliSessionHistoryService(
+            claudeProjectsRootPath: projectsRoot);
+
+        var messages = await service.GetRecentMessagesAsync("claude-code", "claude-session-lock");
 
         Assert.Collection(
             messages,

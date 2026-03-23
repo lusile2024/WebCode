@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SqlSugar;
+using WebCodeCli.Domain.Common;
 using WebCodeCli.Domain.Common.Map;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Repositories.Base.SessionShare;
@@ -205,6 +206,8 @@ public static class DatabaseInitializer
             db.CodeFirst.InitTables<UserSettingEntity>();
             
             logger?.LogInformation("聊天会话相关表初始化成功");
+
+            EnsureChatSessionSchema(db, logger);
             
             // 创建索引
             InitializeChatSessionIndexes(db, logger);
@@ -216,6 +219,76 @@ public static class DatabaseInitializer
         }
     }
     
+    /// <summary>
+    /// 确保 ChatSession 表的增量字段和兼容数据已就位
+    /// </summary>
+    private static void EnsureChatSessionSchema(SqlSugarScope db, ILogger? logger = null)
+    {
+        try
+        {
+            EnsureColumnIfNotExists(db, "ChatSession", "CliThreadId", "varchar(256) NULL", logger);
+            BackfillCliThreadIdsFromImportedTitles(db, logger);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "校正 ChatSession 表结构时发生警告");
+        }
+    }
+
+    private static void EnsureColumnIfNotExists(
+        SqlSugarScope db,
+        string tableName,
+        string columnName,
+        string columnDefinition,
+        ILogger? logger = null)
+    {
+        var pragmaSql = $"PRAGMA table_info(\"{tableName}\")";
+        var tableInfo = db.Ado.GetDataTable(pragmaSql);
+        var columnExists = tableInfo.Rows.Cast<System.Data.DataRow>()
+            .Any(row => string.Equals(row["name"]?.ToString(), columnName, StringComparison.OrdinalIgnoreCase));
+
+        if (columnExists)
+        {
+            return;
+        }
+
+        db.Ado.ExecuteCommand($"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition}");
+        logger?.LogInformation("已为表 {TableName} 补充列 {ColumnName}", tableName, columnName);
+    }
+
+    private static void BackfillCliThreadIdsFromImportedTitles(SqlSugarScope db, ILogger? logger = null)
+    {
+        var sessions = db.Queryable<ChatSessionEntity>()
+            .Where(x => x.CliThreadId == null || x.CliThreadId == string.Empty)
+            .Select(x => new ChatSessionEntity
+            {
+                SessionId = x.SessionId,
+                ToolId = x.ToolId,
+                Title = x.Title
+            })
+            .ToList();
+
+        var recoveredCount = 0;
+        foreach (var session in sessions)
+        {
+            var cliThreadId = CliThreadIdRecoveryHelper.TryRecoverFromImportedTitle(session.ToolId, session.Title);
+            if (string.IsNullOrWhiteSpace(cliThreadId))
+            {
+                continue;
+            }
+
+            recoveredCount += db.Updateable<ChatSessionEntity>()
+                .SetColumns(x => x.CliThreadId == cliThreadId)
+                .Where(x => x.SessionId == session.SessionId)
+                .ExecuteCommand();
+        }
+
+        if (recoveredCount > 0)
+        {
+            logger?.LogInformation("已从导入标题回填 {Count} 条 ChatSession.CliThreadId", recoveredCount);
+        }
+    }
+
     /// <summary>
     /// 为聊天会话相关表创建索引
     /// </summary>

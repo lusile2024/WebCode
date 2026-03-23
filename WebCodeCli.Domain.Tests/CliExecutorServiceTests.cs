@@ -1,15 +1,100 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using SqlSugar;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
+using WebCodeCli.Domain.Model;
+using WebCodeCli.Domain.Repositories.Base.ChatSession;
 
 namespace WebCodeCli.Domain.Tests;
 
 public class CliExecutorServiceTests
 {
+    [Fact]
+    public void GetCliThreadId_WhenPersistedThreadIdMissing_RecoversImportedCodexThreadIdFromTitle()
+    {
+        const string sessionId = "session-imported";
+        const string cliThreadId = "019d1338-0c3f-7eb3-ae2b-e4617eb7d24e";
+
+        var repository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = sessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    Title = $"[Codex] {cliThreadId}",
+                    WorkspacePath = @"D:\VSWorkshop\OpenDify",
+                    CreatedAt = DateTime.Now,
+                    UpdatedAt = DateTime.Now
+                }
+            ]);
+        var serviceProvider = new NullServiceProvider(
+            repository,
+            new StubSessionOutputService());
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = []
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            serviceProvider,
+            new StubChatSessionService(),
+            new StubCliAdapterFactory());
+
+        var resolvedThreadId = service.GetCliThreadId(sessionId);
+
+        Assert.Equal(cliThreadId, resolvedThreadId);
+        Assert.Equal(cliThreadId, repository.LastUpdatedCliThreadId);
+        Assert.Equal(cliThreadId, repository.GetById(sessionId).CliThreadId);
+    }
+
+    [Fact]
+    public void GetCliThreadId_WhenImportedTitleIsNotARealThreadId_DoesNotRecoverWrongValue()
+    {
+        const string sessionId = "session-imported-friendly-title";
+
+        var repository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = sessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    Title = "[Codex] 修复 OpenDify 登录问题",
+                    WorkspacePath = @"D:\VSWorkshop\OpenDify",
+                    CreatedAt = DateTime.Now,
+                    UpdatedAt = DateTime.Now
+                }
+            ]);
+        var serviceProvider = new NullServiceProvider(
+            repository,
+            new StubSessionOutputService());
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = []
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            serviceProvider,
+            new StubChatSessionService(),
+            new StubCliAdapterFactory());
+
+        var resolvedThreadId = service.GetCliThreadId(sessionId);
+
+        Assert.Null(resolvedThreadId);
+        Assert.Null(repository.LastUpdatedCliThreadId);
+    }
+
     [Fact]
     public async Task ExecuteStreamAsync_WhenProcessTimesOut_ReturnsTimeoutChunkInsteadOfThrowing()
     {
@@ -71,13 +156,40 @@ public class CliExecutorServiceTests
         public IEnumerable<ICliToolAdapter> GetAllAdapters() => [];
     }
 
-    private sealed class NullServiceProvider : IServiceProvider, IServiceScopeFactory, IServiceScope
+    private sealed class StubSessionOutputService : ISessionOutputService
+    {
+        public Task<OutputPanelState?> GetBySessionIdAsync(string sessionId)
+            => Task.FromResult<OutputPanelState?>(new OutputPanelState
+            {
+                SessionId = sessionId,
+                ActiveThreadId = string.Empty
+            });
+
+        public Task<bool> SaveAsync(OutputPanelState state) => Task.FromResult(true);
+
+        public Task<bool> DeleteBySessionIdAsync(string sessionId) => Task.FromResult(true);
+    }
+
+    private sealed class NullServiceProvider(
+        IChatSessionRepository? chatSessionRepository = null,
+        ISessionOutputService? sessionOutputService = null)
+        : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         public object? GetService(Type serviceType)
         {
             if (serviceType == typeof(IServiceScopeFactory))
             {
                 return this;
+            }
+
+            if (serviceType == typeof(IChatSessionRepository))
+            {
+                return chatSessionRepository;
+            }
+
+            if (serviceType == typeof(ISessionOutputService))
+            {
+                return sessionOutputService;
             }
 
             return null;
@@ -90,5 +202,88 @@ public class CliExecutorServiceTests
         public void Dispose()
         {
         }
+    }
+
+    private sealed class StubChatSessionRepository(IEnumerable<ChatSessionEntity> sessions) : IChatSessionRepository
+    {
+        private readonly List<ChatSessionEntity> _sessions = sessions.ToList();
+
+        public string? LastUpdatedCliThreadId { get; private set; }
+
+        public SqlSugarScope GetDB() => throw new NotSupportedException();
+        public List<ChatSessionEntity> GetList() => _sessions.ToList();
+        public Task<List<ChatSessionEntity>> GetListAsync() => Task.FromResult(GetList());
+        public List<ChatSessionEntity> GetList(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().Where(whereExpression).ToList();
+        public Task<List<ChatSessionEntity>> GetListAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(GetList(whereExpression));
+        public int Count(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().Count(whereExpression);
+        public Task<int> CountAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(Count(whereExpression));
+        public PageList<ChatSessionEntity> GetPageList(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public PageList<P> GetPageList<P>(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public Task<PageList<ChatSessionEntity>> GetPageListAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public Task<PageList<P>> GetPageListAsync<P>(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public PageList<ChatSessionEntity> GetPageList(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page, System.Linq.Expressions.Expression<Func<ChatSessionEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public Task<PageList<ChatSessionEntity>> GetPageListAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page, System.Linq.Expressions.Expression<Func<ChatSessionEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public PageList<P> GetPageList<P>(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page, System.Linq.Expressions.Expression<Func<ChatSessionEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public Task<PageList<P>> GetPageListAsync<P>(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression, PageModel page, System.Linq.Expressions.Expression<Func<ChatSessionEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public PageList<ChatSessionEntity> GetPageList(List<IConditionalModel> conditionalList, PageModel page) => throw new NotSupportedException();
+        public Task<PageList<ChatSessionEntity>> GetPageListAsync(List<IConditionalModel> conditionalList, PageModel page) => throw new NotSupportedException();
+        public PageList<ChatSessionEntity> GetPageList(List<IConditionalModel> conditionalList, PageModel page, System.Linq.Expressions.Expression<Func<ChatSessionEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public Task<PageList<ChatSessionEntity>> GetPageListAsync(List<IConditionalModel> conditionalList, PageModel page, System.Linq.Expressions.Expression<Func<ChatSessionEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public ChatSessionEntity GetById(dynamic id) => _sessions.First(x => string.Equals(x.SessionId, id?.ToString(), StringComparison.OrdinalIgnoreCase));
+        public Task<ChatSessionEntity> GetByIdAsync(dynamic id) => Task.FromResult(GetById(id));
+        public ChatSessionEntity GetSingle(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().Single(whereExpression);
+        public Task<ChatSessionEntity> GetSingleAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(GetSingle(whereExpression));
+        public ChatSessionEntity GetFirst(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().First(whereExpression);
+        public Task<ChatSessionEntity> GetFirstAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(GetFirst(whereExpression));
+        public bool Insert(ChatSessionEntity obj) { _sessions.Add(obj); return true; }
+        public Task<bool> InsertAsync(ChatSessionEntity obj) => Task.FromResult(Insert(obj));
+        public bool InsertRange(List<ChatSessionEntity> objs) { _sessions.AddRange(objs); return true; }
+        public Task<bool> InsertRangeAsync(List<ChatSessionEntity> objs) => Task.FromResult(InsertRange(objs));
+        public int InsertReturnIdentity(ChatSessionEntity obj) => throw new NotSupportedException();
+        public Task<int> InsertReturnIdentityAsync(ChatSessionEntity obj) => throw new NotSupportedException();
+        public long InsertReturnBigIdentity(ChatSessionEntity obj) => throw new NotSupportedException();
+        public Task<long> InsertReturnBigIdentityAsync(ChatSessionEntity obj) => throw new NotSupportedException();
+        public bool DeleteByIds(dynamic[] ids) => throw new NotSupportedException();
+        public Task<bool> DeleteByIdsAsync(dynamic[] ids) => throw new NotSupportedException();
+        public bool Delete(dynamic id) => throw new NotSupportedException();
+        public Task<bool> DeleteAsync(dynamic id) => throw new NotSupportedException();
+        public bool Delete(ChatSessionEntity obj) => _sessions.Remove(obj);
+        public Task<bool> DeleteAsync(ChatSessionEntity obj) => Task.FromResult(Delete(obj));
+        public bool Delete(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => throw new NotSupportedException();
+        public Task<bool> DeleteAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => throw new NotSupportedException();
+        public bool Update(ChatSessionEntity obj) => throw new NotSupportedException();
+        public Task<bool> UpdateAsync(ChatSessionEntity obj) => throw new NotSupportedException();
+        public bool UpdateRange(List<ChatSessionEntity> objs) => throw new NotSupportedException();
+        public bool InsertOrUpdate(ChatSessionEntity obj) => throw new NotSupportedException();
+        public Task<bool> InsertOrUpdateAsync(ChatSessionEntity obj) => throw new NotSupportedException();
+        public Task<bool> UpdateRangeAsync(List<ChatSessionEntity> objs) => throw new NotSupportedException();
+        public bool IsAny(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().Any(whereExpression);
+        public Task<bool> IsAnyAsync(System.Linq.Expressions.Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(IsAny(whereExpression));
+        public Task<List<ChatSessionEntity>> GetByUsernameAsync(string username) => Task.FromResult(_sessions.Where(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).ToList());
+        public Task<ChatSessionEntity?> GetByIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)));
+        public Task<bool> DeleteByIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_sessions.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)) > 0);
+        public Task<List<ChatSessionEntity>> GetByUsernameOrderByUpdatedAtAsync(string username) => Task.FromResult(_sessions.Where(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.UpdatedAt).ToList());
+        public Task<ChatSessionEntity?> GetByUsernameToolAndCliThreadIdAsync(string username, string toolId, string cliThreadId) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase) && string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
+        public Task<ChatSessionEntity?> GetByToolAndCliThreadIdAsync(string toolId, string cliThreadId) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
+        public Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.CliThreadId = cliThreadId;
+            session.UpdatedAt = DateTime.Now;
+            LastUpdatedCliThreadId = cliThreadId;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace) => Task.FromResult(true);
+        public Task<List<ChatSessionEntity>> GetByFeishuChatKeyAsync(string feishuChatKey) => Task.FromResult(new List<ChatSessionEntity>());
+        public Task<ChatSessionEntity?> GetActiveByFeishuChatKeyAsync(string feishuChatKey) => Task.FromResult<ChatSessionEntity?>(null);
+        public Task<bool> SetActiveSessionAsync(string feishuChatKey, string sessionId) => Task.FromResult(true);
+        public Task<bool> CloseFeishuSessionAsync(string feishuChatKey, string sessionId) => Task.FromResult(true);
+        public Task<string> CreateFeishuSessionAsync(string feishuChatKey, string username, string? workspacePath = null, string? toolId = null) => Task.FromResult(Guid.NewGuid().ToString("N"));
     }
 }

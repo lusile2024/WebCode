@@ -257,36 +257,43 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var json = File.ReadAllText(indexFile);
-                if (string.IsNullOrWhiteSpace(json))
+                try
                 {
-                    continue;
-                }
-
-                using var document = JsonDocument.Parse(json);
-                if (!TryGetProperty(document.RootElement, "entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
-                {
-                    continue;
-                }
-
-                foreach (var entry in entries.EnumerateArray())
-                {
-                    if (entry.ValueKind != JsonValueKind.Object)
+                    var json = ReadAllTextShared(indexFile);
+                    if (string.IsNullOrWhiteSpace(json))
                     {
                         continue;
                     }
 
-                    var sessionId = GetString(entry, "sessionId", "session_id");
-                    if (!string.Equals(sessionId, cliThreadId, StringComparison.OrdinalIgnoreCase))
+                    using var document = JsonDocument.Parse(json);
+                    if (!TryGetProperty(document.RootElement, "entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
                     {
                         continue;
                     }
 
-                    var fullPath = GetString(entry, "fullPath", "full_path");
-                    if (!string.IsNullOrWhiteSpace(fullPath) && File.Exists(fullPath))
+                    foreach (var entry in entries.EnumerateArray())
                     {
-                        return fullPath;
+                        if (entry.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        var sessionId = GetString(entry, "sessionId", "session_id");
+                        if (!string.Equals(sessionId, cliThreadId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        var fullPath = GetString(entry, "fullPath", "full_path");
+                        if (!string.IsNullOrWhiteSpace(fullPath) && File.Exists(fullPath))
+                        {
+                            return fullPath;
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "读取 Claude sessions-index.json 失败，继续尝试直接定位 transcript: {File}", indexFile);
                 }
             }
 
@@ -600,7 +607,7 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
 
     private static string? ReadFirstNonEmptyLine(string filePath, int maxLines)
     {
-        using var stream = File.OpenRead(filePath);
+        using var stream = OpenSharedReadStream(filePath);
         using var reader = new StreamReader(stream);
         for (var index = 0; index < maxLines && !reader.EndOfStream; index++)
         {
@@ -614,11 +621,18 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
         return null;
     }
 
+    private static string ReadAllTextShared(string filePath)
+    {
+        using var stream = OpenSharedReadStream(filePath);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
     private static async IAsyncEnumerable<string> ReadLinesAsync(
         string filePath,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        using var stream = File.OpenRead(filePath);
+        using var stream = OpenSharedReadStream(filePath);
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
 
         while (!reader.EndOfStream)
@@ -630,6 +644,15 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
                 yield return line;
             }
         }
+    }
+
+    private static FileStream OpenSharedReadStream(string filePath)
+    {
+        return new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
     }
 
     private static bool TryGetProperty(JsonElement element, string propertyName, out JsonElement value)

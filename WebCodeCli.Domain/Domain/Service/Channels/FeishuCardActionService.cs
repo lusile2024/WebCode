@@ -864,7 +864,8 @@ public class FeishuCardActionService
         }
 
         var normalizedToolId = NormalizeToolId(sessionEntity.ToolId) ?? ResolveDefaultToolId();
-        var cliThreadId = sessionEntity.CliThreadId?.Trim();
+        var cliThreadId = _cliExecutor.GetCliThreadId(sessionId)?.Trim()
+                          ?? sessionEntity.CliThreadId?.Trim();
         if (string.IsNullOrWhiteSpace(cliThreadId))
         {
             await _feishuChannel.SendMessageAsync(chatId, "⚠️ 当前会话尚未绑定 CLI 原生会话 ID，暂时无法读取历史消息。请先在该会话中执行一次 CLI 对话。", username, appId);

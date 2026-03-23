@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using WebCodeCli.Domain.Common;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
@@ -204,6 +205,25 @@ public class CliExecutorService : ICliExecutorService
                 if (!string.IsNullOrWhiteSpace(output?.ActiveThreadId))
                 {
                     threadId = output.ActiveThreadId;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(threadId) && session != null)
+            {
+                threadId = CliThreadIdRecoveryHelper.TryRecoverFromImportedTitle(session.ToolId, session.Title);
+                if (!string.IsNullOrWhiteSpace(threadId))
+                {
+                    _logger.LogInformation("从导入标题恢复会话 {SessionId} 的 CLI ThreadId: {ThreadId}", sessionId, threadId);
+
+                    lock (_cliSessionLock)
+                    {
+                        _cliThreadIds[sessionId] = threadId;
+                    }
+
+                    if (sessionRepo != null)
+                    {
+                        _ = sessionRepo.UpdateCliThreadIdAsync(sessionId, threadId).GetAwaiter().GetResult();
+                    }
                 }
             }
 

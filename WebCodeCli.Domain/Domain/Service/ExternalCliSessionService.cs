@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -620,7 +621,7 @@ public class ExternalCliSessionService : IExternalCliSessionService
 
             try
             {
-                var json = File.ReadAllText(indexFile);
+                var json = ReadAllTextShared(indexFile);
                 if (string.IsNullOrWhiteSpace(json))
                 {
                     continue;
@@ -846,6 +847,13 @@ public class ExternalCliSessionService : IExternalCliSessionService
         }
 
         return null;
+    }
+
+    private static string ReadAllTextShared(string filePath)
+    {
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     private static DateTime GetMostRecentDateTime(DateTime? parsedTime, DateTime fallbackTime)
