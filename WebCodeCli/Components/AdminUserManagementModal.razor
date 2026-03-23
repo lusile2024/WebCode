@@ -203,6 +203,7 @@
                                             <div class="rounded-2xl border border-red-200 bg-red-50 px-3 py-3 text-xs text-red-700 break-words">@_feishuBotStatus.LastError</div>
                                         }
                                         <div class="text-xs text-gray-500">@Tx("adminUserManagement.feishuLastStarted", "最近启动时间", "Last started")：@GetMetaValue(_feishuBotStatus.LastStartedAt)</div>
+                                        <div class="text-xs text-gray-500">@Tx("adminUserManagement.feishuRestartBehavior", "服务重启后自动恢复", "Restore after restart")：@(_feishuBotStatus.ShouldAutoStart ? Tx("adminUserManagement.feishuRestartOn", "开启", "On") : Tx("adminUserManagement.feishuRestartOff", "停止", "Off"))</div>
                                     </div>
                                     <label class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between gap-3">
                                         <span class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.feishuEnabled", "允许此用户机器人被启动", "Allow this user's bot to be started")</span>

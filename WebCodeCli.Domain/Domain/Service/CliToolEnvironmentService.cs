@@ -16,49 +16,48 @@ namespace WebCodeCli.Domain.Domain.Service;
 public interface ICliToolEnvironmentService
 {
     /// <summary>
-    /// 获取指定工具的环境变量配置（优先使用激活方案，其次数据库默认配置，最后 appsettings）
+    /// 获取指定工具的环境变量配置。
+    /// 优先级：激活方案 > 数据库默认配置 > appsettings，然后叠加当前用户覆盖。
     /// </summary>
     Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId, string? username = null);
 
     /// <summary>
-    /// 保存指定工具的默认环境变量配置到数据库
+    /// 保存指定工具的用户环境变量配置到数据库。
     /// </summary>
     Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null);
 
     /// <summary>
-    /// 删除指定工具的环境变量配置
+    /// 删除指定工具的用户环境变量配置。
     /// </summary>
     Task<bool> DeleteEnvironmentVariablesAsync(string toolId, string? username = null);
 
     /// <summary>
-    /// 重置为appsettings中的默认配置
+    /// 重置为继承默认配置。
     /// </summary>
-    Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId);
-
-    // ── 配置方案（多套 AI 环境变量） ──
+    Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId, string? username = null);
 
     /// <summary>
-    /// 获取指定工具的所有配置方案
+    /// 获取指定工具的所有配置方案。
     /// </summary>
     Task<List<CliToolEnvProfile>> GetProfilesAsync(string toolId);
 
     /// <summary>
-    /// 保存（新建或更新）一个配置方案
+    /// 保存（新建或更新）一个配置方案。
     /// </summary>
     Task<CliToolEnvProfile?> SaveProfileAsync(string toolId, int profileId, string profileName, Dictionary<string, string> envVars);
 
     /// <summary>
-    /// 激活指定配置方案（将其设为当前生效方案）
+    /// 激活指定配置方案（将其设为当前生效方案）。
     /// </summary>
     Task<bool> ActivateProfileAsync(string toolId, int profileId);
 
     /// <summary>
-    /// 取消所有方案激活，回退到默认配置
+    /// 取消所有方案激活，回退到默认配置。
     /// </summary>
     Task<bool> DeactivateProfilesAsync(string toolId);
 
     /// <summary>
-    /// 删除指定配置方案
+    /// 删除指定配置方案。
     /// </summary>
     Task<bool> DeleteProfileAsync(string toolId, int profileId);
 }
@@ -73,66 +72,40 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     private readonly CliToolsOption _options;
     private readonly ICliToolEnvironmentVariableRepository _repository;
     private readonly ICliToolEnvProfileRepository _profileRepository;
+    private readonly IUserCliToolEnvironmentVariableRepository _userRepository;
+    private readonly IUserContextService _userContextService;
 
     public CliToolEnvironmentService(
         ILogger<CliToolEnvironmentService> logger,
         IOptions<CliToolsOption> options,
         ICliToolEnvironmentVariableRepository repository,
-        ICliToolEnvProfileRepository profileRepository)
+        ICliToolEnvProfileRepository profileRepository,
+        IUserCliToolEnvironmentVariableRepository userRepository,
+        IUserContextService userContextService)
     {
         _logger = logger;
         _options = options.Value;
         _repository = repository;
         _profileRepository = profileRepository;
+        _userRepository = userRepository;
+        _userContextService = userContextService;
     }
 
     /// <summary>
-    /// 获取指定工具的环境变量配置
-    /// 优先级：激活的配置方案 > 数据库默认配置 > appsettings 配置
+    /// 获取指定工具的环境变量配置。
+    /// 优先级：激活方案 > 数据库默认配置 > appsettings，然后叠加当前用户覆盖。
     /// </summary>
     public async Task<Dictionary<string, string>> GetEnvironmentVariablesAsync(string toolId, string? username = null)
     {
         try
         {
-            // 1. 优先使用激活的配置方案
-            var activeProfile = await _profileRepository.GetActiveProfileAsync(toolId);
-            if (activeProfile != null && !string.IsNullOrWhiteSpace(activeProfile.EnvVarsJson))
-            {
-                try
-                {
-                    _logger.LogInformation("从激活方案 [{ProfileName}] 加载工具 {ToolId} 的环境变量配置", activeProfile.ProfileName, toolId);
-                    var profileVars = JsonSerializer.Deserialize<Dictionary<string, string>>(activeProfile.EnvVarsJson) ?? new();
-                    return profileVars
-                        .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-                        .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-                }
-                catch (JsonException jsonEx)
-                {
-                    _logger.LogWarning(jsonEx,
-                        "激活方案 [{ProfileName}] 的环境变量 JSON 无效，忽略该方案并回退到数据库和配置文件。ToolId: {ToolId}",
-                        activeProfile.ProfileName,
-                        toolId);
-                }
-            }
+            var result = await GetInheritedEnvironmentVariablesAsync(toolId);
 
-            // 2. 从数据库默认配置读取
-            var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
-            if (dbEnvVars.Any())
+            var resolvedUsername = ResolveUsername(username);
+            if (!string.IsNullOrWhiteSpace(resolvedUsername))
             {
-                _logger.LogInformation("从数据库加载工具 {ToolId} 的环境变量配置", toolId);
-                return dbEnvVars
-                    .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-            }
-
-            // 3. 从 appsettings 读取
-            var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
-            if (tool?.EnvironmentVariables != null && tool.EnvironmentVariables.Any())
-            {
-                _logger.LogInformation("从配置文件加载工具 {ToolId} 的环境变量配置", toolId);
-                return tool.EnvironmentVariables
-                    .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                var userEnvVars = await _userRepository.GetEnvironmentVariablesAsync(resolvedUsername, toolId);
+                ApplyOverrides(result, userEnvVars);
             }
 
             _logger.LogInformation("获取工具 {ToolId} 的环境变量配置，用户={Username}，最终 {Count} 个", toolId, resolvedUsername, result.Count);
@@ -146,7 +119,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 保存指定工具的环境变量配置到数据库
+    /// 保存指定工具的用户环境变量配置到数据库。
     /// </summary>
     public async Task<bool> SaveEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
     {
@@ -158,11 +131,21 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
                 return false;
             }
 
-            var result = await _userRepository.SaveEnvironmentVariablesAsync(resolvedUsername, toolId, envVars);
+            var normalizedEnvVars = NormalizeEnvVars(envVars, keepEmptyValues: false);
+            var inheritedEnvVars = await GetInheritedEnvironmentVariablesAsync(toolId);
+            var persistedEnvVars = BuildPersistedUserEnvVars(normalizedEnvVars, inheritedEnvVars);
+
+            var result = await _userRepository.SaveEnvironmentVariablesAsync(resolvedUsername, toolId, persistedEnvVars);
             if (result)
             {
-                _logger.LogInformation("成功保存工具 {ToolId} 的用户环境变量配置，用户={Username}", toolId, resolvedUsername);
+                _logger.LogInformation(
+                    "成功保存工具 {ToolId} 的用户环境变量配置，用户={Username}，提交 {SubmittedCount} 个，落库 {PersistedCount} 个",
+                    toolId,
+                    resolvedUsername,
+                    normalizedEnvVars.Count,
+                    persistedEnvVars.Count);
             }
+
             return result;
         }
         catch (Exception ex)
@@ -173,7 +156,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 删除指定工具的环境变量配置
+    /// 删除指定工具的用户环境变量配置。
     /// </summary>
     public async Task<bool> DeleteEnvironmentVariablesAsync(string toolId, string? username = null)
     {
@@ -190,6 +173,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
             {
                 _logger.LogInformation("成功删除工具 {ToolId} 的用户环境变量配置，用户={Username}", toolId, resolvedUsername);
             }
+
             return result;
         }
         catch (Exception ex)
@@ -200,7 +184,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 重置为appsettings中的默认配置
+    /// 重置为继承默认配置。
     /// </summary>
     public async Task<Dictionary<string, string>> ResetToDefaultAsync(string toolId, string? username = null)
     {
@@ -216,10 +200,8 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
         }
     }
 
-    // ── 配置方案（多套 AI 环境变量） ──
-
     /// <summary>
-    /// 获取指定工具的所有配置方案
+    /// 获取指定工具的所有配置方案。
     /// </summary>
     public async Task<List<CliToolEnvProfile>> GetProfilesAsync(string toolId)
     {
@@ -235,7 +217,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 保存（新建或更新）一个配置方案
+    /// 保存（新建或更新）一个配置方案。
     /// </summary>
     public async Task<CliToolEnvProfile?> SaveProfileAsync(string toolId, int profileId, string profileName, Dictionary<string, string> envVars)
     {
@@ -245,7 +227,6 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
 
             if (profileId <= 0)
             {
-                // 新建方案
                 var newProfile = new CliToolEnvProfile
                 {
                     ToolId = toolId,
@@ -255,27 +236,26 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
                     CreatedAt = DateTime.Now,
                     UpdatedAt = DateTime.Now
                 };
+
                 var newId = await _profileRepository.InsertReturnIdentityAsync(newProfile);
                 newProfile.Id = newId;
                 _logger.LogInformation("成功新建工具 {ToolId} 的配置方案 [{ProfileName}]", toolId, profileName);
                 return newProfile;
             }
-            else
+
+            var existing = await _profileRepository.GetByIdAsync(profileId);
+            if (existing == null || existing.ToolId != toolId)
             {
-                // 更新已有方案
-                var existing = await _profileRepository.GetByIdAsync(profileId);
-                if (existing == null || existing.ToolId != toolId)
-                {
-                    _logger.LogWarning("未找到工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
-                    return null;
-                }
-                existing.ProfileName = profileName;
-                existing.EnvVarsJson = envVarsJson;
-                existing.UpdatedAt = DateTime.Now;
-                await _profileRepository.UpdateAsync(existing);
-                _logger.LogInformation("成功更新工具 {ToolId} 的配置方案 [{ProfileName}]", toolId, profileName);
-                return existing;
+                _logger.LogWarning("未找到工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
+                return null;
             }
+
+            existing.ProfileName = profileName;
+            existing.EnvVarsJson = envVarsJson;
+            existing.UpdatedAt = DateTime.Now;
+            await _profileRepository.UpdateAsync(existing);
+            _logger.LogInformation("成功更新工具 {ToolId} 的配置方案 [{ProfileName}]", toolId, profileName);
+            return existing;
         }
         catch (Exception ex)
         {
@@ -285,7 +265,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 激活指定配置方案
+    /// 激活指定配置方案。
     /// </summary>
     public async Task<bool> ActivateProfileAsync(string toolId, int profileId)
     {
@@ -296,6 +276,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
             {
                 _logger.LogInformation("成功激活工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
             }
+
             return result;
         }
         catch (Exception ex)
@@ -306,7 +287,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 取消所有方案激活，回退到默认配置
+    /// 取消所有方案激活，回退到默认配置。
     /// </summary>
     public async Task<bool> DeactivateProfilesAsync(string toolId)
     {
@@ -317,6 +298,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
             {
                 _logger.LogInformation("已取消工具 {ToolId} 的所有方案激活状态", toolId);
             }
+
             return result;
         }
         catch (Exception ex)
@@ -327,7 +309,7 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
     }
 
     /// <summary>
-    /// 删除指定配置方案
+    /// 删除指定配置方案。
     /// </summary>
     public async Task<bool> DeleteProfileAsync(string toolId, int profileId)
     {
@@ -338,12 +320,114 @@ public class CliToolEnvironmentService : ICliToolEnvironmentService
             {
                 _logger.LogInformation("成功删除工具 {ToolId} 的配置方案 {ProfileId}", toolId, profileId);
             }
+
             return result;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "删除工具 {ToolId} 的配置方案 {ProfileId} 失败", toolId, profileId);
             return false;
+        }
+    }
+
+    private string ResolveUsername(string? username)
+    {
+        return string.IsNullOrWhiteSpace(username)
+            ? _userContextService.GetCurrentUsername()
+            : username.Trim();
+    }
+
+    private async Task<Dictionary<string, string>> GetInheritedEnvironmentVariablesAsync(string toolId)
+    {
+        var activeProfile = await _profileRepository.GetActiveProfileAsync(toolId);
+        if (activeProfile != null && !string.IsNullOrWhiteSpace(activeProfile.EnvVarsJson))
+        {
+            try
+            {
+                _logger.LogInformation("从激活方案 [{ProfileName}] 加载工具 {ToolId} 的环境变量配置", activeProfile.ProfileName, toolId);
+                var profileVars = JsonSerializer.Deserialize<Dictionary<string, string>>(activeProfile.EnvVarsJson) ?? new();
+                return NormalizeEnvVars(profileVars, keepEmptyValues: false);
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogWarning(
+                    jsonEx,
+                    "激活方案 [{ProfileName}] 的环境变量 JSON 无效，忽略该方案并回退到数据库和配置文件。ToolId: {ToolId}",
+                    activeProfile.ProfileName,
+                    toolId);
+            }
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tool = _options.Tools.FirstOrDefault(t => t.Id == toolId);
+        if (tool?.EnvironmentVariables != null)
+        {
+            ApplyOverrides(result, tool.EnvironmentVariables);
+        }
+
+        var dbEnvVars = await _repository.GetEnvironmentVariablesByToolIdAsync(toolId);
+        ApplyOverrides(result, dbEnvVars);
+        return result;
+    }
+
+    private static Dictionary<string, string> NormalizeEnvVars(Dictionary<string, string> envVars, bool keepEmptyValues)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in envVars)
+        {
+            var key = kvp.Key?.Trim();
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var value = kvp.Value?.Trim() ?? string.Empty;
+            if (!keepEmptyValues && string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            result[key] = value;
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string> BuildPersistedUserEnvVars(
+        Dictionary<string, string> requestedEnvVars,
+        Dictionary<string, string> inheritedEnvVars)
+    {
+        var result = new Dictionary<string, string>(requestedEnvVars, StringComparer.OrdinalIgnoreCase);
+        foreach (var inheritedKey in inheritedEnvVars.Keys)
+        {
+            if (!requestedEnvVars.ContainsKey(inheritedKey))
+            {
+                // 空字符串表示显式移除继承的环境变量，避免默认值在下次读取时再次合并回来。
+                result[inheritedKey] = string.Empty;
+            }
+        }
+
+        return result;
+    }
+
+    private static void ApplyOverrides(Dictionary<string, string> target, IEnumerable<KeyValuePair<string, string>> envVars)
+    {
+        foreach (var kvp in envVars)
+        {
+            var key = kvp.Key?.Trim();
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var value = kvp.Value?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                target.Remove(key);
+                continue;
+            }
+
+            target[key] = value;
         }
     }
 }

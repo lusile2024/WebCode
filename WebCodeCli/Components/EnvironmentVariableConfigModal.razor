@@ -295,6 +295,7 @@
     private bool _isVisible = false;
     private bool _isLoading = false;
     private CliToolConfig? _selectedTool;
+    private string? _username;
     private List<EnvVarItem> _envVars = new();
 
     // 配置方案相关
@@ -333,13 +334,14 @@
             return;
         }
 
-        var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(_selectedTool.Id);
+        var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(_selectedTool.Id, _username);
         _envVars = envVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
     }
 
-    public async Task ShowAsync(CliToolConfig tool)
+    public async Task ShowAsync(CliToolConfig tool, string? username = null)
     {
         _selectedTool = tool;
+        _username = string.IsNullOrWhiteSpace(username) ? null : username.Trim();
         _isVisible = true;
         _isLoading = true;
         _editingProfile = null;
@@ -377,6 +379,7 @@
         _isAddingProfile = false;
         _newProfileName = string.Empty;
         _profilePendingDelete = null;
+        _username = null;
         StateHasChanged();
     }
 
@@ -590,7 +593,7 @@
             else
             {
                 // 保存默认配置
-                var success = await CliToolEnvironmentService.SaveEnvironmentVariablesAsync(_selectedTool.Id, validEnvVars);
+                var success = await CliToolEnvironmentService.SaveEnvironmentVariablesAsync(_selectedTool.Id, validEnvVars, _username);
                 if (success)
                 {
                     Console.WriteLine("默认环境变量保存成功");
@@ -622,7 +625,7 @@
 
         try
         {
-            var defaultEnvVars = await CliToolEnvironmentService.ResetToDefaultAsync(_selectedTool.Id);
+            var defaultEnvVars = await CliToolEnvironmentService.ResetToDefaultAsync(_selectedTool.Id, _username);
             _envVars = defaultEnvVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
             Console.WriteLine("已重置为默认配置");
         }

@@ -9,6 +9,9 @@ using Log = Serilog.Log;
 
 var builder = WebApplication.CreateBuilder(CreateBuilderOptions(args));
 
+// 支持直接从 bin 目录启动时加载静态 Web 资源清单，避免 _framework 和 scoped css 资源返回 404。
+builder.WebHost.UseStaticWebAssets();
+
 // 配置 Kestrel 服务器限制
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {

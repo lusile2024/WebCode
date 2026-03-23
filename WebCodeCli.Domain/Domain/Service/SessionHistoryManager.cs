@@ -483,9 +483,11 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             Title = entity.Title ?? "新会话",
             WorkspacePath = entity.WorkspacePath ?? string.Empty,
             ToolId = entity.ToolId ?? string.Empty,
+            CliThreadId = entity.CliThreadId,
             CreatedAt = entity.CreatedAt,
             UpdatedAt = entity.UpdatedAt,
             IsWorkspaceValid = entity.IsWorkspaceValid,
+            IsCustomWorkspace = entity.IsCustomWorkspace,
             ProjectId = entity.ProjectId,
             Messages = messageEntities.Select(m => new ChatMessage
             {
@@ -505,9 +507,11 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             Title = session.Title,
             WorkspacePath = session.WorkspacePath,
             ToolId = session.ToolId,
+            CliThreadId = session.CliThreadId,
             CreatedAt = session.CreatedAt,
             UpdatedAt = session.UpdatedAt,
             IsWorkspaceValid = session.IsWorkspaceValid,
+            IsCustomWorkspace = session.IsCustomWorkspace,
             ProjectId = session.ProjectId
         };
     }

@@ -7,6 +7,7 @@ public sealed class UserFeishuBotRuntimeStatus
     public UserFeishuBotRuntimeState State { get; set; } = UserFeishuBotRuntimeState.NotConfigured;
     public bool IsConfigured { get; set; }
     public bool CanStart { get; set; }
+    public bool ShouldAutoStart { get; set; }
     public string? Message { get; set; }
     public string? LastError { get; set; }
     public DateTime? LastStartedAt { get; set; }

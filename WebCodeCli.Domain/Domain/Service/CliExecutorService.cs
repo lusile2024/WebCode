@@ -175,11 +175,54 @@ public class CliExecutorService : ICliExecutorService
 
     public string? GetCliThreadId(string sessionId)
     {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
         lock (_cliSessionLock)
         {
-            _cliThreadIds.TryGetValue(sessionId, out var threadId);
-            return threadId;
+            if (_cliThreadIds.TryGetValue(sessionId, out var cached) && !string.IsNullOrWhiteSpace(cached))
+            {
+                return cached;
+            }
         }
+
+        // 缓存未命中时，从数据库回退（ChatSession.CliThreadId / SessionOutput.ActiveThreadId）
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+
+            var sessionRepo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+            var session = sessionRepo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+            var threadId = session?.CliThreadId;
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                var outputService = scope.ServiceProvider.GetService<ISessionOutputService>();
+                var output = outputService?.GetBySessionIdAsync(sessionId).GetAwaiter().GetResult();
+                if (!string.IsNullOrWhiteSpace(output?.ActiveThreadId))
+                {
+                    threadId = output.ActiveThreadId;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(threadId))
+            {
+                lock (_cliSessionLock)
+                {
+                    _cliThreadIds[sessionId] = threadId;
+                }
+
+                return threadId;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "从数据库回退 CLI ThreadId 失败: {SessionId}", sessionId);
+        }
+
+        return null;
     }
 
     public void SetCliThreadId(string sessionId, string threadId)
@@ -190,6 +233,18 @@ public class CliExecutorService : ICliExecutorService
         {
             _cliThreadIds[sessionId] = threadId;
             _logger.LogInformation("设置会话 {SessionId} 的CLI线程ID: {ThreadId}", sessionId, threadId);
+        }
+
+        // 最佳努力：持久化到数据库，保证服务重启/页面刷新后仍可恢复会话
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            _ = repo.UpdateCliThreadIdAsync(sessionId, threadId).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "持久化 CLI ThreadId 失败: {SessionId}", sessionId);
         }
     }
 
@@ -1142,6 +1197,39 @@ public class CliExecutorService : ICliExecutorService
                 return existingWorkspace;
             }
 
+            // 优先使用数据库中已绑定的工作目录（适用于：自定义目录 / 外部会话导入 / 进程重启后恢复）
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var chatSessionRepository = scope.ServiceProvider.GetService<IChatSessionRepository>();
+                var session = chatSessionRepository?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+
+                if (session != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(session.WorkspacePath) && Directory.Exists(session.WorkspacePath))
+                    {
+                        _sessionWorkspaces[sessionId] = session.WorkspacePath;
+                        return session.WorkspacePath;
+                    }
+
+                    // 自定义目录但不存在时，避免悄悄创建临时目录导致误用
+                    if (session.IsCustomWorkspace && !string.IsNullOrWhiteSpace(session.WorkspacePath))
+                    {
+                        throw new InvalidOperationException(
+                            $"会话 {sessionId} 工作目录不存在或已被清理，请重新创建会话");
+                    }
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // 自定义目录不存在时：直接失败，避免静默创建临时目录导致误用
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "从数据库恢复会话工作目录失败，将创建临时目录: {SessionId}", sessionId);
+            }
+
             // 创建新的会话工作目录
             var workspaceRoot = GetEffectiveWorkspaceRoot();
             var workspacePath = Path.Combine(workspaceRoot, sessionId);
@@ -1159,6 +1247,22 @@ public class CliExecutorService : ICliExecutorService
                 // 在工作目录中创建一个标记文件,记录创建时间
                 var markerFile = Path.Combine(workspacePath, ".workspace_info");
                 File.WriteAllText(markerFile, $"Created: {DateTime.UtcNow:O}\nSessionId: {sessionId}");
+
+                // 最佳努力：把新创建的临时目录绑定写回数据库，避免后续 GetSessionWorkspacePath 查询不到
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var chatSessionRepository = scope.ServiceProvider.GetService<IChatSessionRepository>();
+                    if (chatSessionRepository != null)
+                    {
+                        _ = chatSessionRepository.UpdateWorkspaceBindingAsync(sessionId, workspacePath, isCustomWorkspace: false)
+                            .GetAwaiter().GetResult();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "写回会话工作目录绑定失败(可忽略): {SessionId}", sessionId);
+                }
                 
                 return workspacePath;
             }

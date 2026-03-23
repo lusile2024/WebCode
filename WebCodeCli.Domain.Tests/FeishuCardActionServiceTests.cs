@@ -58,6 +58,60 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_HistoryCommand_SendsExternalCliHistoryWithoutExecutingCli()
+    {
+        const string chatId = "oc_current_chat";
+        const string sessionId = "session-history";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(sessionId);
+        var historyService = new StubExternalCliSessionHistoryService(
+        [
+            new ExternalCliHistoryMessage { Role = "user", Content = "你好" },
+            new ExternalCliHistoryMessage { Role = "assistant", Content = "世界" }
+        ]);
+
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                CliThreadId = "codex-thread-1",
+                WorkspacePath = @"D:\repo",
+                FeishuChatKey = chatId,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(
+                chatSessionRepository: sessionRepository,
+                externalCliSessionHistoryService: historyService));
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "/history");
+
+        var sent = await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+        Assert.Contains("CLI 会话历史", response.Toast?.Content);
+        Assert.False(cliExecutor.WasExecuted);
+        Assert.Equal("codex", historyService.LastToolId);
+        Assert.Equal("codex-thread-1", historyService.LastCliThreadId);
+        Assert.Contains("你好", sent.Content);
+        Assert.Contains("世界", sent.Content);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_BrowseCurrentSessionDirectory_ReturnsDirectoryCard()
     {
         const string chatId = "oc_workspace_chat";
@@ -237,6 +291,120 @@ public class FeishuCardActionServiceTests
         {
             Directory.Delete(workspacePath, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SwitchSession_SendsExternalCliHistory()
+    {
+        const string chatId = "oc_workspace_chat";
+        const string sessionId = "session-switch-history";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var historyService = new StubExternalCliSessionHistoryService(
+        [
+            new ExternalCliHistoryMessage
+            {
+                Role = "assistant",
+                Content = "这是 CLI 原生历史",
+                CreatedAt = new DateTime(2026, 3, 23, 9, 0, 0, DateTimeKind.Local)
+            }
+        ]);
+
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "luhaiyan",
+                ToolId = "claude-code",
+                CliThreadId = "claude-session-1",
+                WorkspacePath = @"D:\repo",
+                FeishuChatKey = chatId,
+                IsWorkspaceValid = true,
+                IsFeishuActive = false,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(
+                chatSessionRepository: sessionRepository,
+                externalCliSessionHistoryService: historyService));
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"switch_session","chat_key":"oc_workspace_chat","session_id":"session-switch-history"}""",
+            chatId: chatId);
+
+        var sent = await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
+        Assert.Equal("claude-code", historyService.LastToolId);
+        Assert.Equal("claude-session-1", historyService.LastCliThreadId);
+        Assert.Contains("这是 CLI 原生历史", sent.Content);
+        Assert.DoesNotContain("暂无历史消息", sent.Content);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_DiscoverExternalCliSessions_ShowsFullCountAndPagination()
+    {
+        const string chatId = "oc_external_cli_chat";
+
+        var discovered = Enumerable.Range(1, 285)
+            .Select(index => new ExternalCliSessionSummary
+            {
+                ToolId = "claude-code",
+                ToolName = "Claude Code",
+                CliThreadId = $"claude-session-{index:D3}",
+                Title = $"Claude 会话 {index:D3}",
+                WorkspacePath = $@"D:\VSWorkshop\allowed\workspace-{index:D3}",
+                UpdatedAt = new DateTime(2026, 3, 23, 10, 0, 0).AddMinutes(-index)
+            })
+            .ToList();
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var serviceProvider = new TestServiceProvider(
+            externalCliSessionService: new StubExternalCliSessionService(discovered));
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"discover_external_cli_sessions","chat_key":"oc_external_cli_chat","tool_id":"claude-code"}""",
+            chatId: chatId,
+            operatorUserId: "ou_test_user");
+
+        var payload = SerializeResponse(response);
+        using var document = JsonDocument.Parse(payload);
+        var summaryContent = document.RootElement
+            .GetProperty("card")
+            .GetProperty("data")
+            .GetProperty("body")
+            .GetProperty("elements")[0]
+            .GetProperty("text")
+            .GetProperty("content")
+            .GetString();
+
+        Assert.NotNull(summaryContent);
+        Assert.Contains("当前找到 **285** 个可导入会话", summaryContent);
+        Assert.Contains("当前第 **1/29** 页", summaryContent);
+        var elementContents = document.RootElement
+            .GetProperty("card")
+            .GetProperty("data")
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .Where(element => element.TryGetProperty("text", out _))
+            .Select(element => element.GetProperty("text"))
+            .Where(text => text.TryGetProperty("content", out _))
+            .Select(text => text.GetProperty("content").GetString())
+            .Where(content => !string.IsNullOrWhiteSpace(content))
+            .ToList();
+
+        Assert.Contains(elementContents, content => content!.Contains("Claude 会话 001", StringComparison.Ordinal));
+        Assert.Contains("\"page\":1", payload);
     }
 
     [Fact]
@@ -957,6 +1125,57 @@ public class FeishuCardActionServiceTests
         }
     }
 
+    private sealed class StubExternalCliSessionHistoryService(IEnumerable<ExternalCliHistoryMessage> messages)
+        : IExternalCliSessionHistoryService
+    {
+        private readonly List<ExternalCliHistoryMessage> _messages = messages.ToList();
+
+        public string? LastToolId { get; private set; }
+
+        public string? LastCliThreadId { get; private set; }
+
+        public Task<List<ExternalCliHistoryMessage>> GetRecentMessagesAsync(
+            string toolId,
+            string cliThreadId,
+            int maxCount = 20,
+            CancellationToken cancellationToken = default)
+        {
+            LastToolId = toolId;
+            LastCliThreadId = cliThreadId;
+            return Task.FromResult(_messages.Take(maxCount).ToList());
+        }
+    }
+
+    private sealed class StubExternalCliSessionService(IEnumerable<ExternalCliSessionSummary> sessions)
+        : IExternalCliSessionService
+    {
+        private readonly List<ExternalCliSessionSummary> _sessions = sessions.ToList();
+
+        public Task<List<ExternalCliSessionSummary>> DiscoverAsync(
+            string username,
+            string? toolId = null,
+            int maxCount = 20,
+            CancellationToken cancellationToken = default)
+        {
+            var query = _sessions.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(toolId))
+            {
+                query = query.Where(x => string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return Task.FromResult(query.Take(maxCount).ToList());
+        }
+
+        public Task<ImportExternalCliSessionResult> ImportAsync(
+            string username,
+            ImportExternalCliSessionRequest request,
+            string? feishuChatKey = null,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
     private sealed class TestServiceProvider : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly StubFeishuUserBindingService _bindingService = new();
@@ -965,15 +1184,21 @@ public class FeishuCardActionServiceTests
         private readonly TestUserContextService _userContextService;
         private readonly TestProjectService _projectService;
         private readonly IChatSessionRepository _chatSessionRepository;
+        private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService;
+        private readonly IExternalCliSessionService _externalCliSessionService;
 
         public TestServiceProvider(
             TestUserContextService? userContextService = null,
             TestProjectService? projectService = null,
-            IChatSessionRepository? chatSessionRepository = null)
+            IChatSessionRepository? chatSessionRepository = null,
+            IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
+            IExternalCliSessionService? externalCliSessionService = null)
         {
             _userContextService = userContextService ?? new TestUserContextService();
             _projectService = projectService ?? new TestProjectService(_userContextService);
             _chatSessionRepository = chatSessionRepository ?? new StubChatSessionRepository([]);
+            _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
+            _externalCliSessionService = externalCliSessionService ?? new StubExternalCliSessionService([]);
         }
 
         public object? GetService(Type serviceType)
@@ -1011,6 +1236,16 @@ public class FeishuCardActionServiceTests
             if (serviceType == typeof(IChatSessionRepository))
             {
                 return _chatSessionRepository;
+            }
+
+            if (serviceType == typeof(IExternalCliSessionHistoryService))
+            {
+                return _externalCliSessionHistoryService;
+            }
+
+            if (serviceType == typeof(IExternalCliSessionService))
+            {
+                return _externalCliSessionService;
             }
 
             return null;
@@ -1183,6 +1418,48 @@ public class FeishuCardActionServiceTests
                 .ToList());
         }
 
+        public Task<ChatSessionEntity?> GetByUsernameToolAndCliThreadIdAsync(string username, string toolId, string cliThreadId)
+        {
+            return Task.FromResult(_sessions.FirstOrDefault(x =>
+                string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public Task<ChatSessionEntity?> GetByToolAndCliThreadIdAsync(string toolId, string cliThreadId)
+        {
+            return Task.FromResult(_sessions.FirstOrDefault(x =>
+                string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.CliThreadId = cliThreadId;
+            session.UpdatedAt = DateTime.Now;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.WorkspacePath = workspacePath;
+            session.IsCustomWorkspace = isCustomWorkspace;
+            session.UpdatedAt = DateTime.Now;
+            return Task.FromResult(true);
+        }
+
         public Task<List<ChatSessionEntity>> GetByFeishuChatKeyAsync(string feishuChatKey)
         {
             return Task.FromResult(_sessions
@@ -1245,6 +1522,12 @@ public class FeishuCardActionServiceTests
 
         public Task<string?> FindConflictingUsernameByAppIdAsync(string username, string? appId)
             => Task.FromResult<string?>(null);
+
+        public Task<List<UserFeishuBotConfigEntity>> GetAutoStartCandidatesAsync()
+            => Task.FromResult(new List<UserFeishuBotConfigEntity>());
+
+        public Task<bool> UpdateRuntimePreferenceAsync(string username, bool autoStartEnabled, DateTime? lastStartedAt = null)
+            => Task.FromResult(true);
 
         public FeishuOptions GetSharedDefaults() => DefaultOptions;
 

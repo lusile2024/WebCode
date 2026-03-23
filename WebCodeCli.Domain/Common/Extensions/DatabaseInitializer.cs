@@ -228,6 +228,16 @@ public static class DatabaseInitializer
             // ChatSession: Username + UpdatedAt 索引（会话列表排序）
             CreateIndexIfNotExists(db, "ChatSession", "IX_ChatSession_Username_UpdatedAt", 
                 new[] { "Username", "UpdatedAt" }, logger);
+
+            // ChatSession: Username + ToolId + CliThreadId 索引（用于恢复外部/CLI会话时快速查找）
+            // 说明：CliThreadId 允许为空；SQLite 对 NULL 的唯一性处理较友好，但这里先用普通索引即可。
+            CreateIndexIfNotExists(db, "ChatSession", "IX_ChatSession_Username_ToolId_CliThreadId",
+                new[] { "Username", "ToolId", "CliThreadId" }, logger);
+
+            // ChatSession: ToolId + CliThreadId 唯一索引（跨用户，确保一个外部 CLI 会话只能被一个用户占用）
+            // 说明：CliThreadId 允许为空；SQLite UNIQUE INDEX 允许多个 NULL，不影响旧数据。
+            CreateIndexIfNotExists(db, "ChatSession", "IX_ChatSession_ToolId_CliThreadId",
+                new[] { "ToolId", "CliThreadId" }, logger, isUnique: true);
             
             // ChatMessage: SessionId 索引（按会话查询消息）
             CreateIndexIfNotExists(db, "ChatMessage", "IX_ChatMessage_SessionId", 

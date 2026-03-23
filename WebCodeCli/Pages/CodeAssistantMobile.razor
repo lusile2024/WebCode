@@ -344,6 +344,11 @@
 <!-- 环境变量配置模态框 -->
 <EnvironmentVariableConfigModal @ref="_envConfigModal" />
 
+<!-- 外部 CLI 会话导入模态框 -->
+<ExternalCliSessionImportModal @ref="_externalCliSessionImportModal"
+                               OnOpenSession="OpenSessionFromExternalImportAsync"
+                               OnImported="ReloadSessionsAfterExternalImportAsync" />
+
 <!-- 更新提示模态框 -->
 <UpdateNotificationModal @ref="_updateNotificationModal" />
 
@@ -1204,6 +1209,23 @@
                         <div class="flex-1 text-left">
                             <p class="font-medium text-gray-800">@T("codeAssistant.envConfig")</p>
                             <p class="text-xs text-gray-500">@T("codeAssistant.envConfigDesc")</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </button>
+
+                    <button @onclick="OpenExternalCliSessionImportModalAsync"
+                            class="w-full flex items-center gap-4 px-4 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-100">
+                        <div class="w-10 h-10 bg-gray-700/10 rounded-xl flex items-center justify-center">
+                            <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M8 9l3 3-3 3m5 0h3M4 19h16a2 2 0 002-2V7a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1 text-left">
+                            <p class="font-medium text-gray-800">导入本地会话</p>
+                            <p class="text-xs text-gray-500">发现并导入 OpenCode/Codex/Claude Code</p>
                         </div>
                         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>

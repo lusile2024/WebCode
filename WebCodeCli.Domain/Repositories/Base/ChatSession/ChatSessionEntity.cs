@@ -38,6 +38,12 @@ public class ChatSessionEntity
     /// </summary>
     [SugarColumn(Length = 64, IsNullable = true)]
     public string? ToolId { get; set; }
+
+    /// <summary>
+    /// CLI 会话/线程 ID（用于恢复外部 CLI 会话，例如 codex thread、claude resume、opencode session）
+    /// </summary>
+    [SugarColumn(Length = 256, IsNullable = true)]
+    public string? CliThreadId { get; set; }
     
     /// <summary>
     /// 创建时间

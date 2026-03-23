@@ -28,6 +28,26 @@ public interface IChatSessionRepository : IRepository<ChatSessionEntity>
     Task<List<ChatSessionEntity>> GetByUsernameOrderByUpdatedAtAsync(string username);
 
     /// <summary>
+    /// 根据用户名 + 工具 + CLI ThreadId 查找会话（用于外部会话导入/去重）
+    /// </summary>
+    Task<ChatSessionEntity?> GetByUsernameToolAndCliThreadIdAsync(string username, string toolId, string cliThreadId);
+
+    /// <summary>
+    /// 根据工具 + CLI ThreadId 查找会话（跨用户，用于“一个外部会话只能被一个用户占用”约束）
+    /// </summary>
+    Task<ChatSessionEntity?> GetByToolAndCliThreadIdAsync(string toolId, string cliThreadId);
+
+    /// <summary>
+    /// 更新会话的 CLI ThreadId（用于恢复）
+    /// </summary>
+    Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId);
+
+    /// <summary>
+    /// 更新会话的工作区绑定（仅更新数据库字段，不创建目录）
+    /// </summary>
+    Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace);
+
+    /// <summary>
     /// 根据飞书ChatKey获取所有会话
     /// </summary>
     /// <param name="feishuChatKey">飞书聊天键</param>
