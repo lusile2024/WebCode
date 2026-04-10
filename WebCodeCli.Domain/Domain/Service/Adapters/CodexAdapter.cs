@@ -304,6 +304,7 @@ public class CodexAdapter : ICliToolAdapter
     {
         var contentBuilder = new StringBuilder();
         contentBuilder.AppendLine("本轮交互失败。");
+        string? errorMessage = null;
 
         if (root.TryGetProperty("error", out var errorElement))
         {
@@ -312,6 +313,7 @@ public class CodexAdapter : ICliToolAdapter
                 var errorMsg = errorElement.GetString();
                 if (!string.IsNullOrWhiteSpace(errorMsg))
                 {
+                    errorMessage = errorMsg;
                     contentBuilder.AppendLine();
                     contentBuilder.AppendLine("错误信息:");
                     contentBuilder.AppendLine(errorMsg);
@@ -324,6 +326,7 @@ public class CodexAdapter : ICliToolAdapter
                     var errorMsg = msgElement.GetString();
                     if (!string.IsNullOrWhiteSpace(errorMsg))
                     {
+                        errorMessage = errorMsg;
                         contentBuilder.AppendLine();
                         contentBuilder.AppendLine("错误信息:");
                         contentBuilder.AppendLine(errorMsg);
@@ -345,6 +348,7 @@ public class CodexAdapter : ICliToolAdapter
 
         outputEvent.Title = "交互失败";
         outputEvent.Content = contentBuilder.ToString().TrimEnd();
+        outputEvent.ErrorMessage = errorMessage;
         outputEvent.IsError = true;
         outputEvent.IsUnknown = true;
     }

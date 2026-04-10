@@ -960,15 +960,18 @@ public class CliExecutorService : ICliExecutorService
         }
         else if (process.ExitCode != 0)
         {
+            var output = fullOutput.ToString();
+            var failureMessage = BuildDetailedFailureMessage(output, adapter, process.ExitCode);
+
             yield return new StreamOutputChunk
             {
                 IsError = true,
                 IsCompleted = true,
-                ErrorMessage = $"执行失败（退出码 {process.ExitCode}）"
+                ErrorMessage = failureMessage
             };
 
-            _logger.LogWarning("CLI 工具执行失败: {Tool}, 退出代码: {ExitCode}",
-                tool.Name, process.ExitCode);
+            _logger.LogWarning("CLI 工具执行失败: {Tool}, 退出代码: {ExitCode}, 错误信息: {ErrorMessage}",
+                tool.Name, process.ExitCode, failureMessage);
         }
         else
         {
@@ -1479,6 +1482,105 @@ public class CliExecutorService : ICliExecutorService
             _logger.LogError(ex, "解析CLI thread id失败");
             return null;
         }
+    }
+
+    /// <summary>
+    /// 从CLI输出中构建更具体的失败信息，优先返回适配器解析出的上游错误
+    /// </summary>
+    private string BuildDetailedFailureMessage(string output, ICliToolAdapter? adapter, int exitCode)
+    {
+        if (adapter != null)
+        {
+            var parsedFailureMessage = ParseCliFailureMessage(output, adapter);
+            if (!string.IsNullOrWhiteSpace(parsedFailureMessage))
+            {
+                return parsedFailureMessage;
+            }
+        }
+
+        return $"执行失败（退出码 {exitCode}）";
+    }
+
+    /// <summary>
+    /// 使用适配器从CLI输出中解析失败原因
+    /// </summary>
+    private string? ParseCliFailureMessage(string output, ICliToolAdapter adapter)
+    {
+        try
+        {
+            string? lastFallbackMessage = null;
+            string? lastDetailedMessage = null;
+
+            var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var trimmedLine = line.Trim();
+                if (string.IsNullOrEmpty(trimmedLine))
+                {
+                    continue;
+                }
+
+                var outputEvent = adapter.ParseOutputLine(trimmedLine);
+                if (outputEvent == null || !outputEvent.IsError)
+                {
+                    continue;
+                }
+
+                var detailedMessage = SelectFailureMessage(outputEvent, skipTransientMessages: true);
+                if (!string.IsNullOrWhiteSpace(detailedMessage))
+                {
+                    lastDetailedMessage = detailedMessage;
+                }
+
+                var fallbackMessage = SelectFailureMessage(outputEvent, skipTransientMessages: false);
+                if (!string.IsNullOrWhiteSpace(fallbackMessage))
+                {
+                    lastFallbackMessage = fallbackMessage;
+                }
+            }
+
+            return lastDetailedMessage ?? lastFallbackMessage;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "解析CLI失败信息失败");
+            return null;
+        }
+    }
+
+    private static string? SelectFailureMessage(CliOutputEvent outputEvent, bool skipTransientMessages)
+    {
+        var candidates = new[] { outputEvent.ErrorMessage, outputEvent.Content };
+
+        foreach (var candidate in candidates)
+        {
+            var normalizedCandidate = NormalizeFailureMessage(candidate);
+            if (string.IsNullOrWhiteSpace(normalizedCandidate))
+            {
+                continue;
+            }
+
+            if (skipTransientMessages && IsTransientFailureMessage(normalizedCandidate))
+            {
+                continue;
+            }
+
+            return normalizedCandidate;
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeFailureMessage(string? message)
+    {
+        return string.IsNullOrWhiteSpace(message) ? null : message.Trim();
+    }
+
+    private static bool IsTransientFailureMessage(string message)
+    {
+        return message.StartsWith("Reconnecting...", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(message, "本轮交互失败。", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(message, "发生未知错误。", StringComparison.OrdinalIgnoreCase);
     }
     
     /// <summary>

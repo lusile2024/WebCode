@@ -132,6 +132,60 @@ public class CliExecutorServiceTests
         Assert.Contains("执行超时", timeoutChunk.ErrorMessage);
     }
 
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenAdapterProvidesDetailedFailure_ReturnsUpstreamErrorMessage()
+    {
+        const string upstreamError = "unexpected status 402 Payment Required";
+
+        var tool = new CliToolConfig
+        {
+            Id = "adapter-error-tool",
+            Name = "Adapter Error Tool",
+            Command = "powershell.exe",
+            ArgumentTemplate = "-NoProfile -Command \"Write-Output 'RETRY: Reconnecting... 1/5'; Write-Output 'ERROR: unexpected status 402 Payment Required'; exit 1\"",
+            TimeoutSeconds = 10,
+            Enabled = true
+        };
+
+        var options = Options.Create(new CliToolsOption
+        {
+            TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+            Tools = [tool]
+        });
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            options,
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new StubErrorAdapter()));
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteStreamAsync("session-adapter-error", tool.Id, "ignored"))
+        {
+            chunks.Add(chunk);
+        }
+
+        var failureChunk = Assert.Single(chunks.Where(c => c.IsError && c.IsCompleted));
+        Assert.Contains(upstreamError, failureChunk.ErrorMessage);
+        Assert.DoesNotContain("执行失败（退出码", failureChunk.ErrorMessage);
+    }
+
+    [Fact]
+    public void CodexAdapter_ParseOutputLine_WhenTurnFailed_SetsErrorMessage()
+    {
+        const string upstreamError = "unexpected status 402 Payment Required";
+        var adapter = new CodexAdapter();
+
+        var outputEvent = adapter.ParseOutputLine(
+            """{"type":"turn.failed","error":{"message":"unexpected status 402 Payment Required","code":402}}""");
+
+        var failureEvent = Assert.IsType<CliOutputEvent>(outputEvent);
+        Assert.True(failureEvent.IsError);
+        Assert.Equal(upstreamError, failureEvent.ErrorMessage);
+    }
+
     private sealed class StubChatSessionService : IChatSessionService
     {
         public void AddMessage(string sessionId, ChatMessage message) { }
@@ -145,15 +199,69 @@ public class CliExecutorServiceTests
         public ChatMessage? GetMessage(string sessionId, string messageId) => null;
     }
 
-    private sealed class StubCliAdapterFactory : ICliAdapterFactory
+    private sealed class StubCliAdapterFactory(params ICliToolAdapter[] adapters) : ICliAdapterFactory
     {
-        public ICliToolAdapter? GetAdapter(CliToolConfig tool) => null;
+        private readonly ICliToolAdapter[] _adapters = adapters;
 
-        public ICliToolAdapter? GetAdapter(string toolId) => null;
+        public ICliToolAdapter? GetAdapter(CliToolConfig tool)
+            => _adapters.FirstOrDefault(adapter => adapter.CanHandle(tool));
 
-        public bool SupportsStreamParsing(CliToolConfig tool) => false;
+        public ICliToolAdapter? GetAdapter(string toolId)
+            => _adapters.FirstOrDefault(adapter =>
+                adapter.SupportedToolIds.Any(id => string.Equals(id, toolId, StringComparison.OrdinalIgnoreCase)));
 
-        public IEnumerable<ICliToolAdapter> GetAllAdapters() => [];
+        public bool SupportsStreamParsing(CliToolConfig tool)
+            => GetAdapter(tool)?.SupportsStreamParsing ?? false;
+
+        public IEnumerable<ICliToolAdapter> GetAllAdapters() => _adapters;
+    }
+
+    private sealed class StubErrorAdapter : ICliToolAdapter
+    {
+        public string[] SupportedToolIds => ["adapter-error-tool"];
+
+        public bool SupportsStreamParsing => true;
+
+        public bool CanHandle(CliToolConfig tool)
+            => string.Equals(tool.Id, "adapter-error-tool", StringComparison.OrdinalIgnoreCase);
+
+        public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+            => tool.ArgumentTemplate;
+
+        public CliOutputEvent? ParseOutputLine(string line)
+        {
+            if (line.StartsWith("RETRY: ", StringComparison.OrdinalIgnoreCase))
+            {
+                return new CliOutputEvent
+                {
+                    EventType = "error",
+                    IsError = true,
+                    ErrorMessage = line["RETRY: ".Length..]
+                };
+            }
+
+            if (line.StartsWith("ERROR: ", StringComparison.OrdinalIgnoreCase))
+            {
+                return new CliOutputEvent
+                {
+                    EventType = "error",
+                    IsError = true,
+                    ErrorMessage = line["ERROR: ".Length..]
+                };
+            }
+
+            return null;
+        }
+
+        public string? ExtractSessionId(CliOutputEvent outputEvent) => null;
+
+        public string? ExtractAssistantMessage(CliOutputEvent outputEvent) => null;
+
+        public string GetEventTitle(CliOutputEvent outputEvent) => outputEvent.Title ?? string.Empty;
+
+        public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
+
+        public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
     }
 
     private sealed class StubSessionOutputService : ISessionOutputService
