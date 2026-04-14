@@ -74,6 +74,127 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_CreatesStreamingCardWithRecentSessionMenu()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "11111111-current";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = activeSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\superpowers",
+                FeishuChatKey = chatId,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                CreatedAt = DateTime.Now.AddMinutes(-30),
+                UpdatedAt = DateTime.Now
+            },
+            new ChatSessionEntity
+            {
+                SessionId = "22222222-other",
+                Username = "luhaiyan",
+                ToolId = "claude-code",
+                WorkspacePath = @"D:\repo\backend",
+                FeishuChatKey = chatId,
+                IsWorkspaceValid = true,
+                IsFeishuActive = false,
+                CreatedAt = DateTime.Now.AddMinutes(-60),
+                UpdatedAt = DateTime.Now.AddMinutes(-5)
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            cardKit);
+
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "继续");
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        var completionMessage = await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(cardKit.LastStreamingChrome);
+        Assert.Contains("处理中", cardKit.InitialStreamingStatusMarkdown);
+        Assert.Equal(chatId, completionMessage.ChatId);
+        Assert.Equal("当前会话：superpowers  11111111\n已完成", completionMessage.Content);
+        var chrome = cardKit.LastStreamingChrome!;
+        Assert.Contains("当前会话", chrome.StatusMarkdown);
+        Assert.Contains("superpowers", chrome.StatusMarkdown);
+        Assert.Contains("11111111", chrome.StatusMarkdown);
+        Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+        Assert.Contains(chrome.OverflowOptions, option => option.Text == "更多会话...");
+
+        var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+        var valueJson = JsonSerializer.Serialize(switchOption.Value);
+        Assert.Contains("\"action\":\"switch_session\"", valueJson);
+        Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);
+        Assert.Contains("\"chat_key\":\"oc_current_chat\"", valueJson);
+
+        var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "更多会话...");
+        var moreValueJson = JsonSerializer.Serialize(moreOption.Value);
+        Assert.Contains("\"action\":\"open_session_manager\"", moreValueJson);
+        Assert.Contains("\"send_as_new_card\":true", moreValueJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_OpenSessionManager_SendAsNewCard_SendsSessionManagerCardToChat()
+    {
+        const string chatId = "oc_workspace_chat";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(null);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = "session-new-card",
+                Username = "luhaiyan",
+                WorkspacePath = @"D:\repo\superpowers",
+                ToolId = "codex",
+                FeishuChatKey = chatId,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                IsCustomWorkspace = true
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            cardKit);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"open_session_manager","chat_key":"oc_workspace_chat","send_as_new_card":true}""",
+            chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
+        Assert.Contains("会话管理卡片", response.Toast?.Content);
+
+        var (sentChatId, cardJson) = await cardKit.WaitForRawCardSentAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(chatId, sentChatId);
+        Assert.Contains("\"action\":\"show_create_session_form\"", cardJson);
+        Assert.Contains("\"action\":\"switch_session\"", cardJson);
+        Assert.Contains("session-new", cardJson);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_WithoutActiveSession_ReturnsCreateSessionForm()
     {
         const string chatId = "oc_current_chat";
@@ -1088,6 +1209,10 @@ public class FeishuCardActionServiceTests
 
         public FeishuOptions? LastRawCardOptionsOverride { get; private set; }
 
+        public FeishuStreamingCardChrome? LastStreamingChrome { get; private set; }
+
+        public string? InitialStreamingStatusMarkdown { get; private set; }
+
         public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
 
@@ -1106,8 +1231,10 @@ public class FeishuCardActionServiceTests
         public Task<string> ReplyTextMessageAsync(string replyMessageId, string content, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
 
-        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
         {
+            LastStreamingChrome = chrome;
+            InitialStreamingStatusMarkdown = chrome?.StatusMarkdown;
             return Task.FromResult(new FeishuStreamingHandle(
                 "card-1",
                 "message-1",

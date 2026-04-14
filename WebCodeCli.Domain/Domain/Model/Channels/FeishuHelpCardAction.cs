@@ -110,4 +110,10 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("page")]
     public int? Page { get; set; }
+
+    /// <summary>
+    /// 是否以新的聊天卡片发送，而不是替换当前卡片
+    /// </summary>
+    [JsonPropertyName("send_as_new_card")]
+    public bool SendAsNewCard { get; set; }
 }

@@ -41,54 +41,12 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         FeishuOptions? optionsOverride = null)
     {
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
-        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-
-        var cardData = new
-        {
-            schema = "2.0",
-            config = new
-            {
-                update_multi = true,
-                streaming_mode = true
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = title ?? effectiveOptions.DefaultCardTitle
-                }
-            },
-            body = new
-            {
-                elements = new[]
-                {
-                    new
-                    {
-                        tag = "markdown",
-                        content = initialContent
-                    }
-                }
-            }
-        };
-
-        var payload = new
-        {
-            type = "card_json",
-            data = JsonSerializer.Serialize(cardData)
-        };
-
-        var response = await PostAsync("/open-apis/cardkit/v1/cards", token, payload, effectiveOptions, cancellationToken);
-        var result = await ParseResponseAsync(response, cancellationToken);
-        EnsureBusinessSuccess(result, "Create CardKit card");
-
-        if (result.TryGetProperty("data", out var data) &&
-            data.TryGetProperty("card_id", out var cardIdProp))
-        {
-            return cardIdProp.GetString() ?? string.Empty;
-        }
-
-        throw new InvalidOperationException("Failed to create card: invalid response");
+        return await CreateCardCoreAsync(
+            initialContent,
+            title ?? effectiveOptions.DefaultCardTitle,
+            cancellationToken,
+            effectiveOptions,
+            chrome: null);
     }
 
     public async Task<bool> UpdateCardAsync(
@@ -98,65 +56,15 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
-        try
-        {
-            var effectiveOptions = GetEffectiveOptions(optionsOverride);
-            var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-
-            var cardData = new
-            {
-                schema = "2.0",
-                config = new
-                {
-                    update_multi = true,
-                    streaming_mode = true
-                },
-                body = new
-                {
-                    elements = new[]
-                    {
-                        new
-                        {
-                            tag = "markdown",
-                            content = content
-                        }
-                    }
-                }
-            };
-
-            var payload = new
-            {
-                card = new
-                {
-                    type = "card_json",
-                    data = JsonSerializer.Serialize(cardData)
-                },
-                sequence
-            };
-
-            var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
-            var result = await ParseResponseAsync(response, cancellationToken);
-            EnsureBusinessSuccess(result, "Update CardKit card");
-
-            if (result.TryGetProperty("code", out var codeProp))
-            {
-                var code = codeProp.GetInt32();
-                if (code == 0) return true;
-
-                _logger.LogWarning(
-                    "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
-                    cardId, sequence, code,
-                    result.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : "Unknown");
-                return false;
-            }
-
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Update card failed (cardId={CardId}, seq={Sequence})", cardId, sequence);
-            return false;
-        }
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        return await UpdateCardCoreAsync(
+            cardId,
+            content,
+            sequence,
+            title: null,
+            cancellationToken,
+            effectiveOptions,
+            chrome: null);
     }
 
     public async Task<string> SendCardMessageAsync(
@@ -303,12 +211,19 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string initialContent,
         string? title = null,
         CancellationToken cancellationToken = default,
-        FeishuOptions? optionsOverride = null)
+        FeishuOptions? optionsOverride = null,
+        FeishuStreamingCardChrome? chrome = null)
     {
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var cardTitle = title ?? effectiveOptions.DefaultCardTitle;
 
         // 1. 创建卡片
-        var cardId = await CreateCardAsync(initialContent, title, cancellationToken, effectiveOptions);
+        var cardId = await CreateCardCoreAsync(
+            initialContent,
+            cardTitle,
+            cancellationToken,
+            effectiveOptions,
+            chrome);
 
         // 2. 发送或回复卡片消息
         string messageId;
@@ -325,10 +240,208 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return new FeishuStreamingHandle(
             cardId,
             messageId,
-            content => UpdateCardAsync(cardId, content, Sequence, cancellationToken, effectiveOptions),
-            content => UpdateCardAsync(cardId, content, Sequence + 1, cancellationToken, effectiveOptions),
+            content => UpdateCardCoreAsync(cardId, content, Sequence, cardTitle, cancellationToken, effectiveOptions, chrome),
+            content => UpdateCardCoreAsync(cardId, content, Sequence + 1, cardTitle, cancellationToken, effectiveOptions, chrome),
             effectiveOptions.StreamingThrottleMs
         );
+    }
+
+    private async Task<string> CreateCardCoreAsync(
+        string initialContent,
+        string title,
+        CancellationToken cancellationToken,
+        FeishuOptions effectiveOptions,
+        FeishuStreamingCardChrome? chrome)
+    {
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var cardData = BuildStreamingCardData(initialContent, title, chrome, includeHeader: true);
+
+        var payload = new
+        {
+            type = "card_json",
+            data = JsonSerializer.Serialize(cardData)
+        };
+
+        var response = await PostAsync("/open-apis/cardkit/v1/cards", token, payload, effectiveOptions, cancellationToken);
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Create CardKit card");
+
+        if (result.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("card_id", out var cardIdProp))
+        {
+            return cardIdProp.GetString() ?? string.Empty;
+        }
+
+        throw new InvalidOperationException("Failed to create card: invalid response");
+    }
+
+    private async Task<bool> UpdateCardCoreAsync(
+        string cardId,
+        string content,
+        int sequence,
+        string? title,
+        CancellationToken cancellationToken,
+        FeishuOptions effectiveOptions,
+        FeishuStreamingCardChrome? chrome)
+    {
+        try
+        {
+            var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+            var cardData = BuildStreamingCardData(content, title, chrome, includeHeader: !string.IsNullOrWhiteSpace(title));
+
+            var payload = new
+            {
+                card = new
+                {
+                    type = "card_json",
+                    data = JsonSerializer.Serialize(cardData)
+                },
+                sequence
+            };
+
+            var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
+            var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "Update CardKit card");
+
+            if (result.TryGetProperty("code", out var codeProp))
+            {
+                var code = codeProp.GetInt32();
+                if (code == 0) return true;
+
+                _logger.LogWarning(
+                    "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
+                    cardId, sequence, code,
+                    result.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : "Unknown");
+                return false;
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Update card failed (cardId={CardId}, seq={Sequence})", cardId, sequence);
+            return false;
+        }
+    }
+
+    private object BuildStreamingCardData(
+        string content,
+        string? title,
+        FeishuStreamingCardChrome? chrome,
+        bool includeHeader)
+    {
+        var body = new
+        {
+            elements = BuildStreamingCardElements(content, chrome)
+        };
+
+        if (includeHeader)
+        {
+            return new
+            {
+                schema = "2.0",
+                config = new
+                {
+                    update_multi = true,
+                    streaming_mode = true
+                },
+                header = new
+                {
+                    title = new
+                    {
+                        tag = "plain_text",
+                        content = title ?? _defaultOptions.DefaultCardTitle
+                    }
+                },
+                body
+            };
+        }
+
+        return new
+        {
+            schema = "2.0",
+            config = new
+            {
+                update_multi = true,
+                streaming_mode = true
+            },
+            body
+        };
+    }
+
+    private object[] BuildStreamingCardElements(string content, FeishuStreamingCardChrome? chrome)
+    {
+        if (chrome == null || (string.IsNullOrWhiteSpace(chrome.StatusMarkdown) && chrome.OverflowOptions.Count == 0))
+        {
+            return
+            [
+                new
+                {
+                    tag = "markdown",
+                    content
+                }
+            ];
+        }
+
+        var elements = new List<object>();
+        var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
+            ? "当前会话"
+            : chrome.StatusMarkdown;
+
+        if (chrome.OverflowOptions.Count > 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = statusMarkdown
+                },
+                extra = new
+                {
+                    tag = "overflow",
+                    options = BuildOverflowOptions(chrome.OverflowOptions)
+                }
+            });
+        }
+        else
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = statusMarkdown
+                }
+            });
+        }
+
+        elements.Add(new { tag = "hr" });
+        elements.Add(new
+        {
+            tag = "markdown",
+            content
+        });
+
+        return elements.ToArray();
+    }
+
+    private object[] BuildOverflowOptions(IEnumerable<FeishuStreamingCardOverflowOption> options)
+    {
+        return options
+            .Where(option => !string.IsNullOrWhiteSpace(option.Text))
+            .Select(option => (object)new
+            {
+                text = new
+                {
+                    tag = "plain_text",
+                    content = option.Text
+                },
+                value = JsonSerializer.Serialize(option.Value)
+            })
+            .ToArray();
     }
 
     private int _sequence = 0;

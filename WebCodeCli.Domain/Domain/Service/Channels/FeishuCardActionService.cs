@@ -62,6 +62,7 @@ public class FeishuCardActionService
     private const int SessionFilePreviewLineLimit = 80;
     private const int SessionFilePreviewCharacterLimit = 4000;
     private const int ProjectBranchPageSize = 12;
+    private const int StreamingStatusPulseIntervalMs = 900;
 
     // 会话映射（从 FeishuChannelService 复制）
     private readonly Dictionary<string, string> _sessionMappings = new();
@@ -156,7 +157,9 @@ public class FeishuCardActionService
                 case "bind_web_user":
                     return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId, appId);
                 case "open_session_manager":
-                    return await HandleOpenSessionManagerAsync(action.ChatKey ?? chatId, operatorUserId);
+                    return action.SendAsNewCard
+                        ? await HandleOpenSessionManagerAsNewCardAsync(action.ChatKey ?? chatId, operatorUserId, appId)
+                        : await HandleOpenSessionManagerAsync(action.ChatKey ?? chatId, operatorUserId);
                 case "discover_external_cli_sessions":
                     return await HandleDiscoverExternalCliSessionsAsync(action.ChatKey ?? chatId, chatId, action.ToolId, action.Page, operatorUserId);
                 case "import_external_cli_session":
@@ -373,7 +376,8 @@ public class FeishuCardActionService
         {
             try
             {
-                var username = ResolveFeishuUsername(chatId.ToLowerInvariant(), operatorUserId);
+                var actualChatKey = NormalizeChatKey(chatId);
+                var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
                 var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
 
                 // 获取或创建会话
@@ -390,20 +394,31 @@ public class FeishuCardActionService
                     CreatedAt = DateTime.Now
                 });
 
+                var (streamingChrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(actualChatKey, sessionId, username, toolId);
+
                 // 创建流式回复
                 var handle = await _cardKit.CreateStreamingHandleAsync(
                     chatId,
                     null,
                     effectiveOptions.ThinkingMessage,
                     effectiveOptions.DefaultCardTitle,
-                    optionsOverride: effectiveOptions);
+                    optionsOverride: effectiveOptions,
+                    chrome: streamingChrome);
 
                 _logger.LogInformation(
                     "🔥 [FeishuHelp] 流式句柄已创建: CardId={CardId}",
                     handle.CardId);
 
                 // 执行 CLI 工具并流式更新卡片
-                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, cliPrompt, chatId, effectiveOptions.ThinkingMessage);
+                await ExecuteCliAndStreamAsync(
+                    handle,
+                    streamingChrome,
+                    baseStatusMarkdown,
+                    sessionId,
+                    toolId,
+                    cliPrompt,
+                    chatId,
+                    effectiveOptions.ThinkingMessage);
             }
             catch (Exception ex)
             {
@@ -488,6 +503,8 @@ public class FeishuCardActionService
     /// </summary>
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
+        FeishuStreamingCardChrome streamingChrome,
+        string baseStatusMarkdown,
         string sessionId,
         string toolId,
         string userPrompt,
@@ -497,11 +514,13 @@ public class FeishuCardActionService
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
         var jsonlBuffer = new System.Text.StringBuilder();
+        var latestRenderedContent = thinkingMessage;
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
         if (tool == null)
         {
+            streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
             await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
             _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
             return;
@@ -516,6 +535,14 @@ public class FeishuCardActionService
             sessionId,
             useAdapter);
 
+        using var statusPulseCts = new CancellationTokenSource();
+        var statusPulseTask = RunStreamingStatusPulseAsync(
+            handle,
+            streamingChrome,
+            baseStatusMarkdown,
+            () => latestRenderedContent,
+            statusPulseCts.Token);
+
         try
         {
             await foreach (var chunk in _cliExecutor.ExecuteStreamAsync(sessionId, tool.Id, userPrompt))
@@ -525,6 +552,8 @@ public class FeishuCardActionService
                     _logger.LogError(
                         "CLI execution error: {Error}",
                         chunk.ErrorMessage ?? "Unknown error");
+                    statusPulseCts.Cancel();
+                    streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
                     await handle.FinishAsync($"错误：{chunk.ErrorMessage ?? "执行失败"}");
                     return;
                 }
@@ -547,6 +576,7 @@ public class FeishuCardActionService
                     displayContent = FormatMarkdownOutput(outputBuilder.ToString());
                 }
 
+                latestRenderedContent = displayContent;
                 await handle.UpdateAsync(displayContent);
 
                 if (chunk.IsCompleted)
@@ -569,9 +599,18 @@ public class FeishuCardActionService
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
 
+            latestRenderedContent = finalOutput;
+            statusPulseCts.Cancel();
+            streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
             try
             {
-                await _feishuChannel.SendMessageAsync(chatId, "已完成");
+                // NOTE: 这条带会话标识的“已完成”普通文本通知不能删除。
+                // 飞书侧对流式卡片完成的提示不够明显，用户依赖这条文本消息获得显式完成提醒，
+                // 同时还需要知道是哪一个会话完成了。
+                // 后续若调整卡片交互，必须保留等价的完成通知能力。
+                await _feishuChannel.SendMessageAsync(
+                    chatId,
+                    BuildCompletionNotificationText(sessionId));
             }
             catch (Exception notificationEx)
             {
@@ -596,7 +635,46 @@ public class FeishuCardActionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "CLI execution failed for session: {SessionId}", sessionId);
+            statusPulseCts.Cancel();
+            streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
             await handle.FinishAsync($"执行出错：{ex.Message}");
+        }
+        finally
+        {
+            statusPulseCts.Cancel();
+            try
+            {
+                await statusPulseTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private async Task RunStreamingStatusPulseAsync(
+        FeishuStreamingHandle handle,
+        FeishuStreamingCardChrome streamingChrome,
+        string baseStatusMarkdown,
+        Func<string> contentAccessor,
+        CancellationToken cancellationToken)
+    {
+        var frameIndex = 0;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(StreamingStatusPulseIntervalMs, cancellationToken);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, ++frameIndex);
+                await handle.UpdateAsync(contentAccessor());
+            }
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -1819,6 +1897,109 @@ public class FeishuCardActionService
         }
     }
 
+    private async Task<(FeishuStreamingCardChrome Chrome, string BaseStatusMarkdown)> BuildStreamingCardChromeAsync(
+        string chatKey,
+        string sessionId,
+        string? username,
+        string? currentToolId)
+    {
+        var sessions = string.IsNullOrWhiteSpace(username)
+            ? new List<ChatSessionEntity>()
+            : await GetChatSessionEntitiesAsync(chatKey, username);
+        var currentSession = sessions.FirstOrDefault(session =>
+            string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+
+        var workspaceName = GetSessionWorkspaceName(sessionId, currentSession?.WorkspacePath);
+        var toolLabel = GetToolDisplayName(currentSession?.ToolId ?? currentToolId);
+        var baseStatusMarkdown = $"当前会话：**{workspaceName}** · `{ShortSessionId(sessionId)}` · {toolLabel}";
+
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
+        };
+
+        foreach (var session in sessions
+                     .Where(session => !string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+                     .Take(5))
+        {
+            chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+            {
+                Text = BuildSessionOptionText(session),
+                Value = new
+                {
+                    action = "switch_session",
+                    session_id = session.SessionId,
+                    chat_key = chatKey
+                }
+            });
+        }
+
+        chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+        {
+            Text = "更多会话...",
+            Value = new
+            {
+                action = "open_session_manager",
+                chat_key = chatKey,
+                send_as_new_card = true
+            }
+        });
+
+        return (chrome, baseStatusMarkdown);
+    }
+
+    private string GetSessionWorkspaceName(string sessionId, string? fallbackWorkspacePath = null)
+    {
+        try
+        {
+            return ExtractWorkspaceDirectoryName(_cliExecutor.GetSessionWorkspacePath(sessionId))
+                ?? ExtractWorkspaceDirectoryName(fallbackWorkspacePath)
+                ?? "当前会话";
+        }
+        catch
+        {
+            return ExtractWorkspaceDirectoryName(fallbackWorkspacePath) ?? ShortSessionId(sessionId);
+        }
+    }
+
+    private static string BuildSessionOptionText(ChatSessionEntity session)
+    {
+        var workspaceName = ExtractWorkspaceDirectoryName(session.WorkspacePath) ?? "未命名会话";
+        return $"{workspaceName} · {ShortSessionId(session.SessionId)} · {GetToolDisplayName(session.ToolId)}";
+    }
+
+    private string BuildCompletionNotificationText(string sessionId, string? fallbackWorkspacePath = null)
+    {
+        var workspaceName = GetSessionWorkspaceName(sessionId, fallbackWorkspacePath);
+        return $"当前会话：{workspaceName}  {ShortSessionId(sessionId)}\n已完成";
+    }
+
+    private static string? ExtractWorkspaceDirectoryName(string? workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return null;
+        }
+
+        var trimmedPath = workspacePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.IsNullOrWhiteSpace(trimmedPath))
+        {
+            return null;
+        }
+
+        var directoryName = Path.GetFileName(trimmedPath);
+        return string.IsNullOrWhiteSpace(directoryName) ? null : directoryName;
+    }
+
+    private static string ShortSessionId(string sessionId)
+    {
+        return string.IsNullOrWhiteSpace(sessionId)
+            ? "-"
+            : sessionId.Length <= 8
+                ? sessionId
+                : sessionId[..8];
+    }
+
     /// <summary>
     /// 处理打开会话管理器动作
     /// </summary>
@@ -1831,168 +2012,82 @@ public class FeishuCardActionService
 
         try
         {
-            var chatKey = chatId.ToLowerInvariant();
-            var username = ResolveFeishuUsername(chatKey, operatorUserId);
+            var card = await BuildSessionManagerCardAsync(chatId, operatorUserId);
+            return _cardBuilder.BuildCardActionResponseV2(card, "");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "处理打开会话管理失败");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话管理功能暂时不可用，请稍后重试。", "error");
+        }
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsNewCardAsync(string? chatId, string? operatorUserId, string? appId)
+    {
+        if (string.IsNullOrEmpty(chatId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法打开会话管理", "error");
+        }
+
+        try
+        {
+            var normalizedChatId = chatId.ToLowerInvariant();
+            var username = ResolveFeishuUsername(normalizedChatId, operatorUserId);
             if (string.IsNullOrWhiteSpace(username))
             {
                 return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理会话", "error");
             }
 
-            var sessionEntities = await GetChatSessionEntitiesAsync(chatKey, username);
-            var sessions = sessionEntities.Select(s => s.SessionId).ToList();
-            var currentSessionId = _feishuChannel.GetCurrentSession(chatKey, username);
+            var card = await BuildSessionManagerCardAsync(normalizedChatId, operatorUserId);
+            await SendElementsCardToChatAsync(
+                normalizedChatId,
+                card,
+                "📋 会话管理卡片发送失败，请稍后再试。",
+                username,
+                appId);
 
-            var elements = new List<object>();
+            return _cardBuilder.BuildCardActionToastOnlyResponse("📋 已发送会话管理卡片", "success");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "从流式卡片打开会话管理失败");
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话管理功能暂时不可用，请稍后重试。", "error");
+        }
+    }
 
-            // 添加标题
-            elements.Add(new
+    private async Task<ElementsCardV2Dto> BuildSessionManagerCardAsync(string chatId, string? operatorUserId)
+    {
+        var chatKey = chatId.ToLowerInvariant();
+        var username = ResolveFeishuUsername(chatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            throw new InvalidOperationException("请先绑定 Web 用户，再管理会话");
+        }
+
+        var sessionEntities = await GetChatSessionEntitiesAsync(chatKey, username);
+        var sessions = sessionEntities.Select(s => s.SessionId).ToList();
+        var currentSessionId = _feishuChannel.GetCurrentSession(chatKey, username);
+
+        var elements = new List<object>();
+
+        elements.Add(new
+        {
+            tag = "div",
+            text = new
             {
-                tag = "div",
-                text = new
-                {
-                    tag = "lark_md",
-                    content = $"## 📋 会话管理\n当前聊天共有 **{sessions.Count}** 个会话\n🛠️ 每个会话的 CLI 工具在创建时确定，如需更换请新建会话。"
-                }
-            });
-
-            elements.Add(new { tag = "hr" });
-
-            if (!string.IsNullOrWhiteSpace(currentSessionId))
-            {
-                elements.Add(new
-                {
-                    tag = "button",
-                    text = new { tag = "plain_text", content = "📂 浏览当前会话目录" },
-                    type = "primary",
-                    behaviors = new[]
-                    {
-                        new
-                        {
-                            type = "callback",
-                            value = new
-                            {
-                                action = "browse_current_session_directory",
-                                chat_key = chatKey
-                            }
-                        }
-                    }
-                });
-                elements.Add(new { tag = "hr" });
+                tag = "lark_md",
+                content = $"## 📋 会话管理\n当前聊天共有 **{sessions.Count}** 个会话\n🛠️ 每个会话的 CLI 工具在创建时确定，如需更换请新建会话。"
             }
+        });
 
-            // 添加会话列表
-            foreach (var session in sessionEntities.Take(10)) // 最多显示10个最近的会话
-            {
-                var sessionId = session.SessionId;
-                var workspacePath = GetSessionWorkspaceDisplay(sessionId);
-                var isCurrent = sessionId == currentSessionId;
-                var toolLabel = GetToolDisplayName(session.ToolId);
+        elements.Add(new { tag = "hr" });
 
-                var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
-
-                elements.Add(new
-                {
-                    tag = "div",
-                    text = new { tag = "lark_md", content = sessionInfo }
-                });
-
-                elements.Add(new
-                {
-                    tag = "button",
-                    text = new { tag = "plain_text", content = isCurrent ? "当前" : "切换" },
-                    type = isCurrent ? "default" : "primary",
-                    behaviors = new[]
-                    {
-                        new
-                        {
-                            type = "callback",
-                            value = new
-                            {
-                                action = "switch_session",
-                                session_id = sessionId,
-                                chat_key = chatKey
-                            }
-                        }
-                    }
-                });
-
-                elements.Add(new
-                {
-                    tag = "button",
-                    text = new { tag = "plain_text", content = "关闭" },
-                    type = "danger",
-                    behaviors = new[]
-                    {
-                        new
-                        {
-                            type = "callback",
-                            value = new
-                            {
-                                action = "close_session",
-                                session_id = sessionId,
-                                chat_key = chatKey
-                            }
-                        }
-                    }
-                });
-
-                elements.Add(new { tag = "hr" });
-            }
-
-            if (sessions.Count == 0)
-            {
-                elements.Add(new
-                {
-                    tag = "div",
-                    text = new { tag = "plain_text", content = "暂无会话，请点击下方「新建会话」按钮创建会话。" }
-                });
-            }
-
-            elements.Add(new { tag = "hr" });
-
+        if (!string.IsNullOrWhiteSpace(currentSessionId))
+        {
             elements.Add(new
             {
                 tag = "button",
-                text = new { tag = "plain_text", content = "📁 项目管理" },
-                type = "default",
-                behaviors = new[]
-                {
-                    new
-                    {
-                        type = "callback",
-                        value = new
-                        {
-                            action = "open_project_manager",
-                            chat_key = chatKey
-                        }
-                    }
-                }
-            });
-
-            elements.Add(new
-            {
-                tag = "button",
-                text = new { tag = "plain_text", content = "📥 导入本地会话" },
-                type = "default",
-                behaviors = new[]
-                {
-                    new
-                    {
-                        type = "callback",
-                        value = new
-                        {
-                            action = "discover_external_cli_sessions",
-                            chat_key = chatKey
-                        }
-                    }
-                }
-            });
-
-            // 添加底部操作按钮
-            elements.Add(new
-            {
-                tag = "button",
-                text = new { tag = "plain_text", content = "➕ 新建会话" },
+                text = new { tag = "plain_text", content = "📂 浏览当前会话目录" },
                 type = "primary",
                 behaviors = new[]
                 {
@@ -2001,7 +2096,44 @@ public class FeishuCardActionService
                         type = "callback",
                         value = new
                         {
-                            action = "show_create_session_form",
+                            action = "browse_current_session_directory",
+                            chat_key = chatKey
+                        }
+                    }
+                }
+            });
+            elements.Add(new { tag = "hr" });
+        }
+
+        foreach (var session in sessionEntities.Take(10))
+        {
+            var sessionId = session.SessionId;
+            var workspacePath = GetSessionWorkspaceDisplay(sessionId);
+            var isCurrent = sessionId == currentSessionId;
+            var toolLabel = GetToolDisplayName(session.ToolId);
+
+            var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
+
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "lark_md", content = sessionInfo }
+            });
+
+            elements.Add(new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = isCurrent ? "当前" : "切换" },
+                type = isCurrent ? "default" : "primary",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "switch_session",
+                            session_id = sessionId,
                             chat_key = chatKey
                         }
                     }
@@ -2011,8 +2143,8 @@ public class FeishuCardActionService
             elements.Add(new
             {
                 tag = "button",
-                text = new { tag = "plain_text", content = "🔙 返回帮助" },
-                type = "default",
+                text = new { tag = "plain_text", content = "关闭" },
+                type = "danger",
                 behaviors = new[]
                 {
                     new
@@ -2020,38 +2152,120 @@ public class FeishuCardActionService
                         type = "callback",
                         value = new
                         {
-                            action = "back_to_list"
+                            action = "close_session",
+                            session_id = sessionId,
+                            chat_key = chatKey
                         }
                     }
                 }
             });
 
-            // 构建卡片
-            var card = new ElementsCardV2Dto
-            {
-                Header = new ElementsCardV2Dto.HeaderSuffix
-                {
-                    Template = "blue",
-                    Title = new HeaderTitleElement { Content = "📋 会话管理" }
-                },
-                Config = new ElementsCardV2Dto.ConfigSuffix
-                {
-                    EnableForward = true,
-                    UpdateMulti = true
-                },
-                Body = new ElementsCardV2Dto.BodySuffix
-                {
-                    Elements = elements.ToArray()
-                }
-            };
+            elements.Add(new { tag = "hr" });
+        }
 
-            return _cardBuilder.BuildCardActionResponseV2(card, "");
-        }
-        catch (Exception ex)
+        if (sessions.Count == 0)
         {
-            _logger.LogError(ex, "处理打开会话管理失败");
-            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话管理功能暂时不可用，请稍后重试。", "error");
+            elements.Add(new
+            {
+                tag = "div",
+                text = new { tag = "plain_text", content = "暂无会话，请点击下方「新建会话」按钮创建会话。" }
+            });
         }
+
+        elements.Add(new { tag = "hr" });
+
+        elements.Add(new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = "📁 项目管理" },
+            type = "default",
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "open_project_manager",
+                        chat_key = chatKey
+                    }
+                }
+            }
+        });
+
+        elements.Add(new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = "📥 导入本地会话" },
+            type = "default",
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "discover_external_cli_sessions",
+                        chat_key = chatKey
+                    }
+                }
+            }
+        });
+
+        elements.Add(new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = "➕ 新建会话" },
+            type = "primary",
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "show_create_session_form",
+                        chat_key = chatKey
+                    }
+                }
+            }
+        });
+
+        elements.Add(new
+        {
+            tag = "button",
+            text = new { tag = "plain_text", content = "🔙 返回帮助" },
+            type = "default",
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = "back_to_list"
+                    }
+                }
+            }
+        });
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "blue",
+                Title = new HeaderTitleElement { Content = "📋 会话管理" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
     }
 
     private async Task<CardActionTriggerResponseDto> HandleDiscoverExternalCliSessionsAsync(

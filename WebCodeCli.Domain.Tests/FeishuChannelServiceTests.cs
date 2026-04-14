@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using SqlSugar;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text.Json;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
@@ -163,9 +164,12 @@ public class FeishuChannelServiceTests
 
             Assert.Equal("thread-1", cliExecutor.GetCliThreadId(sessionId));
             Assert.Null(cardKit.Handles[0].ReplyMessageId);
-            Assert.Equal("superpowers 回复 luhaiyan:\n当前回复已停止：同一会话收到了新的补充消息，请查看新卡片继续结果。", cardKit.Handles[0].FinalContent);
-            Assert.Equal("superpowers 回复 luhaiyan:\n补充完成", cardKit.Handles[1].FinalContent);
-            Assert.Equal(0, cardKit.ReplyTextCallCount);
+            Assert.Equal("当前回复已停止：同一会话收到了新的补充消息，请查看新卡片继续结果。", cardKit.Handles[0].FinalContent);
+            Assert.Equal("补充完成", cardKit.Handles[1].FinalContent);
+            Assert.Contains("已停止", cardKit.Handles[0].FinalStatusMarkdown);
+            Assert.Contains("已完成", cardKit.Handles[1].FinalStatusMarkdown);
+            Assert.Equal(1, cardKit.ReplyTextCallCount);
+            Assert.Equal($"当前会话：superpowers  {sessionId[..8]}\n已完成", cardKit.LastReplyTextContent);
             Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "user" && message.Content.Contains("补充：D:\\MMIS\\Base\\Docs\\superpowers", StringComparison.Ordinal));
             Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "assistant" && message.Content == "补充完成");
         }
@@ -208,7 +212,7 @@ public class FeishuChannelServiceTests
 
         try
         {
-            service.CreateNewSession(
+            var sessionId = service.CreateNewSession(
                 new FeishuIncomingMessage
                 {
                     ChatId = "oc_reply_prefix_chat",
@@ -229,9 +233,107 @@ public class FeishuChannelServiceTests
             Assert.Equal(@"D:\MMIS\Base\Docs\superpowers", call.Prompt);
             var handle = Assert.Single(cardKit.Handles);
             Assert.Null(handle.ReplyMessageId);
-            Assert.Equal("superpowers 回复 luhaiyan:\n思考中...", handle.InitialContent);
-            Assert.Equal("superpowers 回复 luhaiyan:\n补充完成", handle.FinalContent);
-            Assert.Equal(0, cardKit.ReplyTextCallCount);
+            Assert.Equal("思考中...", handle.InitialContent);
+            Assert.Equal("补充完成", handle.FinalContent);
+            Assert.Contains("处理中", handle.InitialStatusMarkdown);
+            Assert.Contains("／", handle.InitialStatusMarkdown);
+            Assert.Contains("已完成", handle.FinalStatusMarkdown);
+            Assert.Equal(1, cardKit.ReplyTextCallCount);
+            Assert.Equal($"当前会话：superpowers  {sessionId[..8]}\n已完成", cardKit.LastReplyTextContent);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_CreatesStreamingCardWithSessionOverflowMenu()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-streaming-menu-{Guid.NewGuid():N}");
+        var currentWorkspace = Path.Combine(workspaceRoot, "superpowers");
+        var otherWorkspace = Path.Combine(workspaceRoot, "backend");
+        Directory.CreateDirectory(currentWorkspace);
+        Directory.CreateDirectory(otherWorkspace);
+
+        repositoryProxy.Store(new ChatSessionEntity
+        {
+            SessionId = "11111111-current",
+            Username = "luhaiyan",
+            WorkspacePath = currentWorkspace,
+            ToolId = "codex",
+            FeishuChatKey = "oc_menu_chat",
+            IsFeishuActive = true,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-30),
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        repositoryProxy.Store(new ChatSessionEntity
+        {
+            SessionId = "22222222-other",
+            Username = "luhaiyan",
+            WorkspacePath = otherWorkspace,
+            ToolId = "claude-code",
+            FeishuChatKey = "oc_menu_chat",
+            IsFeishuActive = false,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-60),
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
+        });
+
+        var cliExecutor = new PromptCapturingCliExecutor(currentWorkspace);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_menu_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-menu",
+                Content = "继续处理"
+            });
+
+            var handle = Assert.Single(cardKit.Handles);
+            Assert.NotNull(handle.Chrome);
+            var chrome = handle.Chrome!;
+            Assert.Contains("当前会话", chrome.StatusMarkdown);
+            Assert.Contains("superpowers", chrome.StatusMarkdown);
+            Assert.Contains("11111111", chrome.StatusMarkdown);
+            Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+            Assert.Contains(chrome.OverflowOptions, option => option.Text == "更多会话...");
+
+            var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+            var valueJson = JsonSerializer.Serialize(switchOption.Value);
+            Assert.Contains("\"action\":\"switch_session\"", valueJson);
+            Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);
+            Assert.Contains("\"chat_key\":\"oc_menu_chat\"", valueJson);
+
+            var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "更多会话...");
+            var moreValueJson = JsonSerializer.Serialize(moreOption.Value);
+            Assert.Contains("\"action\":\"open_session_manager\"", moreValueJson);
+            Assert.Contains("\"send_as_new_card\":true", moreValueJson);
         }
         finally
         {
@@ -445,7 +547,7 @@ public class FeishuChannelServiceTests
             return Task.FromResult("reply-text");
         }
 
-        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
             => throw new NotSupportedException();
 
         public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
@@ -463,6 +565,8 @@ public class FeishuChannelServiceTests
         public List<StreamingHandleRecord> Handles { get; } = new();
 
         public int ReplyTextCallCount { get; private set; }
+
+        public string? LastReplyTextContent { get; private set; }
 
         public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => Task.FromResult($"card-{Handles.Count + 1}");
@@ -482,18 +586,25 @@ public class FeishuChannelServiceTests
         public Task<string> ReplyTextMessageAsync(string replyMessageId, string content, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
         {
             ReplyTextCallCount++;
+            LastReplyTextContent = content;
             return Task.FromResult($"reply-text-{ReplyTextCallCount}");
         }
 
-        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
         {
             var record = new StreamingHandleRecord
             {
                 CardId = $"card-{Handles.Count + 1}",
                 MessageId = $"message-{Handles.Count + 1}",
                 ReplyMessageId = replyMessageId,
-                InitialContent = initialContent
+                InitialContent = initialContent,
+                Chrome = chrome,
+                InitialStatusMarkdown = chrome?.StatusMarkdown
             };
+            if (!string.IsNullOrWhiteSpace(record.InitialStatusMarkdown))
+            {
+                record.StatusMarkdownSnapshots.Add(record.InitialStatusMarkdown);
+            }
             Handles.Add(record);
 
             return Task.FromResult(new FeishuStreamingHandle(
@@ -502,11 +613,20 @@ public class FeishuChannelServiceTests
                 content =>
                 {
                     record.Updates.Add(content);
+                    if (!string.IsNullOrWhiteSpace(chrome?.StatusMarkdown))
+                    {
+                        record.StatusMarkdownSnapshots.Add(chrome.StatusMarkdown);
+                    }
                     return Task.CompletedTask;
                 },
                 content =>
                 {
                     record.FinalContent = content;
+                    record.FinalStatusMarkdown = chrome?.StatusMarkdown;
+                    if (!string.IsNullOrWhiteSpace(record.FinalStatusMarkdown))
+                    {
+                        record.StatusMarkdownSnapshots.Add(record.FinalStatusMarkdown);
+                    }
                     return Task.CompletedTask;
                 },
                 throttleMs: 0));
@@ -532,9 +652,17 @@ public class FeishuChannelServiceTests
 
         public string InitialContent { get; set; } = string.Empty;
 
+        public string? InitialStatusMarkdown { get; set; }
+
         public List<string> Updates { get; } = new();
 
         public string? FinalContent { get; set; }
+
+        public string? FinalStatusMarkdown { get; set; }
+
+        public List<string> StatusMarkdownSnapshots { get; } = new();
+
+        public FeishuStreamingCardChrome? Chrome { get; set; }
     }
 
     private sealed class RecordingChatSessionService : IChatSessionService
