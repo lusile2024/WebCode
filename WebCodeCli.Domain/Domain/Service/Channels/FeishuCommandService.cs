@@ -238,23 +238,8 @@ public class FeishuCommandService
     {
         return toolId switch
         {
-            "claude-code" => new[]
-            {
-                BuildToolBuiltIn(toolId, "history", "/history", "查看当前 CLI 会话的最近历史消息"),
-                BuildToolBuiltIn(toolId, "init", "/init", "初始化当前项目的上下文与约定"),
-                BuildToolBuiltIn(toolId, "clear", "/clear", "清空当前会话上下文"),
-                BuildToolBuiltIn(toolId, "compact", "/compact", "压缩当前会话上下文，减少 token 占用")
-            },
-            "codex" => new[]
-            {
-                BuildToolBuiltIn(toolId, "history", "/history", "查看当前 CLI 会话的最近历史消息"),
-                BuildToolBuiltIn(toolId, "init", "/init", "初始化当前项目的上下文与约定"),
-                BuildToolBuiltIn(toolId, "help", "/help", "显示 Codex 交互命令帮助"),
-                BuildToolBuiltIn(toolId, "status", "/status", "查看当前会话状态和工作区信息"),
-                BuildToolBuiltIn(toolId, "approvals", "/approvals", "查看或调整当前审批策略"),
-                BuildToolBuiltIn(toolId, "model", "/model", "查看或切换当前模型"),
-                BuildToolBuiltIn(toolId, "reasoning", "/reasoning", "查看或调整推理强度")
-            },
+            "claude-code" => BuildSharedChatBuiltInCommands(toolId),
+            "codex" => BuildSharedChatBuiltInCommands(toolId),
             "opencode" => new[]
             {
                 BuildToolBuiltIn(toolId, "history", "/history", "查看当前 CLI 会话的最近历史消息"),
@@ -266,6 +251,17 @@ public class FeishuCommandService
             },
             _ => Array.Empty<FeishuCommand>()
         };
+    }
+
+    private static FeishuCommand[] BuildSharedChatBuiltInCommands(string toolId)
+    {
+        return
+        [
+            BuildToolBuiltIn(toolId, "history", "/history", "查看当前 CLI 会话的最近历史消息"),
+            BuildToolBuiltIn(toolId, "init", "/init", "初始化当前项目的上下文与约定"),
+            BuildToolBuiltIn(toolId, "clear", "/clear", "清空当前会话上下文"),
+            BuildToolBuiltIn(toolId, "compact", "/compact", "压缩当前会话上下文，减少 token 占用")
+        ];
     }
 
     private static FeishuCommand BuildToolBuiltIn(string toolId, string id, string name, string description)

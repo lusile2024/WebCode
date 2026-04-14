@@ -379,6 +379,7 @@ public class FeishuCardActionService
                 // 获取或创建会话
                 var toolId = ResolveToolIdForChat(chatId);
                 var sessionId = GetOrCreateSession(chatId, toolId);
+                var cliPrompt = commandInput;
 
                 // 添加用户消息到会话
                 _chatSessionService.AddMessage(sessionId, new Domain.Model.ChatMessage
@@ -402,7 +403,7 @@ public class FeishuCardActionService
                     handle.CardId);
 
                 // 执行 CLI 工具并流式更新卡片
-                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, commandInput, chatId, effectiveOptions.ThinkingMessage);
+                await ExecuteCliAndStreamAsync(handle, sessionId, toolId, cliPrompt, chatId, effectiveOptions.ThinkingMessage);
             }
             catch (Exception ex)
             {
@@ -934,27 +935,21 @@ public class FeishuCardActionService
                 builder.AppendLine($"[{roleLabel}]");
             }
 
-            builder.AppendLine(TrimHistoryContent(message.Content, 1200));
+            builder.AppendLine(NormalizeHistoryContent(message.Content));
             builder.AppendLine();
         }
 
         return builder.ToString().TrimEnd();
     }
 
-    private static string TrimHistoryContent(string? content, int maxLength)
+    private static string NormalizeHistoryContent(string? content)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
             return string.Empty;
         }
 
-        var normalized = content.Replace("\r\n", "\n").Trim();
-        if (normalized.Length <= maxLength)
-        {
-            return normalized;
-        }
-
-        return normalized[..maxLength] + "\n...";
+        return content.Replace("\r\n", "\n").Trim();
     }
 
     private static bool IsHistoryCommand(string? commandInput)

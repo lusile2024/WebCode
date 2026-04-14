@@ -2215,27 +2215,21 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 builder.AppendLine($"[{roleLabel}]");
             }
 
-            builder.AppendLine(TrimHistoryContent(message.Content, 1200));
+            builder.AppendLine(NormalizeHistoryContent(message.Content));
             builder.AppendLine();
         }
 
         return builder.ToString().TrimEnd();
     }
 
-    private static string TrimHistoryContent(string? content, int maxLength)
+    private static string NormalizeHistoryContent(string? content)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
             return string.Empty;
         }
 
-        var normalized = content.Replace("\r\n", "\n").Trim();
-        if (normalized.Length <= maxLength)
-        {
-            return normalized;
-        }
-
-        return normalized[..maxLength] + "\n...";
+        return content.Replace("\r\n", "\n").Trim();
     }
 
     private void QueueSaveOutputState(bool forceImmediate = false)

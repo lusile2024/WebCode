@@ -162,7 +162,7 @@ dotnet run --project WebCodeCli
 
 默认访问地址：
 
-- `http://localhost:6001`
+- `http://localhost:6021`
 
 如果你修改了根目录 [appsettings.json](./appsettings.json) 或 [WebCodeCli/appsettings.json](./WebCodeCli/appsettings.json) 中的 `urls` 配置，请以实际监听端口为准。
 

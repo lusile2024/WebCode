@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SqlSugar;
+using System.Diagnostics;
+using System.Reflection;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
@@ -184,6 +186,61 @@ public class CliExecutorServiceTests
         var failureEvent = Assert.IsType<CliOutputEvent>(outputEvent);
         Assert.True(failureEvent.IsError);
         Assert.Equal(upstreamError, failureEvent.ErrorMessage);
+    }
+
+    [Fact]
+    public void RewriteCodexLaunchToNode_WhenCommandIsCmdWrapper_RewritesToNodeJsEntry()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var npmRoot = Path.Combine(tempRoot, "npm");
+        var codexCmdPath = Path.Combine(npmRoot, "codex.cmd");
+        var codexJsPath = Path.Combine(npmRoot, "node_modules", "@openai", "codex", "bin", "codex.js");
+        var fakeNodePath = Path.Combine(tempRoot, "node.exe");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(codexJsPath)!);
+        File.WriteAllText(codexCmdPath, "@echo off");
+        File.WriteAllText(codexJsPath, "console.log('codex');");
+        File.WriteAllText(fakeNodePath, string.Empty);
+
+        try
+        {
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                    Tools = []
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory());
+
+            typeof(CliExecutorService)
+                .GetField("_preferredNodeExecutablePath", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(service, fakeNodePath);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = codexCmdPath,
+                Arguments = "exec --json \"problematic \\\"prompt\\\"\""
+            };
+
+            typeof(CliExecutorService)
+                .GetMethod("RewriteCodexLaunchToNode", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(service, [startInfo, new CliToolConfig { Id = "codex", Command = "codex" }, codexCmdPath, startInfo.Arguments]);
+
+            Assert.Equal(fakeNodePath, startInfo.FileName);
+            Assert.StartsWith($"\"{codexJsPath}\" ", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains("problematic \\\"prompt\\\"", startInfo.Arguments, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
     }
 
     private sealed class StubChatSessionService : IChatSessionService

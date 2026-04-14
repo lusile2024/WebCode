@@ -8,6 +8,7 @@ using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
+using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Domain.Service.Channels;
 using WebCodeCli.Domain.Repositories.Base;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
@@ -25,6 +26,7 @@ public class FeishuChannelServiceTests
         var serviceProvider = new TestServiceProvider(
             repository,
             sessionDirectoryService,
+            new StubFeishuUserBindingService(),
             new StubUserFeishuBotConfigService(),
             new StubUserContextService());
 
@@ -93,6 +95,150 @@ public class FeishuChannelServiceTests
         Assert.Equal(1, cardKit.ReplyTextCallCount);
     }
 
+    [Fact]
+    public async Task HandleIncomingMessageAsync_SupersedesPreviousExecutionAndReusesCliThreadId()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspacePath = Path.Combine(Path.GetTempPath(), $"feishu-takeover-session-{Guid.NewGuid():N}", "superpowers");
+        var cliExecutor = new TakeoverCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        Directory.CreateDirectory(workspacePath);
+
+        try
+        {
+            var sessionId = service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_takeover_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            var firstTask = service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_takeover_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-1",
+                Content = "先查一下 superpowers 计划文件"
+            });
+
+            await cliExecutor.ThreadIdPersisted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var secondTask = service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_takeover_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-2",
+                Content = "补充：D:\\MMIS\\Base\\Docs\\superpowers"
+            });
+
+            await Task.WhenAll(firstTask, secondTask);
+
+            Assert.Collection(cliExecutor.ExecuteCalls,
+                firstCall => Assert.Null(firstCall.ThreadIdAtStart),
+                secondCall => Assert.Equal("thread-1", secondCall.ThreadIdAtStart));
+
+            Assert.Equal("thread-1", cliExecutor.GetCliThreadId(sessionId));
+            Assert.Null(cardKit.Handles[0].ReplyMessageId);
+            Assert.Equal("superpowers 回复 luhaiyan:\n当前回复已停止：同一会话收到了新的补充消息，请查看新卡片继续结果。", cardKit.Handles[0].FinalContent);
+            Assert.Equal("superpowers 回复 luhaiyan:\n补充完成", cardKit.Handles[1].FinalContent);
+            Assert.Equal(0, cardKit.ReplyTextCallCount);
+            Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "user" && message.Content.Contains("补充：D:\\MMIS\\Base\\Docs\\superpowers", StringComparison.Ordinal));
+            Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "assistant" && message.Content == "补充完成");
+        }
+        finally
+        {
+            Directory.Delete(workspacePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_ForwardsRawPromptWithoutReplyPrefixInstructions()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-reply-prefix-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_reply_prefix_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_reply_prefix_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-prefix",
+                Content = @"D:\MMIS\Base\Docs\superpowers"
+            });
+
+            var call = Assert.Single(cliExecutor.ExecuteCalls);
+            Assert.Equal(@"D:\MMIS\Base\Docs\superpowers", call.Prompt);
+            var handle = Assert.Single(cardKit.Handles);
+            Assert.Null(handle.ReplyMessageId);
+            Assert.Equal("superpowers 回复 luhaiyan:\n思考中...", handle.InitialContent);
+            Assert.Equal("superpowers 回复 luhaiyan:\n补充完成", handle.FinalContent);
+            Assert.Equal(0, cardKit.ReplyTextCallCount);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
     private static FeishuChannelService CreateService(IFeishuCardKitClient? cardKit = null)
     {
         var repository = CreateRepository(out _);
@@ -100,6 +246,7 @@ public class FeishuChannelServiceTests
         var serviceProvider = new TestServiceProvider(
             repository,
             sessionDirectoryService,
+            new StubFeishuUserBindingService(),
             new StubUserFeishuBotConfigService(),
             new StubUserContextService());
 
@@ -132,6 +279,7 @@ public class FeishuChannelServiceTests
     private sealed class TestServiceProvider(
         IChatSessionRepository chatSessionRepository,
         ISessionDirectoryService sessionDirectoryService,
+        IFeishuUserBindingService feishuUserBindingService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
         IUserContextService userContextService) : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
@@ -150,6 +298,11 @@ public class FeishuChannelServiceTests
             if (serviceType == typeof(ISessionDirectoryService))
             {
                 return sessionDirectoryService;
+            }
+
+            if (serviceType == typeof(IFeishuUserBindingService))
+            {
+                return feishuUserBindingService;
             }
 
             if (serviceType == typeof(IUserFeishuBotConfigService))
@@ -185,6 +338,24 @@ public class FeishuChannelServiceTests
         public void SetCurrentUsername(string username)
         {
         }
+    }
+
+    private sealed class StubFeishuUserBindingService : IFeishuUserBindingService
+    {
+        public Task<string?> GetBoundWebUsernameAsync(string feishuUserId) => Task.FromResult<string?>(null);
+
+        public Task<bool> IsBoundAsync(string feishuUserId) => Task.FromResult(true);
+
+        public Task<(bool Success, string? ErrorMessage, string? WebUsername)> BindAsync(string feishuUserId, string webUsername, string? appId = null)
+            => Task.FromResult<(bool Success, string? ErrorMessage, string? WebUsername)>((true, null, webUsername));
+
+        public Task<bool> UnbindAsync(string feishuUserId) => Task.FromResult(true);
+
+        public Task<List<string>> GetBindableWebUsernamesAsync(string? appId = null)
+            => Task.FromResult(new List<string> { "luhaiyan" });
+
+        public Task<HashSet<string>> GetAllBoundWebUsernamesAsync()
+            => Task.FromResult(new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "luhaiyan" });
     }
 
     private sealed class StubUserFeishuBotConfigService : IUserFeishuBotConfigService
@@ -287,6 +458,401 @@ public class FeishuChannelServiceTests
             => throw new NotSupportedException();
     }
 
+    private sealed class StreamingRecordingFeishuCardKitClient : IFeishuCardKitClient
+    {
+        public List<StreamingHandleRecord> Handles { get; } = new();
+
+        public int ReplyTextCallCount { get; private set; }
+
+        public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => Task.FromResult($"card-{Handles.Count + 1}");
+
+        public Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => Task.FromResult(true);
+
+        public Task<string> SendCardMessageAsync(string chatId, string cardId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => Task.FromResult($"message-{cardId}");
+
+        public Task<string> SendTextMessageAsync(string chatId, string content, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => Task.FromResult("message-text");
+
+        public Task<string> ReplyCardMessageAsync(string replyMessageId, string cardId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => Task.FromResult($"reply-{cardId}");
+
+        public Task<string> ReplyTextMessageAsync(string replyMessageId, string content, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            ReplyTextCallCount++;
+            return Task.FromResult($"reply-text-{ReplyTextCallCount}");
+        }
+
+        public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            var record = new StreamingHandleRecord
+            {
+                CardId = $"card-{Handles.Count + 1}",
+                MessageId = $"message-{Handles.Count + 1}",
+                ReplyMessageId = replyMessageId,
+                InitialContent = initialContent
+            };
+            Handles.Add(record);
+
+            return Task.FromResult(new FeishuStreamingHandle(
+                record.CardId,
+                record.MessageId,
+                content =>
+                {
+                    record.Updates.Add(content);
+                    return Task.CompletedTask;
+                },
+                content =>
+                {
+                    record.FinalContent = content;
+                    return Task.CompletedTask;
+                },
+                throttleMs: 0));
+        }
+
+        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+
+        public Task<string> ReplyElementsCardAsync(string replyMessageId, FeishuNetSdk.Im.Dtos.ElementsCardV2Dto card, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+
+        public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class StreamingHandleRecord
+    {
+        public string CardId { get; set; } = string.Empty;
+
+        public string MessageId { get; set; } = string.Empty;
+
+        public string? ReplyMessageId { get; set; }
+
+        public string InitialContent { get; set; } = string.Empty;
+
+        public List<string> Updates { get; } = new();
+
+        public string? FinalContent { get; set; }
+    }
+
+    private sealed class RecordingChatSessionService : IChatSessionService
+    {
+        public Dictionary<string, List<ChatMessage>> Messages { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public void AddMessage(string sessionId, ChatMessage message)
+        {
+            if (!Messages.TryGetValue(sessionId, out var sessionMessages))
+            {
+                sessionMessages = new List<ChatMessage>();
+                Messages[sessionId] = sessionMessages;
+            }
+
+            sessionMessages.Add(message);
+        }
+
+        public List<ChatMessage> GetMessages(string sessionId)
+            => Messages.TryGetValue(sessionId, out var sessionMessages)
+                ? new List<ChatMessage>(sessionMessages)
+                : new List<ChatMessage>();
+
+        public void ClearSession(string sessionId)
+        {
+            Messages.Remove(sessionId);
+        }
+
+        public void UpdateMessage(string sessionId, string messageId, Action<ChatMessage> updateAction)
+        {
+            var message = GetMessage(sessionId, messageId);
+            if (message != null)
+            {
+                updateAction(message);
+            }
+        }
+
+        public ChatMessage? GetMessage(string sessionId, string messageId)
+        {
+            return null;
+        }
+    }
+
+    private sealed class TakeoverCliExecutor(string workspacePath) : ICliExecutorService
+    {
+        private readonly Dictionary<string, string> _cliThreadIds = new(StringComparer.OrdinalIgnoreCase);
+        private int _callCount;
+
+        public TaskCompletionSource<bool> ThreadIdPersisted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<ExecutionCall> ExecuteCalls { get; } = new();
+
+        public bool BlockFirstCall { get; set; } = true;
+
+        public ICliToolAdapter? GetAdapter(CliToolConfig tool) => new CodexAdapter();
+
+        public ICliToolAdapter? GetAdapterById(string toolId) => new CodexAdapter();
+
+        public bool SupportsStreamParsing(CliToolConfig tool) => true;
+
+        public string? GetCliThreadId(string sessionId)
+        {
+            return _cliThreadIds.TryGetValue(sessionId, out var threadId) ? threadId : null;
+        }
+
+        public void SetCliThreadId(string sessionId, string threadId)
+        {
+            _cliThreadIds[sessionId] = threadId;
+            if (string.Equals(threadId, "thread-1", StringComparison.Ordinal))
+            {
+                ThreadIdPersisted.TrySetResult(true);
+            }
+        }
+
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
+            string sessionId,
+            string toolId,
+            string userPrompt,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var callNumber = Interlocked.Increment(ref _callCount);
+            ExecuteCalls.Add(new ExecutionCall
+            {
+                SessionId = sessionId,
+                ToolId = toolId,
+                Prompt = userPrompt,
+                ThreadIdAtStart = GetCliThreadId(sessionId)
+            });
+
+            if (callNumber == 1 && BlockFirstCall)
+            {
+                yield return new StreamOutputChunk
+                {
+                    Content = "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n",
+                    IsCompleted = false
+                };
+
+                var wasCancelled = false;
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    wasCancelled = true;
+                }
+
+                if (wasCancelled)
+                {
+                    yield return new StreamOutputChunk
+                    {
+                        IsError = true,
+                        IsCompleted = true,
+                        ErrorMessage = "执行已取消"
+                    };
+                    yield break;
+                }
+            }
+
+            yield return new StreamOutputChunk
+            {
+                Content = "补充完成\n",
+                IsCompleted = false
+            };
+
+            yield return new StreamOutputChunk
+            {
+                Content = string.Empty,
+                IsCompleted = true
+            };
+        }
+
+        public List<CliToolConfig> GetAvailableTools(string? username = null)
+            => new() { GetTool("codex", username)! };
+
+        public CliToolConfig? GetTool(string toolId, string? username = null)
+            => string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase)
+                ? new CliToolConfig
+                {
+                    Id = "codex",
+                    Name = "Codex",
+                    Description = "Codex",
+                    Command = "codex",
+                    Enabled = true
+                }
+                : null;
+
+        public bool ValidateTool(string toolId, string? username = null) => true;
+
+        public void CleanupSessionWorkspace(string sessionId)
+        {
+        }
+
+        public void CleanupExpiredWorkspaces()
+        {
+        }
+
+        public string GetSessionWorkspacePath(string sessionId) => workspacePath;
+
+        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
+            => Task.FromResult(new Dictionary<string, string>());
+
+        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
+            => Task.FromResult(true);
+
+        public byte[]? GetWorkspaceFile(string sessionId, string relativePath) => null;
+
+        public byte[]? GetWorkspaceZip(string sessionId) => null;
+
+        public Task<bool> UploadFileToWorkspaceAsync(string sessionId, string fileName, byte[] fileContent, string? relativePath = null)
+            => Task.FromResult(true);
+
+        public Task<bool> CreateFolderInWorkspaceAsync(string sessionId, string folderPath)
+            => Task.FromResult(true);
+
+        public Task<bool> DeleteWorkspaceItemAsync(string sessionId, string relativePath, bool isDirectory)
+            => Task.FromResult(true);
+
+        public Task<bool> MoveFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath)
+            => Task.FromResult(true);
+
+        public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath)
+            => Task.FromResult(true);
+
+        public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName)
+            => Task.FromResult(true);
+
+        public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths)
+            => Task.FromResult(0);
+
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false)
+            => Task.FromResult(Path.Combine(Path.GetTempPath(), sessionId));
+
+        public void RefreshWorkspaceRootCache()
+        {
+        }
+    }
+
+    private sealed class PromptCapturingCliExecutor(string workspacePath) : ICliExecutorService
+    {
+        public List<ExecutionCall> ExecuteCalls { get; } = new();
+
+        public ICliToolAdapter? GetAdapter(CliToolConfig tool) => null;
+
+        public ICliToolAdapter? GetAdapterById(string toolId) => null;
+
+        public bool SupportsStreamParsing(CliToolConfig tool) => false;
+
+        public string? GetCliThreadId(string sessionId) => null;
+
+        public void SetCliThreadId(string sessionId, string threadId)
+        {
+        }
+
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
+            string sessionId,
+            string toolId,
+            string userPrompt,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            ExecuteCalls.Add(new ExecutionCall
+            {
+                SessionId = sessionId,
+                ToolId = toolId,
+                Prompt = userPrompt
+            });
+
+            yield return new StreamOutputChunk
+            {
+                Content = "补充完成\n",
+                IsCompleted = false
+            };
+
+            yield return new StreamOutputChunk
+            {
+                Content = string.Empty,
+                IsCompleted = true
+            };
+
+            await Task.CompletedTask;
+        }
+
+        public List<CliToolConfig> GetAvailableTools(string? username = null)
+            => new() { GetTool("codex", username)! };
+
+        public CliToolConfig? GetTool(string toolId, string? username = null)
+            => string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase)
+                ? new CliToolConfig
+                {
+                    Id = "codex",
+                    Name = "Codex",
+                    Description = "Codex",
+                    Command = "codex",
+                    Enabled = true
+                }
+                : null;
+
+        public bool ValidateTool(string toolId, string? username = null) => true;
+
+        public void CleanupSessionWorkspace(string sessionId)
+        {
+        }
+
+        public void CleanupExpiredWorkspaces()
+        {
+        }
+
+        public string GetSessionWorkspacePath(string sessionId) => workspacePath;
+
+        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
+            => Task.FromResult(new Dictionary<string, string>());
+
+        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
+            => Task.FromResult(true);
+
+        public byte[]? GetWorkspaceFile(string sessionId, string relativePath) => null;
+
+        public byte[]? GetWorkspaceZip(string sessionId) => null;
+
+        public Task<bool> UploadFileToWorkspaceAsync(string sessionId, string fileName, byte[] fileContent, string? relativePath = null)
+            => Task.FromResult(true);
+
+        public Task<bool> CreateFolderInWorkspaceAsync(string sessionId, string folderPath)
+            => Task.FromResult(true);
+
+        public Task<bool> DeleteWorkspaceItemAsync(string sessionId, string relativePath, bool isDirectory)
+            => Task.FromResult(true);
+
+        public Task<bool> MoveFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath)
+            => Task.FromResult(true);
+
+        public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath)
+            => Task.FromResult(true);
+
+        public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName)
+            => Task.FromResult(true);
+
+        public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths)
+            => Task.FromResult(0);
+
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false)
+            => Task.FromResult(workspacePath);
+
+        public void RefreshWorkspaceRootCache()
+        {
+        }
+    }
+
+    private sealed class ExecutionCall
+    {
+        public string SessionId { get; set; } = string.Empty;
+
+        public string ToolId { get; set; } = string.Empty;
+
+        public string Prompt { get; set; } = string.Empty;
+
+        public string? ThreadIdAtStart { get; set; }
+    }
+
     private sealed class RecordingSessionDirectoryService(ChatSessionRepositoryProxy repository) : ISessionDirectoryService
     {
         public Task SetSessionWorkspaceAsync(string sessionId, string username, string directoryPath, bool isCustom = true)
@@ -366,6 +932,50 @@ public class FeishuChannelServiceTests
                     var session = Clone((ChatSessionEntity)args![0]!);
                     _sessions[session.SessionId] = session;
                     return Task.FromResult(true);
+                }
+                case nameof(IChatSessionRepository.GetByIdAndUsernameAsync):
+                {
+                    var sessionId = args![0]?.ToString() ?? string.Empty;
+                    var username = args[1]?.ToString() ?? string.Empty;
+                    var session = _sessions.TryGetValue(sessionId, out var stored) &&
+                                  string.Equals(stored.Username, username, StringComparison.OrdinalIgnoreCase)
+                        ? Clone(stored)
+                        : null;
+                    return Task.FromResult(session);
+                }
+                case nameof(IChatSessionRepository.GetByUsernameOrderByUpdatedAtAsync):
+                {
+                    var username = args![0]?.ToString() ?? string.Empty;
+                    var sessions = _sessions.Values
+                        .Where(session => string.Equals(session.Username, username, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(session => session.UpdatedAt)
+                        .Select(Clone)
+                        .ToList();
+                    return Task.FromResult(sessions);
+                }
+                case nameof(IChatSessionRepository.GetByFeishuChatKeyAsync):
+                {
+                    var chatKey = args![0]?.ToString() ?? string.Empty;
+                    var sessions = _sessions.Values
+                        .Where(session => string.Equals(session.FeishuChatKey, chatKey, StringComparison.OrdinalIgnoreCase))
+                        .Select(Clone)
+                        .ToList();
+                    return Task.FromResult(sessions);
+                }
+                case nameof(IRepository<ChatSessionEntity>.GetListAsync):
+                {
+                    if (args == null || args.Length == 0 || args[0] == null)
+                    {
+                        return Task.FromResult(_sessions.Values.Select(Clone).ToList());
+                    }
+
+                    var predicate = (Expression<Func<ChatSessionEntity, bool>>)args[0]!;
+                    var compiled = predicate.Compile();
+                    var sessions = _sessions.Values
+                        .Where(compiled)
+                        .Select(Clone)
+                        .ToList();
+                    return Task.FromResult(sessions);
                 }
             }
 

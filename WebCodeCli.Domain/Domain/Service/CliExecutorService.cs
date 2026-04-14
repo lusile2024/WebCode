@@ -550,6 +550,8 @@ public class CliExecutorService : ICliExecutorService
 
         if (cancelled)
         {
+            _processManager.CleanupSessionProcesses(sessionId);
+
             yield return new StreamOutputChunk
             {
                 IsError = true,
@@ -791,6 +793,7 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
+        RewriteCodexLaunchToNode(startInfo, tool, commandPath, arguments);
         RewriteClaudeLaunchToNode(startInfo, tool, commandPath, arguments);
         EnsurePreferredNodeForClaude(startInfo, tool, commandPath);
 
@@ -937,6 +940,17 @@ public class CliExecutorService : ICliExecutorService
             else
             {
                 processCancelled = true;
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "取消执行时终止进程失败");
+                }
             }
         }
 
@@ -2096,6 +2110,51 @@ public class CliExecutorService : ICliExecutorService
         _logger.LogInformation("Claude Code 改为直接使用 Node.js 启动: {NodePath}", preferredNodePath);
     }
 
+    private void RewriteCodexLaunchToNode(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath, string originalArguments)
+    {
+        var isWindows = OperatingSystem.IsWindows();
+        var isCodexTool = IsCodexTool(tool, commandPath);
+        _logger.LogInformation("Codex 启动重写检查: IsWindows={IsWindows}, IsCodexTool={IsCodexTool}, CommandPath={CommandPath}", isWindows, isCodexTool, commandPath);
+
+        if (!isWindows || !isCodexTool)
+        {
+            return;
+        }
+
+        var extension = Path.GetExtension(commandPath);
+        if (!string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("Codex 启动重写跳过：命令不是 .cmd，Extension={Extension}", extension);
+            return;
+        }
+
+        var commandDirectory = Path.GetDirectoryName(commandPath);
+        if (string.IsNullOrWhiteSpace(commandDirectory))
+        {
+            _logger.LogWarning("Codex 启动重写跳过：无法获取命令目录，CommandPath={CommandPath}", commandPath);
+            return;
+        }
+
+        var cliJsPath = Path.Combine(commandDirectory, "node_modules", "@openai", "codex", "bin", "codex.js");
+        _logger.LogInformation("Codex 启动重写检查 codex.js 路径: {CliJsPath}, Exists={Exists}", cliJsPath, File.Exists(cliJsPath));
+        if (!File.Exists(cliJsPath))
+        {
+            return;
+        }
+
+        var preferredNodePath = GetPreferredNodeExecutablePath();
+        _logger.LogInformation("Codex 启动重写检查 Node.js 路径: {NodePath}", preferredNodePath ?? "<null>");
+        if (string.IsNullOrWhiteSpace(preferredNodePath) || !File.Exists(preferredNodePath))
+        {
+            _logger.LogWarning("Codex 启动重写跳过：未找到可用的 Node.js");
+            return;
+        }
+
+        startInfo.FileName = preferredNodePath;
+        startInfo.Arguments = $"\"{cliJsPath}\" {originalArguments}";
+        _logger.LogInformation("Codex 改为直接使用 Node.js 启动: {NodePath}", preferredNodePath);
+    }
+
     private void EnsurePreferredNodeForClaude(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath)
     {
         if (!OperatingSystem.IsWindows() || !IsClaudeTool(tool, commandPath))
@@ -2183,6 +2242,13 @@ public class CliExecutorService : ICliExecutorService
         return string.Equals(tool.Id, "claude-code", StringComparison.OrdinalIgnoreCase)
             || string.Equals(tool.Id, "claude", StringComparison.OrdinalIgnoreCase)
             || string.Equals(fileName, "claude", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCodexTool(CliToolConfig tool, string commandPath)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(commandPath);
+        return string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "codex", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

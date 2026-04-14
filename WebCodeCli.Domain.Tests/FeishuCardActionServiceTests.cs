@@ -39,6 +39,41 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_ForwardsRawPromptWithoutReplyPrefixInstructions()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-acp";
+
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-card-prefix-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+
+        try
+        {
+            var cliExecutor = new RecordingCliExecutorService();
+            cliExecutor.SetSessionWorkspacePath(activeSessionId, workspacePath);
+
+            var feishuChannel = new StubFeishuChannelService(activeSessionId);
+            var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+
+            await service.HandleCardActionAsync(
+                """{"action":"execute_command"}""",
+                chatId: chatId,
+                operatorUserId: "ou_test_user",
+                inputValues: @"D:\MMIS\Base\Docs\superpowers");
+
+            await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+            var prompt = Assert.Single(cliExecutor.ExecutedPrompts);
+            Assert.Equal(@"D:\MMIS\Base\Docs\superpowers", prompt);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_WithoutActiveSession_ReturnsCreateSessionForm()
     {
         const string chatId = "oc_current_chat";
@@ -109,6 +144,57 @@ public class FeishuCardActionServiceTests
         Assert.Equal("codex-thread-1", historyService.LastCliThreadId);
         Assert.Contains("你好", sent.Content);
         Assert.Contains("世界", sent.Content);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_HistoryCommand_PreservesAssistantTailWhenMessageIsLong()
+    {
+        const string chatId = "oc_current_chat";
+        const string sessionId = "session-history-long";
+        const string tailContent = "如果你要，我下一步可以直接帮你继续联调。";
+        var longAssistantContent = new string('前', 1500) + "\n" + new string('中', 900) + "\n" + tailContent;
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(sessionId);
+        var historyService = new StubExternalCliSessionHistoryService(
+        [
+            new ExternalCliHistoryMessage { Role = "assistant", Content = longAssistantContent }
+        ]);
+
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                CliThreadId = "codex-thread-long",
+                WorkspacePath = @"D:\repo",
+                FeishuChatKey = chatId,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(
+                chatSessionRepository: sessionRepository,
+                externalCliSessionHistoryService: historyService));
+
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "/history");
+
+        var sent = await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.False(cliExecutor.WasExecuted);
+        Assert.Contains(longAssistantContent, sent.Content);
+        Assert.Contains(tailContent, sent.Content);
     }
 
     [Fact]
@@ -890,6 +976,8 @@ public class FeishuCardActionServiceTests
 
         public bool WasExecuted { get; private set; }
 
+        public List<string> ExecutedPrompts { get; } = new();
+
         public void SetSessionWorkspacePath(string sessionId, string workspacePath)
         {
             _workspacePaths[sessionId] = workspacePath;
@@ -919,6 +1007,7 @@ public class FeishuCardActionServiceTests
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             WasExecuted = true;
+            ExecutedPrompts.Add(userPrompt);
             _executionStarted.TrySetResult(sessionId);
             yield return new StreamOutputChunk
             {
