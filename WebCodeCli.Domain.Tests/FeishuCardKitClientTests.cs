@@ -4,6 +4,7 @@ using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Options;
+using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service.Channels;
 
 namespace WebCodeCli.Domain.Tests;
@@ -150,6 +151,49 @@ public class FeishuCardKitClientTests
         using var replyDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("content").GetString()!);
         Assert.Equal("card", replyDoc.RootElement.GetProperty("type").GetString());
         Assert.Equal("card_123", replyDoc.RootElement.GetProperty("data").GetProperty("card_id").GetString());
+    }
+
+    [Fact]
+    public async Task FeishuStreamingHandle_FinishAsync_WaitsForInflightUpdate_AndBlocksLaterUpdates()
+    {
+        var updateEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseUpdate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operations = new List<string>();
+
+        var handle = new FeishuStreamingHandle(
+            "card-1",
+            "message-1",
+            async (content, sequence) =>
+            {
+                operations.Add($"update:{sequence}:{content}");
+                updateEntered.TrySetResult();
+                await releaseUpdate.Task;
+            },
+            (content, sequence) =>
+            {
+                operations.Add($"finish:{sequence}:{content}");
+                return Task.CompletedTask;
+            },
+            throttleMs: 0);
+
+        var inflightUpdate = handle.UpdateAsync("streaming");
+        await updateEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var finishTask = handle.FinishAsync("final");
+        Assert.False(finishTask.IsCompleted);
+
+        releaseUpdate.TrySetResult();
+
+        await inflightUpdate;
+        await finishTask;
+        await handle.UpdateAsync("late");
+
+        Assert.Equal(
+            [
+                "update:1:streaming",
+                "finish:2:final"
+            ],
+            operations);
     }
 
     private static FeishuCardKitClient CreateClient(StubHttpMessageHandler handler)

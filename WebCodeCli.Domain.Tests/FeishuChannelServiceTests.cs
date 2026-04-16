@@ -610,7 +610,7 @@ public class FeishuChannelServiceTests
             return Task.FromResult(new FeishuStreamingHandle(
                 record.CardId,
                 record.MessageId,
-                content =>
+                (content, _) =>
                 {
                     record.Updates.Add(content);
                     if (!string.IsNullOrWhiteSpace(chrome?.StatusMarkdown))
@@ -619,7 +619,7 @@ public class FeishuChannelServiceTests
                     }
                     return Task.CompletedTask;
                 },
-                content =>
+                (content, _) =>
                 {
                     record.FinalContent = content;
                     record.FinalStatusMarkdown = chrome?.StatusMarkdown;

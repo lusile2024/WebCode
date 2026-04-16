@@ -1238,8 +1238,8 @@ public class FeishuCardActionServiceTests
             return Task.FromResult(new FeishuStreamingHandle(
                 "card-1",
                 "message-1",
-                _ => Task.CompletedTask,
-                _ => Task.CompletedTask,
+                (_, _) => Task.CompletedTask,
+                (_, _) => Task.CompletedTask,
                 throttleMs: 0));
         }
 

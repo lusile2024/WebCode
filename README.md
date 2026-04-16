@@ -142,7 +142,33 @@ docker compose up -d
 - [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
 - [docs/Docker-CLI-集成部署指南.md](./docs/Docker-CLI-集成部署指南.md)
 
-### 方式二：本地开发运行
+### 方式二：Windows Release 包
+
+适合直接在 Windows 机器上运行 WebCode，不需要预装 `.NET SDK`。
+
+下载入口：
+
+- [GitHub Releases](https://github.com/lusile2024/WebCode/releases/latest)
+
+当前 Windows 发布包会附带这些资产：
+
+- `WebCode-Setup-vX.Y.Z-win-x64.exe`：安装版，默认安装到 `%LOCALAPPDATA%\Programs\WebCode`
+- `WebCode-vX.Y.Z-win-x64-portable.zip`：免安装便携版，解压后可直接运行
+- `SHA256SUMS.txt`：安装包和 ZIP 的校验值
+
+安装版和便携版都已经内置 `win-x64` 自包含运行时，默认首次启动后访问：
+
+- `http://localhost:6021`
+
+Windows 包默认会在程序目录下准备这些运行目录：
+
+- `data/`
+- `logs/`
+- `workspaces/`
+
+安装版升级时会保留已有的 `appsettings.json`，适合在同一台机器上持续升级。
+
+### 方式三：本地开发运行
 
 适合调试、二次开发和本地联调。
 
@@ -165,6 +191,30 @@ dotnet run --project WebCodeCli
 - `http://localhost:6021`
 
 如果你修改了根目录 [appsettings.json](./appsettings.json) 或 [WebCodeCli/appsettings.json](./WebCodeCli/appsettings.json) 中的 `urls` 配置，请以实际监听端口为准。
+
+## Windows 发布维护
+
+仓库已经内置 Windows 安装包构建脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
+```
+
+脚本会读取 [Directory.Build.props](./Directory.Build.props) 里的版本号，并在 `artifacts/windows-installer/vX.Y.Z/` 下生成：
+
+- `publish/`：`dotnet publish` 的完整输出
+- `WebCode-vX.Y.Z-win-x64-portable.zip`：便携版压缩包
+- `installer/WebCode-Setup-vX.Y.Z-win-x64.exe`：Inno Setup 安装包
+- `SHA256SUMS.txt`：SHA-256 校验文件
+- `RELEASE_NOTES.md`：随 release 一起上传的说明文件
+
+构建机需要满足：
+
+- Windows
+- `.NET 10 SDK`
+- `Inno Setup 6`
+
+构建完成后，可直接把上述资产上传到 GitHub Release。
 
 ## 首次初始化建议
 

@@ -351,6 +351,20 @@ public class CliExecutorService : ICliExecutorService
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var sessionWorkspace = GetOrCreateSessionWorkspace(sessionId);
+        var workingDirectory = !string.IsNullOrWhiteSpace(tool.WorkingDirectory)
+            ? tool.WorkingDirectory
+            : sessionWorkspace;
+        var workingDirectoryError = GetWorkingDirectoryValidationError(workingDirectory, sessionId);
+        if (workingDirectoryError != null)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = workingDirectoryError
+            };
+            yield break;
+        }
         
         // 解析命令路径
         var resolvedCommand = ResolveCommandPath(tool.Command);
@@ -748,6 +762,19 @@ public class CliExecutorService : ICliExecutorService
         {
             // 使用会话专属的工作目录
             startInfo.WorkingDirectory = sessionWorkspace;
+        }
+
+        var workingDirectoryError = GetWorkingDirectoryValidationError(startInfo.WorkingDirectory, sessionId);
+        if (workingDirectoryError != null)
+        {
+            _logger.LogWarning("启动 CLI 进程前发现无效工作目录: {WorkingDirectory}", startInfo.WorkingDirectory);
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = workingDirectoryError
+            };
+            yield break;
         }
 
         // 设置环境变量
@@ -1231,7 +1258,13 @@ public class CliExecutorService : ICliExecutorService
         {
             if (_sessionWorkspaces.TryGetValue(sessionId, out var existingWorkspace))
             {
-                return existingWorkspace;
+                if (Directory.Exists(existingWorkspace))
+                {
+                    return existingWorkspace;
+                }
+
+                _logger.LogWarning("缓存中的会话工作目录已不存在，将重新解析: {SessionId}, {Workspace}", sessionId, existingWorkspace);
+                _sessionWorkspaces.Remove(sessionId);
             }
 
             // 优先使用数据库中已绑定的工作目录（适用于：自定义目录 / 外部会话导入 / 进程重启后恢复）
@@ -1876,8 +1909,94 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
+        var resolvedFromPath = ResolveCommandFromPathEnvironment(command);
+        if (!string.IsNullOrWhiteSpace(resolvedFromPath))
+        {
+            _logger.LogDebug("将系统PATH中的命令 {Command} 解析为完整路径: {FullPath}", command, resolvedFromPath);
+            return resolvedFromPath;
+        }
+
         // 否则返回原始命令(假设是系统PATH中的命令)
         return command;
+    }
+
+    private string? ResolveCommandFromPathEnvironment(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command) ||
+            command.Contains(Path.DirectorySeparatorChar) ||
+            command.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return null;
+        }
+
+        var pathValue = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathValue))
+        {
+            return null;
+        }
+
+        foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var normalizedDirectory = directory.Trim().Trim('"');
+            if (string.IsNullOrWhiteSpace(normalizedDirectory) || !Directory.Exists(normalizedDirectory))
+            {
+                continue;
+            }
+
+            foreach (var candidate in GetPathResolutionCandidates(normalizedDirectory, command))
+            {
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private IEnumerable<string> GetPathResolutionCandidates(string directory, string command)
+    {
+        if (Path.HasExtension(command))
+        {
+            yield return Path.Combine(directory, command);
+            yield break;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            yield return Path.Combine(directory, command);
+            yield break;
+        }
+
+        var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+        var extensions = string.IsNullOrWhiteSpace(pathExt)
+            ? [".COM", ".EXE", ".BAT", ".CMD"]
+            : pathExt.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var extension in extensions)
+        {
+            var normalizedExtension = extension.StartsWith(".", StringComparison.Ordinal)
+                ? extension
+                : "." + extension;
+
+            yield return Path.Combine(directory, command + normalizedExtension);
+        }
+    }
+
+    private string? GetWorkingDirectoryValidationError(string? workingDirectory, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return "工作目录为空，无法启动 CLI 进程。";
+        }
+
+        if (Directory.Exists(workingDirectory))
+        {
+            return null;
+        }
+
+        return $"会话 {sessionId} 的工作目录不存在: {workingDirectory}。请确认目录存在，或重新创建会话。";
     }
 
     /// <summary>

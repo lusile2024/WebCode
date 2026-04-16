@@ -240,8 +240,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return new FeishuStreamingHandle(
             cardId,
             messageId,
-            content => UpdateCardCoreAsync(cardId, content, Sequence, cardTitle, cancellationToken, effectiveOptions, chrome),
-            content => UpdateCardCoreAsync(cardId, content, Sequence + 1, cardTitle, cancellationToken, effectiveOptions, chrome),
+            (content, sequence) => UpdateCardCoreAsync(cardId, content, sequence, cardTitle, cancellationToken, effectiveOptions, chrome),
+            (content, sequence) => UpdateCardCoreAsync(cardId, content, sequence, cardTitle, cancellationToken, effectiveOptions, chrome),
             effectiveOptions.StreamingThrottleMs
         );
     }
@@ -443,9 +443,6 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             })
             .ToArray();
     }
-
-    private int _sequence = 0;
-    private int Sequence => Interlocked.Increment(ref _sequence);
 
     private string ExtractMessageId(JsonElement result, string operationName)
     {

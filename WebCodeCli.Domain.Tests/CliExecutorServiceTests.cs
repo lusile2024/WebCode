@@ -243,6 +243,98 @@ public class CliExecutorServiceTests
         }
     }
 
+    [Fact]
+    public void ResolveCommandPath_WhenCommandExistsOnWindowsPath_ReturnsFullPath()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var pathEntry = Path.Combine(tempRoot, "bin");
+        const string commandName = "webcode-path-only-test";
+        var commandPath = Path.Combine(pathEntry, commandName + ".cmd");
+        Directory.CreateDirectory(pathEntry);
+        File.WriteAllText(commandPath, "@echo off");
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalPathExt = Environment.GetEnvironmentVariable("PATHEXT");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", pathEntry);
+            Environment.SetEnvironmentVariable("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                    Tools = []
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory());
+
+            var resolvedCommand = (string)typeof(CliExecutorService)
+                .GetMethod("ResolveCommandPath", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(service, [commandName])!;
+
+            Assert.Equal(commandPath, resolvedCommand, ignoreCase: OperatingSystem.IsWindows());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable("PATHEXT", originalPathExt);
+
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenWorkingDirectoryMissing_ReturnsFriendlyError()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "missing-working-dir-tool",
+            Name = "Missing Working Dir Tool",
+            Command = "powershell.exe",
+            ArgumentTemplate = "-NoProfile -Command \"Write-Output 'should not start'\"",
+            WorkingDirectory = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"), "missing"),
+            TimeoutSeconds = 10,
+            Enabled = true
+        };
+
+        var options = Options.Create(new CliToolsOption
+        {
+            TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+            Tools = [tool]
+        });
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            options,
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory());
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteStreamAsync("session-missing-working-dir", tool.Id, "ignored"))
+        {
+            chunks.Add(chunk);
+        }
+
+        var failureChunk = Assert.Single(chunks.Where(c => c.IsError && c.IsCompleted));
+        Assert.Contains("工作目录不存在", failureChunk.ErrorMessage);
+        Assert.Contains(tool.WorkingDirectory, failureChunk.ErrorMessage);
+    }
+
     private sealed class StubChatSessionService : IChatSessionService
     {
         public void AddMessage(string sessionId, ChatMessage message) { }
