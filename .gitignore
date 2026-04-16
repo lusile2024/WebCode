@@ -379,3 +379,4 @@ webcodecli-workspaces
 .dotnet-cli/
 .omx/
 .playwright-cli/
+.workbuddy/
