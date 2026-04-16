@@ -297,6 +297,69 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public async Task ExecuteStreamAsync_WhenCommandExistsAsWindowsCmdShimOnPath_StartsSuccessfully()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var shimDirectory = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(shimDirectory);
+
+        var shimPath = Path.Combine(shimDirectory, "fakecli.cmd");
+        await File.WriteAllTextAsync(shimPath, "@ECHO off\r\necho shim-ok\r\n");
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", shimDirectory + ";" + originalPath);
+
+        try
+        {
+            var tool = new CliToolConfig
+            {
+                Id = "fakecli",
+                Name = "Fake CLI",
+                Command = "fakecli",
+                ArgumentTemplate = "",
+                TimeoutSeconds = 5,
+                Enabled = true
+            };
+
+            var options = Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            });
+
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                options,
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory());
+
+            var chunks = new List<StreamOutputChunk>();
+            await foreach (var chunk in service.ExecuteStreamAsync("session-cmd-shim", tool.Id, "ignored"))
+            {
+                chunks.Add(chunk);
+            }
+
+            Assert.DoesNotContain(chunks, c => c.IsError && c.IsCompleted);
+            Assert.Contains(chunks, c => c.Content.Contains("shim-ok", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+
+            if (Directory.Exists(shimDirectory))
+            {
+                Directory.Delete(shimDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ExecuteStreamAsync_WhenWorkingDirectoryMissing_ReturnsFriendlyError()
     {
         var tool = new CliToolConfig

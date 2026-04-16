@@ -1917,6 +1917,16 @@ public class CliExecutorService : ICliExecutorService
         }
 
         // 否则返回原始命令(假设是系统PATH中的命令)
+        if (OperatingSystem.IsWindows())
+        {
+            var pathResolvedCommand = TryResolveWindowsCommandPathFromPath(command);
+            if (!string.IsNullOrWhiteSpace(pathResolvedCommand))
+            {
+                _logger.LogDebug("浠?PATH 瑙ｆ瀽鍛戒护 {Command} 鍒? {FullPath}", command, pathResolvedCommand);
+                return pathResolvedCommand;
+            }
+        }
+
         return command;
     }
 
@@ -2002,6 +2012,50 @@ public class CliExecutorService : ICliExecutorService
     /// <summary>
     /// 获取NPM全局安装路径（优先使用配置的路径，如果未配置则自动检测）
     /// </summary>
+    private string? TryResolveWindowsCommandPathFromPath(string command)
+    {
+        var pathValue = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathValue))
+        {
+            return null;
+        }
+
+        foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!Directory.Exists(directory))
+            {
+                continue;
+            }
+
+            foreach (var candidate in BuildWindowsCommandCandidates(command))
+            {
+                var fullPath = Path.Combine(directory, candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> BuildWindowsCommandCandidates(string command)
+    {
+        var extension = Path.GetExtension(command);
+        if (!string.IsNullOrWhiteSpace(extension))
+        {
+            yield return command;
+            yield break;
+        }
+
+        yield return command + ".cmd";
+        yield return command + ".bat";
+        yield return command + ".exe";
+        yield return command + ".com";
+        yield return command;
+    }
+
     private string? GetNpmGlobalPath()
     {
         // 如果配置中指定了路径,直接使用

@@ -25,6 +25,7 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
 });
 
 // Add services to the container.
+builder.Services.AddWebCodeDataProtection(AppContext.BaseDirectory);
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor(options =>
 {
