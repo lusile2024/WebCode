@@ -181,6 +181,9 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             session.UpdatedAt = DateTime.Now;
 
             var username = _userContextService.GetCurrentUsername();
+
+            var existingSession = await _sessionRepository.GetByIdAndUsernameAsync(session.SessionId, username);
+            MergeManagedToolSnapshot(session, existingSession);
             
             // 保存会话实体
             var sessionEntity = MapToSessionEntity(session, username);
@@ -484,6 +487,14 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             WorkspacePath = entity.WorkspacePath ?? string.Empty,
             ToolId = entity.ToolId ?? string.Empty,
             CliThreadId = entity.CliThreadId,
+            UsesCcSwitchSnapshot = entity.UsesCcSwitchSnapshot,
+            CcSwitchSnapshotToolId = entity.CcSwitchSnapshotToolId,
+            CcSwitchProviderId = entity.CcSwitchProviderId,
+            CcSwitchProviderName = entity.CcSwitchProviderName,
+            CcSwitchProviderCategory = entity.CcSwitchProviderCategory,
+            CcSwitchLiveConfigPath = entity.CcSwitchLiveConfigPath,
+            CcSwitchSnapshotRelativePath = entity.CcSwitchSnapshotRelativePath,
+            CcSwitchSnapshotSyncedAt = entity.CcSwitchSnapshotSyncedAt,
             CreatedAt = entity.CreatedAt,
             UpdatedAt = entity.UpdatedAt,
             IsWorkspaceValid = entity.IsWorkspaceValid,
@@ -508,6 +519,14 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             WorkspacePath = session.WorkspacePath,
             ToolId = session.ToolId,
             CliThreadId = session.CliThreadId,
+            UsesCcSwitchSnapshot = session.UsesCcSwitchSnapshot,
+            CcSwitchSnapshotToolId = session.CcSwitchSnapshotToolId,
+            CcSwitchProviderId = session.CcSwitchProviderId,
+            CcSwitchProviderName = session.CcSwitchProviderName,
+            CcSwitchProviderCategory = session.CcSwitchProviderCategory,
+            CcSwitchLiveConfigPath = session.CcSwitchLiveConfigPath,
+            CcSwitchSnapshotRelativePath = session.CcSwitchSnapshotRelativePath,
+            CcSwitchSnapshotSyncedAt = session.CcSwitchSnapshotSyncedAt,
             CreatedAt = session.CreatedAt,
             UpdatedAt = session.UpdatedAt,
             IsWorkspaceValid = session.IsWorkspaceValid,
@@ -525,6 +544,55 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             Role = message.Role,
             Content = message.Content,
             CreatedAt = message.CreatedAt
+        };
+    }
+
+    private static void MergeManagedToolSnapshot(SessionHistory session, ChatSessionEntity? existingEntity)
+    {
+        if (existingEntity == null || !existingEntity.UsesCcSwitchSnapshot)
+        {
+            return;
+        }
+
+        var currentToolId = NormalizeSnapshotToolId(session.ToolId);
+        var snapshotToolId = NormalizeSnapshotToolId(existingEntity.CcSwitchSnapshotToolId);
+        if (!string.IsNullOrWhiteSpace(currentToolId) &&
+            !string.IsNullOrWhiteSpace(snapshotToolId) &&
+            !string.Equals(currentToolId, snapshotToolId, StringComparison.OrdinalIgnoreCase))
+        {
+            session.UsesCcSwitchSnapshot = false;
+            session.CcSwitchSnapshotToolId = null;
+            session.CcSwitchProviderId = null;
+            session.CcSwitchProviderName = null;
+            session.CcSwitchProviderCategory = null;
+            session.CcSwitchLiveConfigPath = null;
+            session.CcSwitchSnapshotRelativePath = null;
+            session.CcSwitchSnapshotSyncedAt = null;
+            return;
+        }
+
+        if (session.UsesCcSwitchSnapshot)
+        {
+            return;
+        }
+
+        session.UsesCcSwitchSnapshot = existingEntity.UsesCcSwitchSnapshot;
+        session.CcSwitchSnapshotToolId = existingEntity.CcSwitchSnapshotToolId;
+        session.CcSwitchProviderId = existingEntity.CcSwitchProviderId;
+        session.CcSwitchProviderName = existingEntity.CcSwitchProviderName;
+        session.CcSwitchProviderCategory = existingEntity.CcSwitchProviderCategory;
+        session.CcSwitchLiveConfigPath = existingEntity.CcSwitchLiveConfigPath;
+        session.CcSwitchSnapshotRelativePath = existingEntity.CcSwitchSnapshotRelativePath;
+        session.CcSwitchSnapshotSyncedAt = existingEntity.CcSwitchSnapshotSyncedAt;
+    }
+
+    private static string NormalizeSnapshotToolId(string? toolId)
+    {
+        return toolId?.Trim().ToLowerInvariant() switch
+        {
+            "claude" => "claude-code",
+            "opencode-cli" => "opencode",
+            var value => value ?? string.Empty
         };
     }
 

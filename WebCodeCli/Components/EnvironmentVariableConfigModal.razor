@@ -1,8 +1,7 @@
 @using System.Text.Json
 @using WebCodeCli.Domain.Domain.Model
 @using WebCodeCli.Domain.Domain.Service
-@inject ICliExecutorService CliExecutorService
-@inject ICliToolEnvironmentService CliToolEnvironmentService
+@inject ICcSwitchService CcSwitchService
 @inject ILocalizationService L
 
 <div class="env-config-modal">
@@ -10,18 +9,20 @@
     {
         <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" @onclick="OnBackgroundClick">
             <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-gray-300" @onclick:stopPropagation="true">
-                <!-- 头部 -->
                 <div class="flex items-center justify-between p-6 border-b border-gray-300 bg-gray-50 rounded-t-2xl">
                     <div class="flex items-center gap-3">
                         <svg class="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                         </svg>
-                        <h3 class="text-lg font-bold text-gray-800">
-                            @(string.IsNullOrWhiteSpace(_selectedTool?.Name)
-                                ? T("envConfig.title")
-                                : T("envConfig.titleWithTool", ("tool", _selectedTool!.Name)))
-                        </h3>
+                        <div>
+                            <h3 class="text-lg font-bold text-gray-800">
+                                @(string.IsNullOrWhiteSpace(_selectedTool?.Name)
+                                    ? T("envConfig.title")
+                                    : T("envConfig.titleWithTool", ("tool", _selectedTool!.Name)))
+                            </h3>
+                            <p class="text-sm text-gray-500">@T("envConfig.readOnlyTitle")</p>
+                        </div>
                     </div>
                     <button @onclick="Close" class="text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg p-2 transition-all">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -30,7 +31,6 @@
                     </button>
                 </div>
 
-                <!-- 内容区 -->
                 <div class="flex-1 overflow-y-auto p-6">
                     @if (_isLoading)
                     {
@@ -38,253 +38,79 @@
                             <div class="animate-spin h-8 w-8 border-4 border-gray-700 rounded-full border-t-transparent"></div>
                         </div>
                     }
+                    else if (_toolStatus == null)
+                    {
+                        <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                            @T("envConfig.loadFailed")
+                        </div>
+                    }
+                    else if (!_toolStatus.IsManaged)
+                    {
+                        <div class="space-y-4">
+                            <div class="rounded-xl border border-yellow-200 bg-yellow-50 p-4">
+                                <p class="text-sm font-semibold text-yellow-800">@T("envConfig.unmanagedTitle")</p>
+                                <p class="mt-1 text-sm text-yellow-700">@T("envConfig.unmanagedDesc")</p>
+                            </div>
+                        </div>
+                    }
                     else
                     {
                         <div class="space-y-4">
-                            <!-- 说明 -->
-                            <div class="bg-gray-50 border border-gray-300 rounded-xl p-4 shadow-sm">
-                                <div class="flex">
-                                    <svg class="w-5 h-5 text-gray-700 mt-0.5 mr-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
-                                    </svg>
-                                    <div class="text-sm text-gray-800">
-                                        <p class="font-bold mb-2">@T("envConfig.descTitle")</p>
-                                        <p class="mb-1">• @T("envConfig.descSaveDb")</p>
-                                        <p class="mb-1">• @T("envConfig.descSecretPrefix")<span class="font-semibold text-red-600">@T("envConfig.descSecretHighlight")</span></p>
-                                        <p>• @T("envConfig.descReset")</p>
-                                    </div>
-                                </div>
+                            <div class="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                                <p class="text-sm font-semibold text-blue-800">@T("envConfig.readOnlyDesc")</p>
+                                <p class="mt-1 text-sm text-blue-700">@T("envConfig.ccSwitchManaged")</p>
                             </div>
 
-                            <!-- 配置方案管理区 -->
-                            <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                                <div class="flex items-center justify-between mb-3">
+                            <div class="@GetStatusCardClass(_toolStatus.IsLaunchReady) rounded-xl border p-4">
+                                <div class="flex items-start justify-between gap-4">
                                     <div>
-                                        <p class="text-sm font-bold text-blue-800">@T("envConfig.profilesTitle")</p>
-                                        <p class="text-xs text-blue-600 mt-0.5">@T("envConfig.profilesDesc")</p>
+                                        <p class="text-sm font-semibold">@T("envConfig.currentStatus")</p>
+                                        <p class="mt-1 text-lg font-bold">
+                                            @(_toolStatus.IsLaunchReady ? T("envConfig.ready") : T("envConfig.notReady"))
+                                        </p>
                                     </div>
-                                    <button @onclick="StartAddProfile"
-                                            class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-blue-700 bg-white border border-blue-300 rounded-lg hover:bg-blue-50 hover:border-blue-500 transition-all shadow-sm">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                                        </svg>
-                                        @T("envConfig.addProfile")
-                                    </button>
+                                    <span class="@GetStatusBadgeClass(_toolStatus.IsLaunchReady) inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold">
+                                        @(_toolStatus.IsLaunchReady ? T("envConfig.ready") : T("envConfig.notReady"))
+                                    </span>
                                 </div>
-
-                                @if (_profiles.Any())
-                                {
-                                    <div class="space-y-2">
-                                        @foreach (var profile in _profiles)
-                                        {
-                                            @if (_profilePendingDelete?.Id == profile.Id)
-                                            {
-                                                <!-- 删除确认行 -->
-                                                <div class="flex items-center gap-2 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
-                                                    <svg class="w-4 h-4 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                                    </svg>
-                                                    <span class="flex-1 text-sm text-red-700">@T("envConfig.deleteProfileConfirm")</span>
-                                                    <button @onclick="() => DeleteProfile(profile)"
-                                                            class="px-2 py-1 text-xs font-semibold text-white bg-red-600 rounded-md hover:bg-red-700 transition-all">
-                                                        @T("common.confirm")
-                                                    </button>
-                                                    <button @onclick="CancelDeleteProfile"
-                                                            class="px-2 py-1 text-xs font-semibold text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-all">
-                                                        @T("common.cancel")
-                                                    </button>
-                                                </div>
-                                            }
-                                            else
-                                            {
-                                                <div class="flex items-center gap-2 bg-white border @(profile.IsActive ? "border-green-400" : "border-gray-200") rounded-lg px-3 py-2 shadow-sm">
-                                                    @if (profile.IsActive)
-                                                    {
-                                                        <span class="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold text-green-700 bg-green-100 rounded-full">
-                                                            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                                                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path>
-                                                            </svg>
-                                                            @T("envConfig.activeProfile")
-                                                        </span>
-                                                    }
-                                                    <span class="flex-1 text-sm font-medium text-gray-800 truncate">@profile.ProfileName</span>
-                                                    <div class="flex items-center gap-1 flex-shrink-0">
-                                                        @if (!profile.IsActive)
-                                                        {
-                                                            <button @onclick="() => ActivateProfile(profile)"
-                                                                    class="px-2 py-1 text-xs font-semibold text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 transition-all"
-                                                                    title="@T("envConfig.activateProfile")">
-                                                                @T("envConfig.activateProfile")
-                                                            </button>
-                                                        }
-                                                        else
-                                                        {
-                                                            <button @onclick="DeactivateProfiles"
-                                                                    class="px-2 py-1 text-xs font-semibold text-gray-600 bg-gray-100 border border-gray-200 rounded-md hover:bg-gray-200 transition-all"
-                                                                    title="@T("envConfig.deactivateProfile")">
-                                                                @T("envConfig.deactivateProfile")
-                                                            </button>
-                                                        }
-                                                        <button @onclick="() => EditProfile(profile)"
-                                                                class="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-all"
-                                                                title="@T("envConfig.editProfile")">
-                                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
-                                                            </svg>
-                                                        </button>
-                                                        <button @onclick="() => RequestDeleteProfile(profile)"
-                                                                class="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-all"
-                                                                title="@T("envConfig.deleteProfile")">
-                                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                                            </svg>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            }
-                                        }
-                                    </div>
-                                }
+                                <p class="mt-3 text-sm">@DisplayValue(_toolStatus.StatusMessage)</p>
                             </div>
 
-                            <!-- 编辑区标题 -->
-                            <div class="flex items-center justify-between">
-                                <p class="text-sm font-bold text-gray-700">
-                                    @if (_editingProfile != null)
-                                    {
-                                        @T("envConfig.editingProfile", ("name", _editingProfile.ProfileName))
-                                    }
-                                    else if (_isAddingProfile)
-                                    {
-                                        @T("envConfig.addProfile")
-                                    }
-                                    else
-                                    {
-                                        @T("envConfig.editingDefault")
-                                    }
-                                </p>
-                                @if (_editingProfile != null || _isAddingProfile)
-                                {
-                                    <button @onclick="CancelProfileEdit"
-                                            class="text-xs text-gray-500 hover:text-gray-700 underline">
-                                        @T("envConfig.cancelEdit")
-                                    </button>
-                                }
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="rounded-xl border border-gray-200 bg-white p-4">
+                                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("envConfig.provider")</p>
+                                    <p class="mt-2 text-sm font-semibold text-gray-800">@DisplayValue(_toolStatus.ActiveProviderName ?? _toolStatus.ActiveProviderId)</p>
+                                    <p class="mt-1 text-xs text-gray-500">@DisplayValue(_toolStatus.ActiveProviderId)</p>
+                                </div>
+                                <div class="rounded-xl border border-gray-200 bg-white p-4">
+                                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("envConfig.providerCategory")</p>
+                                    <p class="mt-2 text-sm font-semibold text-gray-800">@DisplayValue(_toolStatus.ActiveProviderCategory)</p>
+                                </div>
+                                <div class="rounded-xl border border-gray-200 bg-white p-4">
+                                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("envConfig.source")</p>
+                                    <p class="mt-2 text-sm font-semibold text-gray-800">
+                                        @(_toolStatus.UsesSettingsOverride ? T("envConfig.sourceSettings") : T("envConfig.sourceDatabase"))
+                                    </p>
+                                </div>
+                                <div class="rounded-xl border border-gray-200 bg-white p-4">
+                                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("envConfig.toolConfig")</p>
+                                    <p class="mt-2 text-sm font-semibold text-gray-800">@DisplayValue(_toolStatus.ConfigDirectory)</p>
+                                </div>
                             </div>
 
-                            <!-- 新建/编辑方案时的方案名称输入 -->
-                            @if (_isAddingProfile || _editingProfile != null)
-                            {
-                                <div class="card border-blue-200 bg-blue-50 p-4">
-                                    <label class="block text-sm font-bold text-blue-800 mb-2">@T("envConfig.profilesTitle")</label>
-                                    <input type="text"
-                                           @bind="_newProfileName"
-                                           class="w-full px-4 py-2.5 border border-blue-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-blue-500 text-sm"
-                                           placeholder="@T("envConfig.profileNamePlaceholder")" />
-                                </div>
-                            }
-
-                            <!-- 环境变量列表 -->
-                            @foreach (var (index, kvp) in _envVars.Select((kvp, i) => (i, kvp)))
-                            {
-                                <div class="card border-gray-300 shadow-sm hover:shadow-md transition-shadow p-4">
-                                    <div class="flex gap-4 items-start">
-                                        <div class="flex-1">
-                                            <label class="block text-sm font-bold text-gray-700 mb-2">@T("envConfig.keyLabel")</label>
-                                            <input type="text" 
-                                                   @bind="kvp.Key"
-                                                   class="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 text-sm transition-all hover:border-gray-400"
-                                                   placeholder="@T("envConfig.keyPlaceholder")" />
-                                        </div>
-                                        <div class="flex-1">
-                                            <label class="block text-sm font-bold text-gray-700 mb-2">@T("envConfig.valueLabel")</label>
-                                            <div class="relative">
-                                                <input type="password" 
-                                                       @bind="kvp.Value"
-                                                       autocomplete="off"
-                                                       oncopy="return false"
-                                                       oncut="return false"
-                                                       onpaste="return true"
-                                                       class="w-full pl-4 pr-10 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 text-sm transition-all hover:border-gray-400"
-                                                       placeholder="@(string.IsNullOrWhiteSpace(kvp.Value) ? T("envConfig.valuePlaceholder") : "••••••••")" />
-                                                @if (!string.IsNullOrWhiteSpace(kvp.Value))
-                                                {
-                                                    <button type="button"
-                                                            @onclick="() => ClearValue(index)"
-                                                            class="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-md transition-all z-10"
-                                                            title="@T("envConfig.clearValueTitle")">
-                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                                                        </svg>
-                                                    </button>
-                                                }
-                                            </div>
-                                        </div>
-                                        <div class="flex items-end">
-                                            <button @onclick="() => RemoveEnvVar(index)" 
-                                                    class="p-2.5 text-red-600 hover:bg-red-50 hover:text-red-700 rounded-xl transition-all border border-transparent hover:border-red-200"
-                                                    title="@T("envConfig.removeTitle")">
-                                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                                                </svg>
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            }
-
-                            <!-- 添加按钮 -->
-                            <button @onclick="AddEnvVar" 
-                                    class="w-full py-3 border-2 border-dashed border-gray-400 rounded-xl hover:border-gray-600 hover:bg-gray-50 transition-all flex items-center justify-center gap-2 text-gray-700 hover:text-gray-900 font-semibold group">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                                </svg>
-                                <span>@T("envConfig.addButton")</span>
-                            </button>
+                            <div class="space-y-3">
+                                @RenderPathRow(T("envConfig.liveConfigPath"), _toolStatus.LiveConfigPath, _toolStatus.HasLiveConfig)
+                                @RenderPathRow(T("envConfig.settingsPath"), _toolStatus.SettingsPath, _toolStatus.HasSettingsFile)
+                                @RenderPathRow(T("envConfig.databasePath"), _toolStatus.DatabasePath, _toolStatus.HasDatabase)
+                            </div>
                         </div>
                     }
                 </div>
 
-                <!-- 底部按钮 -->
-                <div class="flex items-center justify-between p-6 border-t border-gray-300 bg-gray-50 rounded-b-2xl">
-                    @if (_editingProfile == null && !_isAddingProfile)
-                    {
-                        <button @onclick="ResetToDefault" 
-                                disabled="@_isLoading"
-                                class="px-5 py-2.5 text-sm font-semibold text-amber-700 bg-white border border-amber-300 rounded-xl hover:bg-amber-50 hover:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm hover:shadow">
-                            @T("envConfig.resetButton")
-                        </button>
-                    }
-                    else
-                    {
-                        <div></div>
-                    }
-                    <div class="flex gap-3">
-                        <button @onclick="Close" 
-                                disabled="@_isLoading"
-                                class="btn-default disabled:opacity-50 disabled:cursor-not-allowed">
-                            @T("common.cancel")
-                        </button>
-                        <button @onclick="Save" 
-                                disabled="@_isLoading"
-                                class="btn-primary disabled:opacity-50 disabled:cursor-not-allowed min-w-[100px]">
-                            @if (_isLoading)
-                            {
-                                <div class="flex items-center gap-2">
-                                    <div class="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
-                                    <span>@T("envConfig.saving")</span>
-                                </div>
-                            }
-                            else if (_editingProfile != null || _isAddingProfile)
-                            {
-                                <span>@T("envConfig.saveProfile")</span>
-                            }
-                            else
-                            {
-                                <span>@T("envConfig.save")</span>
-                            }
-                        </button>
-                    </div>
+                <div class="flex items-center justify-end p-6 border-t border-gray-300 bg-gray-50 rounded-b-2xl">
+                    <button @onclick="Close" class="btn-primary min-w-[120px]">
+                        @T("common.close")
+                    </button>
                 </div>
             </div>
         </div>
@@ -292,355 +118,91 @@
 </div>
 
 @code {
-    private bool _isVisible = false;
-    private bool _isLoading = false;
+    private bool _isVisible;
+    private bool _isLoading;
     private CliToolConfig? _selectedTool;
-    private string? _username;
-    private List<EnvVarItem> _envVars = new();
-
-    // 配置方案相关
-    private List<CliToolEnvProfile> _profiles = new();
-    private CliToolEnvProfile? _editingProfile = null;
-    private bool _isAddingProfile = false;
-    private string _newProfileName = string.Empty;
-    private CliToolEnvProfile? _profilePendingDelete = null;
-
-    // 本地化相关
+    private CcSwitchToolStatus? _toolStatus;
     private Dictionary<string, string> _translations = new();
     private string _currentLanguage = "zh-CN";
-
-    private class EnvVarItem
-    {
-        public string Key { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-    }
 
     protected override async Task OnInitializedAsync()
     {
         await LoadTranslationsAsync();
     }
 
-    private async Task ReloadEditorForCurrentStateAsync()
-    {
-        if (_selectedTool == null)
-        {
-            _envVars = new List<EnvVarItem>();
-            return;
-        }
-
-        if (_profiles.Any(p => p.IsActive))
-        {
-            _envVars = new List<EnvVarItem>();
-            return;
-        }
-
-        var envVars = await CliToolEnvironmentService.GetEnvironmentVariablesAsync(_selectedTool.Id, _username);
-        _envVars = envVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
-    }
-
     public async Task ShowAsync(CliToolConfig tool, string? username = null)
     {
         _selectedTool = tool;
-        _username = string.IsNullOrWhiteSpace(username) ? null : username.Trim();
+        _toolStatus = null;
         _isVisible = true;
         _isLoading = true;
-        _editingProfile = null;
-        _isAddingProfile = false;
-        _newProfileName = string.Empty;
         StateHasChanged();
 
         try
         {
             _currentLanguage = await L.GetCurrentLanguageAsync();
             await LoadTranslationsAsync();
-
-            // 加载配置方案列表
-            _profiles = await CliToolEnvironmentService.GetProfilesAsync(tool.Id);
-            await ReloadEditorForCurrentStateAsync();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"加载环境变量失败: {ex.Message}");
+            _toolStatus = await CcSwitchService.GetToolStatusAsync(tool.Id);
         }
         finally
         {
             _isLoading = false;
             StateHasChanged();
         }
+    }
+
+    private Task OnBackgroundClick()
+    {
+        Close();
+        return Task.CompletedTask;
     }
 
     private void Close()
     {
         _isVisible = false;
-        _selectedTool = null;
-        _envVars.Clear();
-        _profiles.Clear();
-        _editingProfile = null;
-        _isAddingProfile = false;
-        _newProfileName = string.Empty;
-        _profilePendingDelete = null;
-        _username = null;
         StateHasChanged();
     }
 
-    private void OnBackgroundClick()
+    private RenderFragment RenderPathRow(string label, string? value, bool exists) => __builder =>
     {
-        Close();
+        <div class="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@label</p>
+                    <p class="mt-2 break-all text-sm text-gray-800">@DisplayValue(value)</p>
+                </div>
+                <span class="@GetExistsBadgeClass(exists) inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold">
+                    @(exists ? T("envConfig.detected") : T("envConfig.notDetected"))
+                </span>
+            </div>
+        </div>;
+    };
+
+    private string DisplayValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? T("envConfig.notAvailable") : value;
     }
 
-    private void AddEnvVar()
+    private string GetStatusCardClass(bool isReady)
     {
-        _envVars.Add(new EnvVarItem());
-        StateHasChanged();
+        return isReady
+            ? "border-green-200 bg-green-50 text-green-800"
+            : "border-red-200 bg-red-50 text-red-800";
     }
 
-    private void RemoveEnvVar(int index)
+    private string GetStatusBadgeClass(bool isReady)
     {
-        if (index >= 0 && index < _envVars.Count)
-        {
-            _envVars.RemoveAt(index);
-            StateHasChanged();
-        }
+        return isReady
+            ? "bg-green-100 text-green-700"
+            : "bg-red-100 text-red-700";
     }
 
-    private void ClearValue(int index)
+    private string GetExistsBadgeClass(bool exists)
     {
-        if (index >= 0 && index < _envVars.Count)
-        {
-            _envVars[index].Value = string.Empty;
-            StateHasChanged();
-        }
+        return exists
+            ? "bg-green-100 text-green-700"
+            : "bg-gray-200 text-gray-700";
     }
-
-    // ── 配置方案操作 ──
-
-    private void StartAddProfile()
-    {
-        _isAddingProfile = true;
-        _editingProfile = null;
-        _newProfileName = string.Empty;
-        _profilePendingDelete = null;
-        _envVars = new List<EnvVarItem>();
-        StateHasChanged();
-    }
-
-    private void EditProfile(CliToolEnvProfile profile)
-    {
-        _editingProfile = profile;
-        _isAddingProfile = false;
-        _newProfileName = profile.ProfileName;
-        _profilePendingDelete = null;
-
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(profile.EnvVarsJson))
-            {
-                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(profile.EnvVarsJson) ?? new();
-                _envVars = dict.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
-            }
-            else
-            {
-                _envVars = new List<EnvVarItem>();
-            }
-        }
-        catch
-        {
-            _envVars = new List<EnvVarItem>();
-        }
-        StateHasChanged();
-    }
-
-    private async Task CancelProfileEdit()
-    {
-        _editingProfile = null;
-        _isAddingProfile = false;
-        _newProfileName = string.Empty;
-        _profilePendingDelete = null;
-        await ReloadEditorForCurrentStateAsync();
-        StateHasChanged();
-    }
-
-    private async Task ActivateProfile(CliToolEnvProfile profile)
-    {
-        if (_selectedTool == null) return;
-        _isLoading = true;
-        StateHasChanged();
-        try
-        {
-            await CliToolEnvironmentService.ActivateProfileAsync(_selectedTool.Id, profile.Id);
-            _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
-            _editingProfile = null;
-            _isAddingProfile = false;
-            _newProfileName = string.Empty;
-            _profilePendingDelete = null;
-            await ReloadEditorForCurrentStateAsync();
-            Console.WriteLine($"方案已激活: {profile.ProfileName}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"激活方案失败: {ex.Message}");
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task DeactivateProfiles()
-    {
-        if (_selectedTool == null) return;
-        _isLoading = true;
-        StateHasChanged();
-        try
-        {
-            await CliToolEnvironmentService.DeactivateProfilesAsync(_selectedTool.Id);
-            _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
-            _editingProfile = null;
-            _isAddingProfile = false;
-            _newProfileName = string.Empty;
-            _profilePendingDelete = null;
-            await ReloadEditorForCurrentStateAsync();
-            Console.WriteLine("已取消所有方案激活");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"取消激活失败: {ex.Message}");
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
-    }
-
-    private void RequestDeleteProfile(CliToolEnvProfile profile)
-    {
-        _profilePendingDelete = profile;
-        StateHasChanged();
-    }
-
-    private void CancelDeleteProfile()
-    {
-        _profilePendingDelete = null;
-        StateHasChanged();
-    }
-
-    private async Task DeleteProfile(CliToolEnvProfile profile)
-    {
-        if (_selectedTool == null) return;
-        _profilePendingDelete = null;
-        _isLoading = true;
-        StateHasChanged();
-        try
-        {
-            await CliToolEnvironmentService.DeleteProfileAsync(_selectedTool.Id, profile.Id);
-            _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
-            if (_editingProfile?.Id == profile.Id)
-            {
-                await CancelProfileEdit();
-            }
-            else
-            {
-                await ReloadEditorForCurrentStateAsync();
-            }
-            Console.WriteLine($"方案已删除: {profile.ProfileName}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"删除方案失败: {ex.Message}");
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task Save()
-    {
-        if (_selectedTool == null) return;
-
-        _isLoading = true;
-        StateHasChanged();
-
-        try
-        {
-            // 过滤掉空键或空值的条目
-            var validEnvVars = _envVars
-                .Where(ev => !string.IsNullOrWhiteSpace(ev.Key) && !string.IsNullOrWhiteSpace(ev.Value))
-                .ToDictionary(ev => ev.Key.Trim(), ev => ev.Value!.Trim());
-
-            if (_isAddingProfile || _editingProfile != null)
-            {
-                // 保存配置方案（新建和编辑均使用 _newProfileName，支持重命名）
-                var profileName = _newProfileName.Trim();
-                if (string.IsNullOrWhiteSpace(profileName)) profileName = T("envConfig.unnamedProfile");
-
-                var profileId = _editingProfile?.Id ?? 0;
-                var savedProfile = await CliToolEnvironmentService.SaveProfileAsync(_selectedTool.Id, profileId, profileName, validEnvVars);
-                if (savedProfile != null)
-                {
-                    _profiles = await CliToolEnvironmentService.GetProfilesAsync(_selectedTool.Id);
-                    await CancelProfileEdit();
-                    Console.WriteLine($"方案已保存: {profileName}");
-                }
-                else
-                {
-                    Console.WriteLine("方案保存失败");
-                }
-            }
-            else
-            {
-                // 保存默认配置
-                var success = await CliToolEnvironmentService.SaveEnvironmentVariablesAsync(_selectedTool.Id, validEnvVars, _username);
-                if (success)
-                {
-                    Console.WriteLine("默认环境变量保存成功");
-                    Close();
-                }
-                else
-                {
-                    Console.WriteLine("环境变量保存失败");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"保存失败: {ex.Message}");
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
-    }
-
-    private async Task ResetToDefault()
-    {
-        if (_selectedTool == null) return;
-
-        _isLoading = true;
-        StateHasChanged();
-
-        try
-        {
-            var defaultEnvVars = await CliToolEnvironmentService.ResetToDefaultAsync(_selectedTool.Id, _username);
-            _envVars = defaultEnvVars.Select(kvp => new EnvVarItem { Key = kvp.Key, Value = kvp.Value }).ToList();
-            Console.WriteLine("已重置为默认配置");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"重置失败: {ex.Message}");
-        }
-        finally
-        {
-            _isLoading = false;
-            StateHasChanged();
-        }
-    }
-
-    #region 本地化辅助方法
 
     private async Task LoadTranslationsAsync()
     {
@@ -649,9 +211,9 @@
             var allTranslations = await L.GetAllTranslationsAsync(_currentLanguage);
             _translations = FlattenTranslations(allTranslations);
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"[环境变量配置] 加载翻译资源失败: {ex.Message}");
+            _translations = new Dictionary<string, string>();
         }
     }
 
@@ -699,24 +261,22 @@
 
     private string T(string key)
     {
-        if (_translations.TryGetValue(key, out var translation))
+        if (_translations.TryGetValue(key, out var value))
         {
-            return translation;
+            return value;
         }
 
-        var parts = key.Split('.');
-        return parts.Length > 0 ? parts[^1] : key;
+        return key.Split('.').LastOrDefault() ?? key;
     }
 
-    private string T(string key, params (string name, string value)[] parameters)
+    private string T(string key, params (string key, string value)[] args)
     {
-        var text = T(key);
-        foreach (var (name, value) in parameters)
+        var value = T(key);
+        foreach (var (argKey, argValue) in args)
         {
-            text = text.Replace($"{{{name}}}", value);
+            value = value.Replace($"{{{argKey}}}", argValue);
         }
-        return text;
-    }
 
-    #endregion
+        return value;
+    }
 }

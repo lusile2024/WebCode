@@ -130,10 +130,15 @@
                               LoadingText="@T("common.loading")"
                               RenameText="@T("codeAssistant.renameSession")"
                               DeleteText="@T("common.delete")"
+                              SyncProviderText="@T("codeAssistant.syncSessionProvider")"
+                              PinnedProviderText="@T("codeAssistant.pinnedProvider")"
+                              SyncedAtText="@T("codeAssistant.providerSyncedAt")"
+                              UnsyncedProviderText="@T("codeAssistant.providerNotSynced")"
                               ShareSessionText="@T("codeAssistant.shareSession")"
                               AuthorizeSessionText="@T("codeAssistant.authorizeSession")"
                               NoSessionsText="@T("codeAssistant.noSessions")"
                               CreateSessionHintText="@T("codeAssistant.createSessionHint")"
+                              SyncingSessionId="@_syncingSessionId"
                               OnClose="CloseSidePanel"
                               OnCreateNewSession="CreateNewSession"
                               OnToggleMultiSelect="ToggleSessionMultiSelectMode"
@@ -141,6 +146,7 @@
                               OnShowBatchDelete="ShowBatchSessionDeleteDialog"
                               OnSessionSelected="LoadSession"
                               OnToggleSessionSelection="ToggleSessionSelection"
+                              OnSyncSessionProvider="SyncSessionProviderAsync"
                               OnShareSession="ShowShareDialog"
                               OnAuthorizeSession="ShowAuthorizeDialog"
                               OnRenameSession="ShowRenameDialog"
@@ -182,10 +188,15 @@
                       LoadingText="@T("common.loading")"
                       RenameText="@T("codeAssistant.renameSession")"
                       DeleteText="@T("common.delete")"
+                      SyncProviderText="@T("codeAssistant.syncSessionProvider")"
+                      PinnedProviderText="@T("codeAssistant.pinnedProvider")"
+                      SyncedAtText="@T("codeAssistant.providerSyncedAt")"
+                      UnsyncedProviderText="@T("codeAssistant.providerNotSynced")"
                       ShareSessionText="@T("codeAssistant.shareSession")"
                       AuthorizeSessionText="@T("codeAssistant.authorizeSession")"
                       NoSessionsText="@T("codeAssistant.noSessions")"
                       CreateSessionHintText="@T("codeAssistant.createSessionHint")"
+                      SyncingSessionId="@_syncingSessionId"
                       OnClose="ToggleSessionList"
                       OnCreateNewSession="CreateNewSession"
                       OnToggleMultiSelect="ToggleSessionMultiSelectMode"
@@ -193,6 +204,7 @@
                       OnShowBatchDelete="ShowBatchSessionDeleteDialog"
                       OnSessionSelected="LoadSession"
                       OnToggleSessionSelection="ToggleSessionSelection"
+                      OnSyncSessionProvider="SyncSessionProviderAsync"
                       OnShareSession="ShowShareDialog"
                       OnAuthorizeSession="ShowAuthorizeDialog"
                       OnRenameSession="ShowRenameDialog"
@@ -447,6 +459,7 @@
 
 <!-- 环境变量配置模态框 -->
 <EnvironmentVariableConfigModal @ref="_envConfigModal" />
+<AssistantManagementModal @ref="_assistantManagementModal" OnSaved="HandleAssistantManagementSaved" />
 
 <!-- 外部 CLI 会话导入模态框 -->
 <ExternalCliSessionImportModal @ref="_externalCliSessionImportModal"
@@ -668,6 +681,20 @@
                     <LanguageSwitcher OnLanguageChanged="OnLanguageChangedFromSidePanel" />
                 </div>
             </div>
+
+            <button @onclick="OpenAssistantManagementFromSidePanel"
+                    class="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-gray-100 rounded-lg transition-colors text-left">
+                <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5V4H2v16h5m10 0v-4a3 3 0 00-3-3H10a3 3 0 00-3 3v4m10 0H7m10-12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                </svg>
+                <div class="flex-1">
+                    <div class="text-sm font-medium text-gray-700">@T("assistantManagement.title")</div>
+                    <div class="text-xs text-gray-400">@T("assistantManagement.subtitle")</div>
+                </div>
+                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                </svg>
+            </button>
             
             <!-- 环境变量配置 -->
             <button @onclick="OpenEnvConfigFromSidePanel" 

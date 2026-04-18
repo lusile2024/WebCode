@@ -1,0 +1,354 @@
+@namespace WebCodeCli.Components
+@using System.Text.Json
+@using WebCodeCli.Domain.Domain.Service
+@using WebCodeCli.Helpers
+@inject ISystemSettingsService SystemSettingsService
+@inject ICcSwitchService CcSwitchService
+@inject ILocalizationService L
+
+@if (_isVisible)
+{
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" @onclick="Close">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-gray-300" @onclick:stopPropagation="true">
+            <div class="flex items-center justify-between p-6 border-b border-gray-300 bg-gray-50 rounded-t-2xl">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-xl bg-gray-800 text-white flex items-center justify-center">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5V4H2v16h5m10 0v-4a3 3 0 00-3-3H10a3 3 0 00-3 3v4m10 0H7m10-12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-800">@T("assistantManagement.title")</h3>
+                        <p class="text-sm text-gray-500">@T("assistantManagement.subtitle")</p>
+                    </div>
+                </div>
+                <button @onclick="Close" class="text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg p-2 transition-all">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-6">
+                @if (_isLoading)
+                {
+                    <div class="flex items-center justify-center py-12">
+                        <div class="animate-spin h-8 w-8 border-4 border-gray-700 rounded-full border-t-transparent"></div>
+                    </div>
+                }
+                else
+                {
+                    <div class="space-y-4">
+                        <div class="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                            <p class="text-sm font-semibold text-blue-800">@T("assistantManagement.description")</p>
+                            <p class="mt-1 text-sm text-blue-700">@T("assistantManagement.runtimeNote")</p>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+                        {
+                            <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                                @_errorMessage
+                            </div>
+                        }
+
+                        @foreach (var assistant in _assistants)
+                        {
+                            <div class="rounded-xl border border-gray-200 bg-white p-4">
+                                <div class="flex items-start gap-4">
+                                    <label class="pt-1">
+                                        <input type="checkbox"
+                                               checked="@assistant.IsEnabled"
+                                               @onchange="args => assistant.IsEnabled = args.Value is bool isChecked && isChecked"
+                                               class="w-5 h-5 rounded border-gray-300 text-gray-800 focus:ring-gray-500" />
+                                    </label>
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                                            <div>
+                                                <h4 class="text-base font-bold text-gray-800">@assistant.DisplayName</h4>
+                                                <p class="mt-1 text-sm text-gray-600">@assistant.Description</p>
+                                            </div>
+                                            <div class="flex flex-wrap gap-2">
+                                                <span class="@GetStatusBadgeClass(assistant.Status.IsLaunchReady) inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold">
+                                                    @(assistant.Status.IsLaunchReady ? T("assistantManagement.ready") : T("assistantManagement.notReady"))
+                                                </span>
+                                                @if (assistant.IsEnabled)
+                                                {
+                                                    <span class="bg-gray-100 text-gray-700 inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold">
+                                                        @T("assistantManagement.enabledTag")
+                                                    </span>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <p class="mt-3 text-sm @(assistant.Status.IsLaunchReady ? "text-green-700" : "text-red-700")">
+                                            @DisplayValue(assistant.Status.StatusMessage)
+                                        </p>
+
+                                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+                                            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("assistantManagement.provider")</p>
+                                                <p class="mt-2 text-sm text-gray-800">@DisplayValue(assistant.Status.ActiveProviderName ?? assistant.Status.ActiveProviderId)</p>
+                                            </div>
+                                            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("assistantManagement.providerCategory")</p>
+                                                <p class="mt-2 text-sm text-gray-800">@DisplayProviderCategory(assistant.Status.ActiveProviderCategory)</p>
+                                            </div>
+                                            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                                <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">@T("assistantManagement.liveConfigPath")</p>
+                                                <p class="mt-2 text-sm break-all text-gray-800">@DisplayValue(assistant.Status.LiveConfigPath)</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="flex items-center justify-between gap-3 p-6 border-t border-gray-300 bg-gray-50 rounded-b-2xl">
+                <p class="text-xs text-gray-500">@T("assistantManagement.toolListHint")</p>
+                <div class="flex items-center gap-3">
+                    <button @onclick="Close" class="btn-default min-w-[110px]">
+                        @T("common.cancel")
+                    </button>
+                    <button @onclick="SaveAsync" disabled="@(_isLoading || _isSaving)" class="btn-primary min-w-[150px] disabled:opacity-60">
+                        @(_isSaving ? T("assistantManagement.saving") : T("assistantManagement.save"))
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public EventCallback<List<string>> OnSaved { get; set; }
+
+    private bool _isVisible;
+    private bool _isLoading;
+    private bool _isSaving;
+    private string _currentLanguage = "zh-CN";
+    private string? _errorMessage;
+    private Dictionary<string, string> _translations = new();
+    private List<AssistantItem> _assistants = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTranslationsAsync();
+    }
+
+    public async Task ShowAsync()
+    {
+        _isVisible = true;
+        _isLoading = true;
+        _isSaving = false;
+        _errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            _currentLanguage = await L.GetCurrentLanguageAsync();
+            await LoadTranslationsAsync();
+            await LoadAssistantStatusesAsync();
+        }
+        catch
+        {
+            _assistants = [];
+            _errorMessage = T("assistantManagement.loadFailed");
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadAssistantStatusesAsync()
+    {
+        var enabledAssistants = AssistantCatalogHelper.NormalizeEnabledAssistants(
+            await SystemSettingsService.GetEnabledAssistantsAsync());
+
+        var statuses = await CcSwitchService.GetToolStatusesAsync(AssistantCatalogHelper.SupportedAssistantIds);
+
+        _assistants = AssistantCatalogHelper.SupportedAssistants
+            .Select(descriptor =>
+            {
+                statuses.TryGetValue(descriptor.Id, out var status);
+                status ??= new CcSwitchToolStatus
+                {
+                    ToolId = descriptor.Id,
+                    ToolName = descriptor.DisplayName,
+                    IsManaged = true,
+                    IsLaunchReady = false,
+                    StatusMessage = T("assistantManagement.statusUnavailable")
+                };
+
+                return new AssistantItem
+                {
+                    Id = descriptor.Id,
+                    DisplayName = descriptor.DisplayName,
+                    Description = T($"setup.{descriptor.DescriptionKey}"),
+                    IsEnabled = enabledAssistants.Contains(descriptor.Id, StringComparer.OrdinalIgnoreCase),
+                    Status = status
+                };
+            })
+            .ToList();
+    }
+
+    private async Task SaveAsync()
+    {
+        _isSaving = true;
+        _errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var enabledAssistants = AssistantCatalogHelper.NormalizeEnabledAssistants(
+                _assistants.Where(x => x.IsEnabled).Select(x => x.Id));
+
+            var saved = await SystemSettingsService.SaveEnabledAssistantsAsync(enabledAssistants);
+            if (!saved)
+            {
+                _errorMessage = T("assistantManagement.saveFailed");
+                return;
+            }
+
+            if (OnSaved.HasDelegate)
+            {
+                await OnSaved.InvokeAsync(enabledAssistants);
+            }
+
+            Close();
+        }
+        catch
+        {
+            _errorMessage = T("assistantManagement.saveFailed");
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void Close()
+    {
+        _isVisible = false;
+        StateHasChanged();
+    }
+
+    private string DisplayValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return T("assistantManagement.notAvailable");
+        }
+
+        var normalizedValue = value.Trim();
+        return normalizedValue.Equals("notAvailable", StringComparison.OrdinalIgnoreCase)
+            || normalizedValue.Equals("not_available", StringComparison.OrdinalIgnoreCase)
+            || normalizedValue.Equals("unavailable", StringComparison.OrdinalIgnoreCase)
+            ? T("assistantManagement.notAvailable")
+            : normalizedValue;
+    }
+
+    private string DisplayProviderCategory(string? category)
+    {
+        if (string.IsNullOrWhiteSpace(category))
+        {
+            return T("assistantManagement.notAvailable");
+        }
+
+        var normalizedCategory = category.Trim().ToLowerInvariant();
+        if (normalizedCategory is "notavailable" or "not_available" or "unavailable")
+        {
+            return T("assistantManagement.notAvailable");
+        }
+
+        var localizedValue = T($"assistantManagement.providerCategoryValues.{normalizedCategory}");
+        return string.Equals(localizedValue, $"assistantManagement.providerCategoryValues.{normalizedCategory}", StringComparison.Ordinal)
+            ? category
+            : localizedValue;
+    }
+
+    private string GetStatusBadgeClass(bool isReady)
+    {
+        return isReady
+            ? "bg-green-100 text-green-700"
+            : "bg-red-100 text-red-700";
+    }
+
+    private async Task LoadTranslationsAsync()
+    {
+        try
+        {
+            var allTranslations = await L.GetAllTranslationsAsync(_currentLanguage);
+            _translations = FlattenTranslations(allTranslations);
+        }
+        catch
+        {
+            _translations = new Dictionary<string, string>();
+        }
+    }
+
+    private Dictionary<string, string> FlattenTranslations(Dictionary<string, object> source, string prefix = "")
+    {
+        var result = new Dictionary<string, string>();
+
+        foreach (var kvp in source)
+        {
+            var key = string.IsNullOrEmpty(prefix) ? kvp.Key : $"{prefix}.{kvp.Key}";
+
+            if (kvp.Value is JsonElement jsonElement)
+            {
+                if (jsonElement.ValueKind == JsonValueKind.Object)
+                {
+                    var nested = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonElement.GetRawText());
+                    if (nested != null)
+                    {
+                        foreach (var item in FlattenTranslations(nested, key))
+                        {
+                            result[item.Key] = item.Value;
+                        }
+                    }
+                }
+                else if (jsonElement.ValueKind == JsonValueKind.String)
+                {
+                    result[key] = jsonElement.GetString() ?? key;
+                }
+            }
+            else if (kvp.Value is Dictionary<string, object> dict)
+            {
+                foreach (var item in FlattenTranslations(dict, key))
+                {
+                    result[item.Key] = item.Value;
+                }
+            }
+            else if (kvp.Value is string str)
+            {
+                result[key] = str;
+            }
+        }
+
+        return result;
+    }
+
+    private string T(string key)
+    {
+        if (_translations.TryGetValue(key, out var value))
+        {
+            return value;
+        }
+
+        return key.Split('.').LastOrDefault() ?? key;
+    }
+
+    private sealed class AssistantItem
+    {
+        public string Id { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public bool IsEnabled { get; set; }
+        public CcSwitchToolStatus Status { get; set; } = new();
+    }
+}

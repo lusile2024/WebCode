@@ -824,6 +824,9 @@ public class FeishuChannelServiceTests
         public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
             => Task.FromResult(new Dictionary<string, string>());
 
+        public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult<CcSwitchSessionSnapshot?>(null);
+
         public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
             => Task.FromResult(true);
 
@@ -933,6 +936,9 @@ public class FeishuChannelServiceTests
 
         public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
             => Task.FromResult(new Dictionary<string, string>());
+
+        public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult<CcSwitchSessionSnapshot?>(null);
 
         public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
             => Task.FromResult(true);

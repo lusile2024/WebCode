@@ -191,7 +191,52 @@ public class FeishuCardActionServiceTests
         Assert.Equal(chatId, sentChatId);
         Assert.Contains("\"action\":\"show_create_session_form\"", cardJson);
         Assert.Contains("\"action\":\"switch_session\"", cardJson);
+        Assert.Contains("\"action\":\"sync_session_provider\"", cardJson);
         Assert.Contains("session-new", cardJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SyncSessionProvider_InvokesCliExecutorAndRefreshesSessionManagerCard()
+    {
+        const string chatId = "oc_workspace_chat";
+        const string sessionId = "session-sync-provider";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(sessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "luhaiyan",
+                WorkspacePath = @"D:\repo\superpowers",
+                ToolId = "codex",
+                FeishuChatKey = chatId,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                IsCustomWorkspace = true
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository));
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"sync_session_provider","session_id":"session-sync-provider","chat_key":"oc_workspace_chat"}""",
+            chatId: chatId);
+
+        var syncRequest = Assert.Single(cliExecutor.SyncRequests);
+        Assert.Equal(sessionId, syncRequest.SessionId);
+        Assert.Equal("codex", syncRequest.ToolId);
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
+
+        var payload = SerializeResponse(response);
+        Assert.Contains("sync_session_provider", payload);
+        Assert.Contains("session-sync-provider", payload);
     }
 
     [Fact]
@@ -1099,6 +1144,8 @@ public class FeishuCardActionServiceTests
 
         public List<string> ExecutedPrompts { get; } = new();
 
+        public List<(string SessionId, string? ToolId)> SyncRequests { get; } = new();
+
         public void SetSessionWorkspacePath(string sessionId, string workspacePath)
         {
             _workspacePaths[sessionId] = workspacePath;
@@ -1158,6 +1205,22 @@ public class FeishuCardActionServiceTests
 
         public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
             => Task.FromResult(new Dictionary<string, string>());
+
+        public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+        {
+            SyncRequests.Add((sessionId, toolId));
+            return Task.FromResult<CcSwitchSessionSnapshot?>(new CcSwitchSessionSnapshot
+            {
+                ToolId = toolId ?? string.Empty,
+                UsesSnapshot = true,
+                ProviderId = "provider-from-test",
+                ProviderName = "Provider From Test",
+                ProviderCategory = "custom",
+                SourceLiveConfigPath = @"C:\Users\tester\.codex\config.toml",
+                SnapshotRelativePath = Path.Combine(".codex", "config.toml"),
+                SyncedAt = DateTime.Now
+            });
+        }
 
         public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
             => Task.FromResult(true);
@@ -1672,6 +1735,26 @@ public class FeishuCardActionServiceTests
 
             session.WorkspacePath = workspacePath;
             session.IsCustomWorkspace = isCustomWorkspace;
+            session.UpdatedAt = DateTime.Now;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.UsesCcSwitchSnapshot = snapshot.UsesSnapshot;
+            session.CcSwitchSnapshotToolId = snapshot.ToolId;
+            session.CcSwitchProviderId = snapshot.ProviderId;
+            session.CcSwitchProviderName = snapshot.ProviderName;
+            session.CcSwitchProviderCategory = snapshot.ProviderCategory;
+            session.CcSwitchLiveConfigPath = snapshot.SourceLiveConfigPath;
+            session.CcSwitchSnapshotRelativePath = snapshot.SnapshotRelativePath;
+            session.CcSwitchSnapshotSyncedAt = snapshot.SyncedAt;
             session.UpdatedAt = DateTime.Now;
             return Task.FromResult(true);
         }

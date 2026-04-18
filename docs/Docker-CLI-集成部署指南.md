@@ -129,13 +129,18 @@ docker compose logs -f
 | `ANTHROPIC_SMALL_FAST_MODEL` | 否 | - | 小型快速模型 |
 | **Codex 配置** ||||
 | `NEW_API_KEY` | **是** | - | Codex API 密钥 |
-| `CODEX_MODEL` | 否 | `glm-4.7` | Codex 使用的模型 |
-| `CODEX_MODEL_REASONING_EFFORT` | 否 | `medium` | 推理强度 (low/medium/high) |
-| `CODEX_PROFILE` | 否 | `webcode` | 配置文件名称 |
-| `CODEX_BASE_URL` | 否 | `https://api.antsk.cn/v1` | Codex API 基础 URL |
-| `CODEX_PROVIDER_NAME` | 否 | `azure codex-mini` | 提供商名称 |
-| `CODEX_APPROVAL_POLICY` | 否 | `never` | 审批策略 (never/suggest/always) |
-| `CODEX_SANDBOX_MODE` | 否 | `danger-full-access` | 沙箱模式 |
+| `CODEX_MODEL` | 否 | `gpt-5.4` | Codex 使用的模型 |
+| `CODEX_MODEL_PROVIDER` | 否 | `meteor-ai` | 生成配置中的 `model_provider` |
+| `CODEX_MODEL_REASONING_EFFORT` | 否 | `xhigh` | 推理强度 (low/medium/high/xhigh) |
+| `CODEX_MODEL_REASONING_SUMMARY` | 否 | `detailed` | 推理摘要粒度 |
+| `CODEX_MODEL_VERBOSITY` | 否 | `high` | 文本详尽度 |
+| `CODEX_MAX_CONTEXT` | 否 | `1000000` | 最大上下文窗口 |
+| `CODEX_CONTEXT_COMPACT_LIMIT` | 否 | `800000` | 触发上下文压缩的阈值 |
+| `CODEX_BASE_URL` | 否 | `https://api.routin.ai/v1` | Codex API 基础 URL |
+| `CODEX_PROVIDER_NAME` | 否 | `meteor-ai` | 提供商显示名称 |
+| `CODEX_WIRE_API` | 否 | `responses` | Provider 使用的 wire API |
+| `CODEX_APPROVAL_POLICY` | 否 | `never` | 审批策略 (`untrusted`/`on-failure`/`on-request`/`never`) |
+| `CODEX_SANDBOX_MODE` | 否 | `danger-full-access` | 沙箱模式 (`read-only`/`workspace-write`/`danger-full-access`) |
 | **应用配置** ||||
 | `APP_PORT` | 否 | `5000` | 应用暴露端口 |
 | `DB_TYPE` | 否 | `Sqlite` | 数据库类型 |
@@ -185,34 +190,33 @@ Codex CLI 需要配置 `~/.codex/config.toml` 文件。Docker 容器启动时会
 ```toml
 # Codex CLI 配置文件
 
-model = "glm-4.7"
-model_reasoning_effort = "medium"
-
-profile = "webcode"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.webcode]
-name = "azure codex-mini"
-base_url = "https://api.antsk.cn/v1"
-env_key = "NEW_API_KEY"
-wire_api = "chat"
-
-
-[profiles.webcode]
-# 深度模型
-model = "glm-4.7"
-# provider id
-model_provider = "webcode"
-# 审批策略
+model = "gpt-5.4"
+model_provider = "meteor-ai"
+disable_response_storage = true
+max_context = 1000000
+context_compact_limit = 800000
 approval_policy = "never"
-# 推理强度
-model_reasoning_effort = "medium"
-# 推理总结粒度
-model_reasoning_summary = "detailed"
-# 是否强制开启推理总结
-model_supports_reasoning_summaries = true
-model_reasoning_summary_format = "experimental"
 sandbox_mode = "danger-full-access"
+
+rmcp_client = true
+model_reasoning_effort = "xhigh"
+model_reasoning_summary = "detailed"
+model_verbosity = "high"
+model_supports_reasoning_summaries = true
+
+[mcp_servers.claude]
+type = "stdio"
+command = "claude"
+args = ["mcp", "serve"]
+
+[model_providers."meteor-ai"]
+name = "meteor-ai"
+base_url = "https://api.routin.ai/v1"
+requires_openai_auth = true
+wire_api = "responses"
+
+[windows]
+sandbox = "elevated"
 ```
 
 ### 配置参数说明
@@ -220,12 +224,18 @@ sandbox_mode = "danger-full-access"
 | 参数 | 环境变量 | 说明 |
 |------|----------|------|
 | `model` | `CODEX_MODEL` | 使用的模型名称 |
-| `model_reasoning_effort` | `CODEX_MODEL_REASONING_EFFORT` | 推理强度：low/medium/high |
-| `profile` | `CODEX_PROFILE` | 使用的配置文件名 |
+| `model_provider` | `CODEX_MODEL_PROVIDER` 或 `CODEX_PROVIDER_NAME` | 当前模型提供商 ID |
+| `max_context` | `CODEX_MAX_CONTEXT` | 最大上下文窗口 |
+| `context_compact_limit` | `CODEX_CONTEXT_COMPACT_LIMIT` | 触发上下文压缩的阈值 |
+| `model_reasoning_effort` | `CODEX_MODEL_REASONING_EFFORT` | 推理强度：low/medium/high/xhigh |
+| `model_reasoning_summary` | `CODEX_MODEL_REASONING_SUMMARY` | 推理摘要粒度 |
+| `model_verbosity` | `CODEX_MODEL_VERBOSITY` | 文本详尽度：low/medium/high |
 | `base_url` | `CODEX_BASE_URL` | API 基础 URL |
-| `env_key` | 固定为 `NEW_API_KEY` | 读取 API 密钥的环境变量名 |
+| `wire_api` | `CODEX_WIRE_API` | Provider 使用的传输协议，默认 `responses` |
+| `requires_openai_auth` | 固定为 `true` | 通过 OpenAI 兼容鉴权读取 `NEW_API_KEY` |
 | `approval_policy` | `CODEX_APPROVAL_POLICY` | 审批策略 |
 | `sandbox_mode` | `CODEX_SANDBOX_MODE` | 沙箱模式 |
+| `[windows].sandbox` | 固定为 `elevated` | Windows 下使用提升沙箱 |
 
 ---
 

@@ -12,6 +12,7 @@ using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
 using WebCodeCli.Components.Dialogs;
+using WebCodeCli.Helpers;
 using WebCodeCli.Models;
 
 namespace WebCodeCli.Pages;
@@ -165,6 +166,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
     // 环境变量配置模态框
     private EnvironmentVariableConfigModal _envConfigModal = default!;
+    private AssistantManagementModal _assistantManagementModal = default!;
 
     // 外部 CLI 会话导入模态框
     private ExternalCliSessionImportModal _externalCliSessionImportModal = default!;
@@ -252,6 +254,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private bool _showSessionList = false;
     private bool _isLoadingSessions = false;
     private bool _isLoadingSession = false;
+    private string _syncingSessionId = string.Empty;
     private bool _openContextPanelOnRender = false;
     
     // Activity Bar 和 SidePanel 状态管理
@@ -564,29 +567,20 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             _allTools = CliExecutorService.GetAvailableTools(_currentUsername);
             
             // 获取启用的助手列表
-            _enabledAssistants = await SystemSettingsService.GetEnabledAssistantsAsync();
-            
-            // 根据启用的助手过滤工具
-            if (_enabledAssistants.Any())
+            _enabledAssistants = AssistantCatalogHelper.NormalizeEnabledAssistants(
+                await SystemSettingsService.GetEnabledAssistantsAsync());
+            _availableTools = AssistantCatalogHelper.FilterAvailableTools(_allTools, _enabledAssistants);
+
+            if (_availableTools.Any())
             {
-                _availableTools = _allTools.Where(tool => 
-                    _enabledAssistants.Any(assistant => 
-                        tool.Id.Contains(assistant.Replace("-", ""), StringComparison.OrdinalIgnoreCase) ||
-                        tool.Id.Equals(assistant, StringComparison.OrdinalIgnoreCase) ||
-                        (assistant == "claude-code" && tool.Id.Contains("claude", StringComparison.OrdinalIgnoreCase)) ||
-                        (assistant == "codex" && tool.Id.Contains("codex", StringComparison.OrdinalIgnoreCase)) ||
-                        (assistant == "opencode" && tool.Id.Contains("opencode", StringComparison.OrdinalIgnoreCase))
-                    )).ToList();
+                if (!_availableTools.Any(tool => tool.Id == _selectedToolId))
+                {
+                    _selectedToolId = _availableTools.First().Id;
+                }
             }
             else
             {
-                // 如果没有配置任何助手，显示所有工具（兼容旧配置）
-                _availableTools = _allTools;
-            }
-            
-            if (_availableTools.Any())
-            {
-                _selectedToolId = _availableTools.First().Id;
+                _selectedToolId = string.Empty;
             }
         }
         catch (Exception ex)
@@ -4043,6 +4037,58 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             StateHasChanged();
         }
     }
+
+    private async Task SyncSessionProviderAsync(SessionHistory session)
+    {
+        if (session == null || string.IsNullOrWhiteSpace(session.SessionId) || _syncingSessionId == session.SessionId)
+        {
+            return;
+        }
+
+        try
+        {
+            _syncingSessionId = session.SessionId;
+            StateHasChanged();
+
+            var effectiveToolId = string.IsNullOrWhiteSpace(session.CcSwitchSnapshotToolId)
+                ? session.ToolId
+                : session.CcSwitchSnapshotToolId;
+
+            await CliExecutorService.SyncSessionCcSwitchSnapshotAsync(session.SessionId, effectiveToolId);
+            await LoadSessionsAsync();
+
+            var refreshedSession = _sessions.FirstOrDefault(x => x.SessionId == session.SessionId);
+            if (refreshedSession != null && _currentSession?.SessionId == refreshedSession.SessionId)
+            {
+                MergeCcSwitchSnapshotState(_currentSession, refreshedSession);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[会话同步] 同步会话 Provider 失败: {ex.Message}");
+            await JSRuntime.InvokeVoidAsync("alert", T("codeAssistant.providerSyncFailed", ("message", ex.Message)));
+        }
+        finally
+        {
+            _syncingSessionId = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    private static void MergeCcSwitchSnapshotState(SessionHistory target, SessionHistory source)
+    {
+        target.ToolId = source.ToolId;
+        target.WorkspacePath = source.WorkspacePath;
+        target.UpdatedAt = source.UpdatedAt;
+        target.UsesCcSwitchSnapshot = source.UsesCcSwitchSnapshot;
+        target.CcSwitchSnapshotToolId = source.CcSwitchSnapshotToolId;
+        target.CcSwitchProviderId = source.CcSwitchProviderId;
+        target.CcSwitchProviderName = source.CcSwitchProviderName;
+        target.CcSwitchProviderCategory = source.CcSwitchProviderCategory;
+        target.CcSwitchLiveConfigPath = source.CcSwitchLiveConfigPath;
+        target.CcSwitchSnapshotRelativePath = source.CcSwitchSnapshotRelativePath;
+        target.CcSwitchSnapshotSyncedAt = source.CcSwitchSnapshotSyncedAt;
+    }
     
     /// <summary>
     /// 保存当前会话
@@ -4323,6 +4369,20 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>
+    /// 从侧边面板打开助手管理
+    /// </summary>
+    private async Task OpenAssistantManagementFromSidePanel()
+    {
+        _showSidePanel = false;
+        StateHasChanged();
+
+        if (_assistantManagementModal != null)
+        {
+            await _assistantManagementModal.ShowAsync();
+        }
+    }
+
+    /// <summary>
     /// 从侧边面板打开“外部 CLI 会话导入”
     /// </summary>
     private async Task OpenExternalCliSessionImportFromSidePanel()
@@ -4370,6 +4430,13 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         }
 
         await _externalCliSessionImportModal.ShowAsync(_currentUsername);
+    }
+
+    private async Task HandleAssistantManagementSaved(List<string> enabledAssistants)
+    {
+        _enabledAssistants = AssistantCatalogHelper.NormalizeEnabledAssistants(enabledAssistants);
+        await LoadAvailableTools();
+        StateHasChanged();
     }
 
     private async Task ReloadSessionsAfterExternalImportAsync(string sessionId)

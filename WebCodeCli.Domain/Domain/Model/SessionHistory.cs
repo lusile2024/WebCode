@@ -39,6 +39,46 @@ public class SessionHistory
     /// CLI 会话/线程 ID（用于恢复外部 CLI 会话，例如 codex thread、claude resume、opencode session）
     /// </summary>
     public string? CliThreadId { get; set; }
+
+    /// <summary>
+    /// 是否使用由 cc-switch 派生的会话级 Provider 快照
+    /// </summary>
+    public bool UsesCcSwitchSnapshot { get; set; }
+
+    /// <summary>
+    /// 会话快照对应的工具 ID
+    /// </summary>
+    public string? CcSwitchSnapshotToolId { get; set; }
+
+    /// <summary>
+    /// 会话固定的 Provider ID
+    /// </summary>
+    public string? CcSwitchProviderId { get; set; }
+
+    /// <summary>
+    /// 会话固定的 Provider 名称
+    /// </summary>
+    public string? CcSwitchProviderName { get; set; }
+
+    /// <summary>
+    /// 会话固定的 Provider 分类
+    /// </summary>
+    public string? CcSwitchProviderCategory { get; set; }
+
+    /// <summary>
+    /// 会话快照来源的 live 配置路径
+    /// </summary>
+    public string? CcSwitchLiveConfigPath { get; set; }
+
+    /// <summary>
+    /// 会话工作区内的配置快照相对路径
+    /// </summary>
+    public string? CcSwitchSnapshotRelativePath { get; set; }
+
+    /// <summary>
+    /// 最近一次同步会话快照的时间
+    /// </summary>
+    public DateTime? CcSwitchSnapshotSyncedAt { get; set; }
     
     /// <summary>
     /// 消息列表

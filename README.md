@@ -5,124 +5,125 @@
 </p>
 
 <p align="center">
-  <strong>一个把 AI CLI、Web 会话、多用户权限和飞书机器人串起来的工作平台</strong>
+  <strong>把 AI CLI、Web 会话、移动端和飞书工作流接到同一个控制面板里</strong>
 </p>
 
 <p align="center">
-  通过浏览器或飞书卡片管理 AI 会话、工作区、项目和命令执行，支持桌面和移动端。
+  通过浏览器或飞书卡片管理 Claude Code、Codex、OpenCode 会话、工作区、项目和命令执行。
 </p>
 
 ---
 
 ## 项目简介
 
-WebCode 是一个基于 `Blazor Server + .NET 10` 的 AI 工作平台，目标不是单纯做聊天界面，而是把本地/服务器上的 AI CLI 工具包装成一个可管理、可协作、可远程访问的工作系统。
+WebCode 是一个基于 `Blazor Server + .NET 10` 的 AI CLI 工作平台。它不是单机聊天壳，而是把本地或服务器上的 AI CLI 包装成一个可管理、可部署、可协作、可远程访问的工作系统。
 
-它当前覆盖的核心场景包括：
+当前仓库已经覆盖这些核心场景：
 
-- 在 Web 端创建和管理 AI 会话
-- 为不同会话绑定独立工作区
-- 发现并导入当前系统账户下已有的 `Claude Code`、`Codex`、`OpenCode` 会话
-- 基于原始 CLI transcript 恢复当前会话历史，而不只依赖 WebCode 自己记录的消息
-- 在飞书中通过机器人和卡片完成会话、项目、目录等操作
-- 为不同用户配置各自的 CLI 环境、飞书机器人、可访问目录和工具权限
-- 在手机、平板和桌面浏览器中持续使用同一套工作流
+- 在 Web 端创建、切换、关闭和恢复 AI 会话
+- 为每个会话绑定独立工作区和项目目录
+- 导入当前系统账户下已有的 `Claude Code`、`Codex`、`OpenCode` 本地会话
+- 从原始 CLI transcript 恢复历史消息，而不只依赖 WebCode 自己的消息存档
+- 在桌面端、移动端和飞书卡片里使用同一批会话
+- 为团队用户配置可用工具、目录白名单、飞书机器人和权限
+- 把 `cc-switch` 作为受管 CLI 的唯一 Provider 权威源
 
-如果你需要一个“可部署的 AI CLI 控制台”，而不是单机本地的命令行包装器，这个项目就是为这个目标设计的。
+如果你需要的是“可部署的 AI CLI 控制台”，而不是单机本地包装器，这个仓库就是为这个目标设计的。
 
-## 核心能力
+## 当前重点能力
 
-### 1. 多 AI CLI 接入
+### 多 AI CLI 接入
 
-当前仓库内已经围绕以下工具做了适配或运行支持：
+当前已适配或直接支持：
 
 | 工具 | 说明 | 状态 |
 |------|------|------|
-| `Claude Code` | 会话管理、流式输出、适配器解析 | 可用 |
+| `Claude Code` | 会话管理、流式输出、Transcript 恢复 | 可用 |
 | `Codex CLI` | JSONL 输出、沙箱/审批模式、会话执行 | 可用 |
-| `OpenCode` | 多模型工作流集成 | 可用 |
-| 其他 CLI | 可按适配器模式继续扩展 | 可扩展 |
+| `OpenCode` | 多模型工作流、会话导入与执行 | 可用 |
+| 自定义 CLI | 可继续按适配器模式扩展 | 可扩展 |
 
 相关实现主要位于 [WebCodeCli.Domain/Domain/Service/Adapters](./WebCodeCli.Domain/Domain/Service/Adapters)。
 
-### 2. Web 会话与工作区管理
+### Web、移动端、飞书统一会话流
 
 - 每个会话可绑定独立工作区
-- 支持默认目录、已有目录、项目目录、自定义目录
+- 支持默认目录、已有目录、项目目录和自定义目录
 - 支持文件浏览、预览、上传、复制路径等工作区操作
 - 支持历史会话切换、关闭、隔离和清理
-- 可与项目管理联动，从项目直接创建会话
-- 支持导入当前系统账户下已有的外部 CLI 会话，并在 WebCode 中继续使用
-- 支持从原始 CLI transcript 读取会话历史，用于恢复和回放已有上下文
+- 支持导入本地 CLI 会话并继续在 WebCode 中使用
+- 支持在移动端抽屉和飞书会话卡片里直接管理会话
 
-外部 CLI 会话导入当前具备这些约束：
-
-- 仅扫描当前操作系统账户下可访问的本地会话
-- 仅显示工作区位于允许目录/白名单中的会话
-- 同一个 `(ToolId, CliThreadId)` 只能被一个 WebCode 用户占用
-- Web 端与飞书端都支持分页浏览、导入并切换到这些会话
-
-### 3. 多用户与权限控制
-
-当前系统已经具备多用户基础能力：
+### 多用户与权限控制
 
 - 用户启用/禁用
 - 用户可用 CLI 工具限制
 - 用户白名单目录策略
-- 用户级 CLI 环境变量配置
 - 用户级飞书机器人配置
 - 默认共享配置 + 用户覆盖配置
 
-这意味着系统已经不再是单用户本地玩具，而是可以作为团队内的 AI 工作平台运行。
+### 外部会话导入与恢复
 
-### 4. 飞书机器人与卡片工作流
+外部 CLI 会话导入当前具备这些约束：
 
-飞书侧不是简单消息转发，而是一套完整的工作入口：
+- 只扫描当前操作系统账户下可访问的本地会话
+- 只显示工作区落在允许目录或白名单中的会话
+- 同一个 `(ToolId, CliThreadId)` 只能被一个 WebCode 用户占用
+- Web 端与飞书端都支持分页浏览、导入并切换到这些会话
 
-- 用户绑定自己的飞书机器人
-- 会话管理卡片
-- 导入本地 CLI 会话卡片
-- 项目管理卡片
-- 白名单目录浏览
-- 项目克隆 / 拉取 / 分支切换
-- 支持查看当前会话的原生 CLI 历史消息
-- 会话完成后的普通文本提醒
+### Windows 安装包发布
 
-飞书侧与外部会话相关的典型能力包括：
+仓库已经内置 Windows 安装包构建脚本，可直接生成：
 
-- 按工具筛选并导入 `Claude Code` / `Codex` / `OpenCode` 的本地会话
-- 在切换会话后自动回显对应 CLI 原生历史，便于快速接续上下文
-- 通过内置命令 `/history` 获取当前会话对应 CLI transcript 中的历史消息
+- 安装版 `WebCode-Setup-vX.Y.Z-win-x64.exe`
+- 便携版 `WebCode-vX.Y.Z-win-x64-portable.zip`
+- 校验文件 `SHA256SUMS.txt`
+- Release 说明 `RELEASE_NOTES.md`
 
-适配代码主要位于：
+## `cc-switch` 托管模型
 
-- [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels)
+从当前版本开始，`Claude Code`、`Codex`、`OpenCode` 这三类受管助手遵循同一套规则：
 
-### 5. 桌面与移动端统一体验
+1. `cc-switch` 是唯一 Provider 权威源。
+2. WebCode 不再允许为这三类工具手动填写环境变量、编辑 Provider 或切换 Profile。
+3. Provider 的激活与切换必须在 `cc-switch` 中完成。
+4. WebCode 只读取 `cc-switch` 的当前状态和 live config。
 
-- 响应式布局
-- 移动端导航与输入区域优化
-- 适配手机和平板
-- 同一套会话、文件、预览、设置工作流
+WebCode 会读取这些来源：
 
-移动端界面示意：
+- `~/.cc-switch/settings.json`
+- `~/.cc-switch/cc-switch.db`
+- `cc-switch` 写出的各工具 live 配置文件
 
-![移动端界面](images/mobile.png)
+### 会话级 Provider 快照
 
-## 产品截图
+WebCode 现在遵循“像终端窗口一样”的会话语义：
 
-> 以下图片来自仓库内置素材，用于说明典型界面和使用方式。
+- 新会话在第一次运行时，会复制当前激活 Provider 的 live config 作为该会话的快照
+- 已经在使用中的旧会话，不会因为你在 `cc-switch` 里切换了 Provider 而自动跟着变
+- 只有当你显式点击“同步 Provider”时，旧会话才会切换到 `cc-switch` 当前激活的 Provider
 
-![代码编程助手](images/coding.png)
-![PPT/文档辅助](images/ppt.png)
-![Skills/工作流](images/skill.png)
-![游戏/创意示例](images/games.png)
+这个同步入口当前已经补齐到：
+
+- 桌面 Web 会话列表
+- 移动端会话抽屉
+- 飞书会话管理卡片
+
+如果会话快照丢失或损坏，WebCode 会阻止继续执行，并提示你显式同步，而不是悄悄回退到机器当前 live 配置。
+
+### OpenCode 的启用方式
+
+`OpenCode` 和 `Claude Code`、`Codex` 一样受 `cc-switch` 管理。
+
+- 初始化时可以选择启用哪些受管助手
+- 如果初始化时没勾选，后续也可以在设置里的助手管理中重新启用
+- 是否真正可用，取决于 `cc-switch` 当前是否已经为该工具准备好可启动的 Provider 和 live config
 
 ## 快速开始
 
 ### 方式一：Docker 部署
 
-这是最直接的启动方式，适合试用、内网部署和小团队使用。
+适合试用、内网部署和小团队使用。
 
 ```bash
 git clone https://github.com/lusile2024/WebCode.git
@@ -133,8 +134,6 @@ docker compose up -d
 启动后访问：
 
 - `http://localhost:5000`
-
-首次访问会进入初始化流程。
 
 更多部署细节可查看：
 
@@ -150,23 +149,24 @@ docker compose up -d
 
 - [GitHub Releases](https://github.com/lusile2024/WebCode/releases/latest)
 
-当前 Windows 发布包会附带这些资产：
+当前 Windows 发布资产包括：
 
-- `WebCode-Setup-vX.Y.Z-win-x64.exe`：安装版，默认安装到 `%LOCALAPPDATA%\Programs\WebCode`
-- `WebCode-vX.Y.Z-win-x64-portable.zip`：免安装便携版，解压后可直接运行
-- `SHA256SUMS.txt`：安装包和 ZIP 的校验值
+- `WebCode-Setup-vX.Y.Z-win-x64.exe`
+- `WebCode-vX.Y.Z-win-x64-portable.zip`
+- `SHA256SUMS.txt`
+- `RELEASE_NOTES.md`
 
-安装版和便携版都已经内置 `win-x64` 自包含运行时，默认首次启动后访问：
+安装版与便携版都使用 `win-x64` 自包含运行时。默认首次启动后访问：
 
 - `http://localhost:6021`
 
-Windows 包默认会在程序目录下准备这些运行目录：
+程序目录下默认会准备：
 
 - `data/`
 - `logs/`
 - `workspaces/`
 
-安装版升级时会保留已有的 `appsettings.json`，适合在同一台机器上持续升级。
+安装版升级时会保留已有的 `appsettings.json`。
 
 ### 方式三：本地开发运行
 
@@ -175,7 +175,8 @@ Windows 包默认会在程序目录下准备这些运行目录：
 #### 环境要求
 
 - `.NET 10 SDK`
-- 已安装目标 AI CLI，例如 `claude`、`codex`、`opencode`
+- `cc-switch` 已正确安装并已为目标受管工具完成配置
+- 已安装 `claude`、`codex`、`opencode` 等目标 CLI
 
 #### 启动命令
 
@@ -192,80 +193,41 @@ dotnet run --project WebCodeCli
 
 如果你修改了根目录 [appsettings.json](./appsettings.json) 或 [WebCodeCli/appsettings.json](./WebCodeCli/appsettings.json) 中的 `urls` 配置，请以实际监听端口为准。
 
-## Windows 发布维护
-
-仓库已经内置 Windows 安装包构建脚本：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
-```
-
-脚本会读取 [Directory.Build.props](./Directory.Build.props) 里的版本号，并在 `artifacts/windows-installer/vX.Y.Z/` 下生成：
-
-- `publish/`：`dotnet publish` 的完整输出
-- `WebCode-vX.Y.Z-win-x64-portable.zip`：便携版压缩包
-- `installer/WebCode-Setup-vX.Y.Z-win-x64.exe`：Inno Setup 安装包
-- `SHA256SUMS.txt`：SHA-256 校验文件
-- `RELEASE_NOTES.md`：随 release 一起上传的说明文件
-
-构建机需要满足：
-
-- Windows
-- `.NET 10 SDK`
-- `Inno Setup 6`
-
-构建完成后，可直接把上述资产上传到 GitHub Release。
-
 ## 首次初始化建议
 
-首次启动建议按下面顺序完成配置：
+当前初始化流程建议按这个顺序完成：
 
 1. 创建管理员账户
 2. 确认是否开启登录认证
-3. 配置至少一个可用 CLI 工具的环境变量
-4. 验证工作区根目录和存储目录
-5. 如需飞书集成，再配置飞书机器人参数
-6. 如需多用户，进入管理界面配置用户、目录白名单和工具权限
-7. 如需恢复现有 CLI 工作上下文，可在 Web 端或飞书端导入本地外部会话
+3. 选择希望在 WebCode 中启用的受管助手
+4. 在向导里检查 `cc-switch` 就绪状态，并确保所选助手都已经可启动
+5. 验证工作区根目录和存储目录
+6. 如需飞书集成，再配置飞书机器人参数
+7. 如需多用户，进入管理界面配置用户、目录白名单和工具权限
+8. 如需恢复已有上下文，可导入本地外部 CLI 会话
 
-初始化向导界面示意：
+初始化向导不再承担这些职责：
 
-![设置向导 - 第一步](images/setup1.png)
-![设置向导 - 第二步](images/setup2.png)
-![设置向导 - 第三步](images/setup3.png)
+- 手动录入受管工具环境变量
+- 手动切换受管工具 Provider
+- 手动编辑受管工具 live config
+
+这些动作现在都必须在 `cc-switch` 中完成。
 
 ## 配置说明
 
-### CLI 配置
+### 受管助手配置
 
-CLI 工具配置支持通过界面和配置文件两种方式维护。
+对 `Claude Code`、`Codex`、`OpenCode` 来说：
 
-典型配置结构如下：
+- Provider 切换只能在 `cc-switch` 里做
+- WebCode 设置页只能查看 `cc-switch` 状态，不能手动编辑环境变量
+- 助手管理页可以启用或停用助手，但不会替代 `cc-switch` 管理 Provider
+- 会话级“同步 Provider”只会把当前 `cc-switch` 激活状态复制到指定会话，不会改写 `cc-switch`
 
-```json
-{
-  "CliTools": {
-    "Tools": [
-      {
-        "Id": "claude-code",
-        "Name": "Claude Code",
-        "Command": "claude",
-        "ArgumentTemplate": "-p \"{prompt}\"",
-        "Enabled": true
-      },
-      {
-        "Id": "codex",
-        "Name": "Codex",
-        "Command": "codex",
-        "ArgumentTemplate": "exec \"{prompt}\"",
-        "Enabled": true
-      }
-    ]
-  }
-}
-```
+### 自定义 CLI 配置
 
-更详细的配置与说明可参考：
+如果你要接入非 `cc-switch` 受管的自定义 CLI，仍然可以通过 `CliTools.Tools` 扩展工具定义。相关文档可参考：
 
 - [cli/README.md](./cli/README.md)
 - [docs/CLI工具配置说明.md](./docs/CLI工具配置说明.md)
@@ -273,7 +235,7 @@ CLI 工具配置支持通过界面和配置文件两种方式维护。
 
 ### Docker 数据目录
 
-`docker-compose.yml` 默认会挂载以下目录：
+`docker-compose.yml` 默认会挂载这些目录：
 
 - `./webcodecli-data`：数据库与运行数据
 - `./webcodecli-workspaces`：工作区目录
@@ -281,33 +243,35 @@ CLI 工具配置支持通过界面和配置文件两种方式维护。
 
 ### 数据库
 
-默认使用 SQLite：
+默认数据库为 SQLite：
 
 - `WebCodeCli.db`
 
 本地开发默认连接字符串来自根目录 [appsettings.json](./appsettings.json)。
 
-## 多用户与飞书建议
+## Windows 发布维护
 
-如果你准备把它作为团队服务运行，建议优先关注这几项：
+仓库内置安装包构建脚本：
 
-- 为每个用户设置独立的白名单目录
-- 为每个用户限制可用 CLI 工具
-- 为每个用户配置自己的飞书机器人
-- 为需要接续工作的用户开放“导入外部 CLI 会话”能力，但仍限制在各自白名单目录内
-- 避免把数据库文件提交到 Git
-- 明确区分“共享默认配置”和“用户覆盖配置”
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
+```
 
-飞书和多用户能力相关代码分布在：
+脚本会读取 [Directory.Build.props](./Directory.Build.props) 中的版本号，并在 `artifacts/windows-installer/vX.Y.Z/` 下生成：
 
-- [WebCodeCli/Controllers](./WebCodeCli/Controllers)
-- [WebCodeCli/Components](./WebCodeCli/Components)
-- [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels)
-- [WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig](./WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig)
+- `publish/`
+- `WebCode-vX.Y.Z-win-x64-portable.zip`
+- `installer/WebCode-Setup-vX.Y.Z-win-x64.exe`
+- `SHA256SUMS.txt`
+- `RELEASE_NOTES.md`
+
+构建机要求：
+
+- Windows
+- `.NET 10 SDK`
+- `Inno Setup 6`
 
 ## 项目结构
-
-当前仓库的主要结构如下：
 
 ```text
 WebCode/
@@ -321,12 +285,12 @@ WebCode/
 └── README.md
 ```
 
-和旧版文档相比，当前实际项目名已经是：
+当前实际项目名为：
 
 - `WebCodeCli`
 - `WebCodeCli.Domain`
 
-如果你在二次开发时看到 `WebCode` / `WebCode.Domain` 这类旧路径描述，请以仓库真实目录为准。
+如果你在旧文档或历史笔记里看到 `WebCode` / `WebCode.Domain` 这样的旧路径描述，请以仓库真实目录为准。
 
 ## 技术栈
 
@@ -339,7 +303,7 @@ WebCode/
 | 默认数据库 | SQLite |
 | 反向代理 | YARP |
 | Markdown | Markdig |
-| AI CLI 集成 | Claude Code / Codex / OpenCode 等 |
+| AI CLI 集成 | Claude Code / Codex / OpenCode |
 
 ## 常用文档
 
@@ -349,22 +313,6 @@ WebCode/
 - [docs/README_CodeAssistant.md](./docs/README_CodeAssistant.md)
 - [docs/workspace-management-guide.md](./docs/workspace-management-guide.md)
 - [docs/workspace-management-deployment-guide.md](./docs/workspace-management-deployment-guide.md)
-
-## 在线试用与交流
-
-如果你保留当前公开体验入口，可以继续使用下面的信息：
-
-| 地址 | 用户名 | 密码 |
-|------|--------|------|
-| [https://webcode.tree456.com/](https://webcode.tree456.com/) | `treechat` | `treechat@123` |
-
-> 这类公开演示环境仅适合体验，不适合存放敏感数据。
-
-交流群二维码：
-
-<p align="center">
-  <img src="images/qrcode.jpg" alt="微信群二维码" width="200" />
-</p>
 
 ## 许可证
 
@@ -376,5 +324,5 @@ WebCode/
 ---
 
 <p align="center">
-  <strong>让 AI CLI 从“本地命令”升级为“可管理的工作平台”</strong>
+  <strong>让 AI CLI 从“本地命令”升级为“可管理、可部署、可协作的工作平台”</strong>
 </p>

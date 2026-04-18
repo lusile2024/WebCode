@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using WebCodeCli.Domain.Common.Extensions;
@@ -12,13 +13,15 @@ namespace WebCodeCli.Domain.Domain.Service;
 public class LocalizationService : ILocalizationService
 {
     private readonly IJSRuntime _jsRuntime;
-    private readonly string _resourcePath = "Resources/Localization";
+    private readonly IWebHostEnvironment? _webHostEnvironment;
+    private readonly string _resourcePath = Path.Combine("Resources", "Localization");
     private readonly Dictionary<string, Dictionary<string, object>> _translationsCache = new();
     private string _currentLanguage = "zh-CN";
 
-    public LocalizationService(IJSRuntime jsRuntime)
+    public LocalizationService(IJSRuntime jsRuntime, IWebHostEnvironment? webHostEnvironment = null)
     {
         _jsRuntime = jsRuntime;
+        _webHostEnvironment = webHostEnvironment;
     }
 
     public async Task<string> GetCurrentLanguageAsync()
@@ -74,13 +77,31 @@ public class LocalizationService : ILocalizationService
                 {
                     value = dict[k];
                 }
+                else if (value is JsonElement element && element.ValueKind == JsonValueKind.Object)
+                {
+                    if (element.TryGetProperty(k, out var nestedElement))
+                    {
+                        value = nestedElement;
+                    }
+                    else
+                    {
+                        return key; // 找不到翻译，返回键本身
+                    }
+                }
                 else
                 {
                     return key; // 找不到翻译，返回键本身
                 }
             }
 
-            if (value is not string stringValue)
+            var stringValue = value switch
+            {
+                string str => str,
+                JsonElement stringElement when stringElement.ValueKind == JsonValueKind.String => stringElement.GetString(),
+                _ => null
+            };
+
+            if (stringValue is null)
             {
                 return key;
             }
@@ -107,6 +128,15 @@ public class LocalizationService : ILocalizationService
             return _translationsCache[language];
         }
 
+        var localTranslations = await TryLoadTranslationsFromFileAsync(language);
+        if (localTranslations != null)
+        {
+            _translationsCache[language] = localTranslations;
+            await TrySyncTranslationsToJsAsync(language, localTranslations);
+            Console.WriteLine($"[LocalizationService] 已从本地文件加载 {language} 翻译资源");
+            return localTranslations;
+        }
+
         // 重试逻辑，处理网络延迟和 JS 未就绪的情况
         const int maxRetries = 3;
         for (int retry = 0; retry < maxRetries; retry++)
@@ -128,14 +158,12 @@ public class LocalizationService : ILocalizationService
                     return new Dictionary<string, object>();
                 }
                 
-                var translations = JsonSerializer.Deserialize<Dictionary<string, object>>(json, 
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) 
-                    ?? new Dictionary<string, object>();
+                var translations = DeserializeTranslations(json);
 
                 _translationsCache[language] = translations;
                 
                 // 同时加载到 JS 端
-                await _jsRuntime.InvokeVoidAsync("localizationHelper.loadTranslations", language, translations);
+                await TrySyncTranslationsToJsAsync(language, translations);
 
                 Console.WriteLine($"[LocalizationService] 成功加载 {language} 翻译资源");
                 return translations;
@@ -169,6 +197,56 @@ public class LocalizationService : ILocalizationService
     {
         _translationsCache.Clear();
         await GetAllTranslationsAsync(_currentLanguage);
+    }
+
+    private async Task<Dictionary<string, object>?> TryLoadTranslationsFromFileAsync(string language)
+    {
+        try
+        {
+            var webRootPath = _webHostEnvironment?.WebRootPath;
+            if (string.IsNullOrWhiteSpace(webRootPath))
+            {
+                return null;
+            }
+
+            var filePath = Path.Combine(webRootPath, _resourcePath, $"{language}.json");
+            if (!File.Exists(filePath))
+            {
+                return null;
+            }
+
+            var json = await File.ReadAllTextAsync(filePath);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return new Dictionary<string, object>();
+            }
+
+            return DeserializeTranslations(json);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[LocalizationService] 读取本地翻译文件失败 ({language}): {ex.Message}");
+            return null;
+        }
+    }
+
+    private static Dictionary<string, object> DeserializeTranslations(string json)
+    {
+        return JsonSerializer.Deserialize<Dictionary<string, object>>(json,
+                   new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+               ?? new Dictionary<string, object>();
+    }
+
+    private async Task TrySyncTranslationsToJsAsync(string language, Dictionary<string, object> translations)
+    {
+        try
+        {
+            await _jsRuntime.InvokeVoidAsync("localizationHelper.loadTranslations", language, translations);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[LocalizationService] 同步 {language} 翻译到 JS 失败: {ex.Message}");
+        }
     }
 }
 

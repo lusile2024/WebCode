@@ -5,7 +5,6 @@ using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
-using WebCodeCli.Domain.Repositories.Base.CliToolEnv;
 using WebCodeCli.Domain.Repositories.Base.SystemSettings;
 using WebCodeCli.Domain.Repositories.Base.UserAccount;
 
@@ -167,28 +166,28 @@ public class SystemSettingsService : ISystemSettingsService
 {
     private readonly ILogger<SystemSettingsService> _logger;
     private readonly ISystemSettingsRepository _repository;
-    private readonly ICliToolEnvironmentVariableRepository _envRepository;
     private readonly CliToolsOption _cliOptions;
     private readonly AuthenticationOption _authOptions;
     private readonly ILocalCliConfigDetector _localConfigDetector;
     private readonly IUserAccountService _userAccountService;
+    private readonly ICcSwitchService _ccSwitchService;
 
     public SystemSettingsService(
         ILogger<SystemSettingsService> logger,
         ISystemSettingsRepository repository,
-        ICliToolEnvironmentVariableRepository envRepository,
         IOptions<CliToolsOption> cliOptions,
         IOptions<AuthenticationOption> authOptions,
         ILocalCliConfigDetector localConfigDetector,
-        IUserAccountService userAccountService)
+        IUserAccountService userAccountService,
+        ICcSwitchService ccSwitchService)
     {
         _logger = logger;
         _repository = repository;
-        _envRepository = envRepository;
         _cliOptions = cliOptions.Value;
         _authOptions = authOptions.Value;
         _localConfigDetector = localConfigDetector;
         _userAccountService = userAccountService;
+        _ccSwitchService = ccSwitchService;
     }
 
     /// <summary>
@@ -252,28 +251,7 @@ public class SystemSettingsService : ISystemSettingsService
                 _logger.LogInformation("创建工作区目录: {Path}", workspaceRoot);
             }
 
-            // 4. 保存 Claude Code 环境变量
-            if (config.ClaudeCodeEnvVars.Any())
-            {
-                await _envRepository.SaveEnvironmentVariablesAsync("claude-code", config.ClaudeCodeEnvVars);
-                _logger.LogInformation("已保存 Claude Code 环境变量配置");
-            }
-
-            // 5. 保存 Codex 环境变量
-            if (config.CodexEnvVars.Any())
-            {
-                await _envRepository.SaveEnvironmentVariablesAsync("codex", config.CodexEnvVars);
-                _logger.LogInformation("已保存 Codex 环境变量配置");
-            }
-
-            // 6. 保存 OpenCode 环境变量
-            if (config.OpenCodeEnvVars.Any())
-            {
-                await _envRepository.SaveEnvironmentVariablesAsync("opencode", config.OpenCodeEnvVars);
-                _logger.LogInformation("已保存 OpenCode 环境变量配置");
-            }
-
-            // 7. 保存启用的助手列表
+            // 4. 保存启用的助手列表
             if (config.EnabledAssistants.Any())
             {
                 var enabledAssistantsJson = JsonSerializer.Serialize(config.EnabledAssistants);
@@ -281,7 +259,7 @@ public class SystemSettingsService : ISystemSettingsService
                 _logger.LogInformation("已保存启用的助手列表: {Assistants}", string.Join(", ", config.EnabledAssistants));
             }
 
-            // 8. 标记系统已初始化
+            // 5. 标记系统已初始化
             await _repository.SetBoolAsync(SystemSettingsKeys.SystemInitialized, true, "系统已完成初始化");
 
             _logger.LogInformation("系统初始化配置完成");
@@ -356,17 +334,17 @@ public class SystemSettingsService : ISystemSettingsService
             AdminUsername = await _repository.GetAsync(SystemSettingsKeys.AdminUsername, "admin")
         };
 
-        // 检查 Claude Code 配置
-        var claudeEnvVars = await _envRepository.GetEnvironmentVariablesByToolIdAsync("claude-code");
-        summary.ClaudeCodeConfigured = claudeEnvVars.Any();
-
-        // 检查 Codex 配置
-        var codexEnvVars = await _envRepository.GetEnvironmentVariablesByToolIdAsync("codex");
-        summary.CodexConfigured = codexEnvVars.Any();
-
-        // 检查 OpenCode 配置
-        var openCodeEnvVars = await _envRepository.GetEnvironmentVariablesByToolIdAsync("opencode");
-        summary.OpenCodeConfigured = openCodeEnvVars.Any();
+        try
+        {
+            var ccSwitchStatuses = await _ccSwitchService.GetToolStatusesAsync(new[] { "claude-code", "codex", "opencode" });
+            summary.ClaudeCodeConfigured = ccSwitchStatuses.TryGetValue("claude-code", out var claudeStatus) && claudeStatus.IsLaunchReady;
+            summary.CodexConfigured = ccSwitchStatuses.TryGetValue("codex", out var codexStatus) && codexStatus.IsLaunchReady;
+            summary.OpenCodeConfigured = ccSwitchStatuses.TryGetValue("opencode", out var openCodeStatus) && openCodeStatus.IsLaunchReady;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "读取 cc-switch 配置摘要失败，CLI 配置摘要将显示为未就绪");
+        }
 
         // 获取启用的助手列表
         var enabledAssistantsJson = await _repository.GetAsync(SystemSettingsKeys.EnabledAssistants);

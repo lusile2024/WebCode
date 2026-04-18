@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SqlSugar;
 using System.IO;
 using WebCodeCli.Domain.Common.Extensions;
+using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Domain.Repositories.Base.ChatSession;
 
@@ -118,6 +119,30 @@ public class ChatSessionRepository : Repository<ChatSessionEntity>, IChatSession
             .SetColumns(x => x.WorkspacePath == workspacePath)
             .SetColumns(x => x.IsCustomWorkspace == isCustomWorkspace)
             .SetColumns(x => x.IsWorkspaceValid == isValid)
+            .SetColumns(x => x.UpdatedAt == DateTime.Now)
+            .Where(x => x.SessionId == sessionId)
+            .ExecuteCommandAsync();
+
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// 更新会话的 cc-switch Provider 快照元数据
+    /// </summary>
+    public async Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var rows = await GetDB().Updateable<ChatSessionEntity>()
+            .SetColumns(x => x.UsesCcSwitchSnapshot == snapshot.UsesSnapshot)
+            .SetColumns(x => x.CcSwitchSnapshotToolId == snapshot.ToolId)
+            .SetColumns(x => x.CcSwitchProviderId == snapshot.ProviderId)
+            .SetColumns(x => x.CcSwitchProviderName == snapshot.ProviderName)
+            .SetColumns(x => x.CcSwitchProviderCategory == snapshot.ProviderCategory)
+            .SetColumns(x => x.CcSwitchLiveConfigPath == snapshot.SourceLiveConfigPath)
+            .SetColumns(x => x.CcSwitchSnapshotRelativePath == snapshot.SnapshotRelativePath)
+            .SetColumns(x => x.CcSwitchSnapshotSyncedAt == snapshot.SyncedAt)
             .SetColumns(x => x.UpdatedAt == DateTime.Now)
             .Where(x => x.SessionId == sessionId)
             .ExecuteCommandAsync();

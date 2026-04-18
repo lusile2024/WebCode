@@ -227,6 +227,14 @@ public static class DatabaseInitializer
         try
         {
             EnsureColumnIfNotExists(db, "ChatSession", "CliThreadId", "varchar(256) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "UsesCcSwitchSnapshot", "INTEGER NOT NULL DEFAULT 0", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotToolId", "varchar(64) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchProviderId", "varchar(256) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchProviderName", "varchar(256) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchProviderCategory", "varchar(128) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchLiveConfigPath", "varchar(1024) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotRelativePath", "varchar(512) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotSyncedAt", "datetime NULL", logger);
             BackfillCliThreadIdsFromImportedTitles(db, logger);
         }
         catch (Exception ex)

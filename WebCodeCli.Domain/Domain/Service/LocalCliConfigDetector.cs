@@ -118,11 +118,16 @@ public class LocalCliConfigDetector : ILocalCliConfigDetector
         "NEW_API_KEY",
         "CODEX_BASE_URL",
         "CODEX_MODEL",
+        "CODEX_MODEL_PROVIDER",
+        "CODEX_MAX_CONTEXT",
+        "CODEX_CONTEXT_COMPACT_LIMIT",
         "CODEX_PROFILE",
         "CODEX_PROVIDER_NAME",
         "CODEX_WIRE_API",
         "CODEX_APPROVAL_POLICY",
         "CODEX_MODEL_REASONING_EFFORT",
+        "CODEX_MODEL_REASONING_SUMMARY",
+        "CODEX_MODEL_VERBOSITY",
         "CODEX_SANDBOX_MODE",
     };
 

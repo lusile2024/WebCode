@@ -44,6 +44,54 @@ public class ChatSessionEntity
     /// </summary>
     [SugarColumn(Length = 256, IsNullable = true)]
     public string? CliThreadId { get; set; }
+
+    /// <summary>
+    /// 是否使用由 cc-switch 当前激活配置派生出的会话级快照
+    /// </summary>
+    [SugarColumn(IsNullable = false)]
+    public bool UsesCcSwitchSnapshot { get; set; } = false;
+
+    /// <summary>
+    /// 会话快照对应的工具 ID
+    /// </summary>
+    [SugarColumn(Length = 64, IsNullable = true)]
+    public string? CcSwitchSnapshotToolId { get; set; }
+
+    /// <summary>
+    /// 会话固定的 Provider ID
+    /// </summary>
+    [SugarColumn(Length = 256, IsNullable = true)]
+    public string? CcSwitchProviderId { get; set; }
+
+    /// <summary>
+    /// 会话固定的 Provider 名称
+    /// </summary>
+    [SugarColumn(Length = 256, IsNullable = true)]
+    public string? CcSwitchProviderName { get; set; }
+
+    /// <summary>
+    /// 会话固定的 Provider 分类
+    /// </summary>
+    [SugarColumn(Length = 128, IsNullable = true)]
+    public string? CcSwitchProviderCategory { get; set; }
+
+    /// <summary>
+    /// 会话快照来源的 live 配置文件路径
+    /// </summary>
+    [SugarColumn(Length = 1024, IsNullable = true)]
+    public string? CcSwitchLiveConfigPath { get; set; }
+
+    /// <summary>
+    /// 会话工作区中的快照相对路径
+    /// </summary>
+    [SugarColumn(Length = 512, IsNullable = true)]
+    public string? CcSwitchSnapshotRelativePath { get; set; }
+
+    /// <summary>
+    /// 最近一次从 cc-switch 同步快照的时间
+    /// </summary>
+    [SugarColumn(IsNullable = true)]
+    public DateTime? CcSwitchSnapshotSyncedAt { get; set; }
     
     /// <summary>
     /// 创建时间

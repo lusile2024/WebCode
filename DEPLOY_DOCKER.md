@@ -153,6 +153,7 @@ docker run -d \
 - `NEW_API_KEY`: API 密钥
 - `CODEX_BASE_URL`: API 基础地址
 - `CODEX_MODEL`: 模型名称
+- `CODEX_MODEL_PROVIDER`: 提供商 ID（默认 `meteor-ai`）
 - 可以跳过，稍后在系统中配置
 
 完成向导后，系统会自动跳转到登录页面。
@@ -327,11 +328,16 @@ ANTHROPIC_SMALL_FAST_MODEL=glm-4.7
 
 # Codex（可选，也可在页面配置）
 NEW_API_KEY=your_api_key
-CODEX_MODEL=glm-4.7
-CODEX_MODEL_REASONING_EFFORT=medium
-CODEX_PROFILE=webcode
-CODEX_BASE_URL=https://api.antsk.cn/v1
-CODEX_PROVIDER_NAME=azure codex-mini
+CODEX_MODEL=gpt-5.4
+CODEX_MODEL_PROVIDER=meteor-ai
+CODEX_MODEL_REASONING_EFFORT=xhigh
+CODEX_MODEL_REASONING_SUMMARY=detailed
+CODEX_MODEL_VERBOSITY=high
+CODEX_MAX_CONTEXT=1000000
+CODEX_CONTEXT_COMPACT_LIMIT=800000
+CODEX_BASE_URL=https://api.routin.ai/v1
+CODEX_PROVIDER_NAME=meteor-ai
+CODEX_WIRE_API=responses
 CODEX_APPROVAL_POLICY=never
 CODEX_SANDBOX_MODE=danger-full-access
 

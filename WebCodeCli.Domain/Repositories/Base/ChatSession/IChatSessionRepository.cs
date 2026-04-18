@@ -1,4 +1,5 @@
 using WebCodeCli.Domain.Repositories.Base;
+using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Domain.Repositories.Base.ChatSession;
 
@@ -46,6 +47,11 @@ public interface IChatSessionRepository : IRepository<ChatSessionEntity>
     /// 更新会话的工作区绑定（仅更新数据库字段，不创建目录）
     /// </summary>
     Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace);
+
+    /// <summary>
+    /// 更新会话的 cc-switch Provider 快照元数据
+    /// </summary>
+    Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot);
 
     /// <summary>
     /// 根据飞书ChatKey获取所有会话

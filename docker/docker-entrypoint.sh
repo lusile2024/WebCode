@@ -31,34 +31,33 @@ cat > "${CODEX_CONFIG_FILE}" << EOF
 # Codex CLI 配置文件（由 Docker 启动脚本自动生成）
 # 生成时间: $(date)
 
-model = "${CODEX_MODEL:-glm-4.7}"
-model_reasoning_effort = "${CODEX_MODEL_REASONING_EFFORT:-medium}"
-
-profile = "${CODEX_PROFILE:-webcode}"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.${CODEX_PROFILE:-webcode}]
-name = "${CODEX_PROVIDER_NAME:-webcode codex}"
-base_url = "${CODEX_BASE_URL:-https://api.antsk.cn/v1}"
-env_key = "NEW_API_KEY"
-wire_api = "${CODEX_WIRE_API:-chat}"
-
-
-[profiles.${CODEX_PROFILE:-webcode}]
-# 深度模型
-model = "${CODEX_MODEL:-glm-4.7}"
-# provider id
-model_provider = "${CODEX_PROFILE:-webcode}"
-# 审批策略
+model = "${CODEX_MODEL:-gpt-5.4}"
+model_provider = "${CODEX_MODEL_PROVIDER:-${CODEX_PROVIDER_NAME:-meteor-ai}}"
+disable_response_storage = true
+max_context = ${CODEX_MAX_CONTEXT:-1000000}
+context_compact_limit = ${CODEX_CONTEXT_COMPACT_LIMIT:-800000}
 approval_policy = "${CODEX_APPROVAL_POLICY:-never}"
-# 推理强度
-model_reasoning_effort = "${CODEX_MODEL_REASONING_EFFORT:-medium}"
-# 推理总结粒度
-model_reasoning_summary = "detailed"
-# 是否强制开启推理总结
-model_supports_reasoning_summaries = true
-model_reasoning_summary_format = "experimental"
 sandbox_mode = "${CODEX_SANDBOX_MODE:-danger-full-access}"
+
+rmcp_client = true
+model_reasoning_effort = "${CODEX_MODEL_REASONING_EFFORT:-xhigh}"
+model_reasoning_summary = "${CODEX_MODEL_REASONING_SUMMARY:-detailed}"
+model_verbosity = "${CODEX_MODEL_VERBOSITY:-high}"
+model_supports_reasoning_summaries = true
+
+[mcp_servers.claude]
+type = "stdio"
+command = "claude"
+args = ["mcp", "serve"]
+
+[model_providers."${CODEX_MODEL_PROVIDER:-${CODEX_PROVIDER_NAME:-meteor-ai}}"]
+name = "${CODEX_PROVIDER_NAME:-meteor-ai}"
+base_url = "${CODEX_BASE_URL:-https://api.routin.ai/v1}"
+requires_openai_auth = true
+wire_api = "${CODEX_WIRE_API:-responses}"
+
+[windows]
+sandbox = "elevated"
 EOF
 
 echo "Codex configuration generated at: ${CODEX_CONFIG_FILE}"

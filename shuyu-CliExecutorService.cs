@@ -1659,19 +1659,8 @@ public class CliExecutorService : ICliExecutorService
     {
         try
         {
-            // 从环境变量中提取配置值
-            var baseUrl = envVars.GetValueOrDefault("CODEX_BASE_URL", "https://api.antsk.cn/v1");
-            var model = envVars.GetValueOrDefault("CODEX_MODEL", "glm-4.7");
-            var profile = envVars.GetValueOrDefault("CODEX_PROFILE", "webcode");
-            var providerName = envVars.GetValueOrDefault("CODEX_PROVIDER_NAME", "webcode codex");
-            var wireApi = envVars.GetValueOrDefault("CODEX_WIRE_API", "chat");
-            var approvalPolicy = envVars.GetValueOrDefault("CODEX_APPROVAL_POLICY", "never");
-            var reasoningEffort = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_EFFORT", "medium");
-            var sandboxMode = envVars.GetValueOrDefault("CODEX_SANDBOX_MODE", "danger-full-access");
-            
-            // 计算配置哈希值（不包含时间戳）
-            var configKey = $"{baseUrl}|{model}|{profile}|{providerName}|{wireApi}|{approvalPolicy}|{reasoningEffort}|{sandboxMode}";
-            var configHash = configKey.GetHashCode().ToString();
+            var configContent = BuildCodexConfigContent(envVars);
+            var configHash = configContent.GetHashCode().ToString();
             
             // 检查配置是否变化
             lock (_codexConfigLock)
@@ -1705,47 +1694,61 @@ public class CliExecutorService : ICliExecutorService
                 Directory.CreateDirectory(codexConfigDir);
             }
             
-            // 生成配置文件内容（不包含动态时间戳，便于比较）
-            var configContent = $@"# Codex CLI 配置文件（由 WebCode 动态生成）
-
-model = ""{model}""
-model_reasoning_effort = ""{reasoningEffort}""
-
-profile = ""{profile}""
-windows_wsl_setup_acknowledged = true
-
-[model_providers.{profile}]
-name = ""{providerName}""
-base_url = ""{baseUrl}""
-env_key = ""NEW_API_KEY""
-wire_api = ""{wireApi}""
-
-
-[profiles.{profile}]
-# 深度模型
-model = ""{model}""
-# provider id
-model_provider = ""{profile}""
-# 审批策略
-approval_policy = ""{approvalPolicy}""
-# 推理强度
-model_reasoning_effort = ""{reasoningEffort}""
-# 推理总结粒度
-model_reasoning_summary = ""detailed""
-# 是否强制开启推理总结
-model_supports_reasoning_summaries = true
-model_reasoning_summary_format = ""experimental""
-sandbox_mode = ""{sandboxMode}""
-";
-            
             // 写入配置文件
             File.WriteAllText(codexConfigFile, configContent);
-            _logger.LogInformation("已生成 Codex 配置文件: {Path}, BaseUrl: {BaseUrl}", codexConfigFile, baseUrl);
+            _logger.LogInformation("已生成 Codex 配置文件: {Path}", codexConfigFile);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "生成 Codex 配置文件失败");
         }
+    }
+
+    private static string BuildCodexConfigContent(Dictionary<string, string> envVars)
+    {
+        var baseUrl = envVars.GetValueOrDefault("CODEX_BASE_URL", "https://api.routin.ai/v1");
+        var model = envVars.GetValueOrDefault("CODEX_MODEL", "gpt-5.4");
+        var providerName = envVars.GetValueOrDefault("CODEX_PROVIDER_NAME", "meteor-ai");
+        var providerId = envVars.GetValueOrDefault("CODEX_MODEL_PROVIDER", providerName);
+        var wireApi = envVars.GetValueOrDefault("CODEX_WIRE_API", "responses");
+        var approvalPolicy = envVars.GetValueOrDefault("CODEX_APPROVAL_POLICY", "never");
+        var reasoningEffort = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_EFFORT", "xhigh");
+        var reasoningSummary = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_SUMMARY", "detailed");
+        var modelVerbosity = envVars.GetValueOrDefault("CODEX_MODEL_VERBOSITY", "high");
+        var sandboxMode = envVars.GetValueOrDefault("CODEX_SANDBOX_MODE", "danger-full-access");
+        var maxContext = envVars.GetValueOrDefault("CODEX_MAX_CONTEXT", "1000000");
+        var contextCompactLimit = envVars.GetValueOrDefault("CODEX_CONTEXT_COMPACT_LIMIT", "800000");
+
+        return $@"# Codex CLI 配置文件（由 WebCode 动态生成）
+
+model = ""{model}""
+model_provider = ""{providerId}""
+disable_response_storage = true
+max_context = {maxContext}
+context_compact_limit = {contextCompactLimit}
+approval_policy = ""{approvalPolicy}""
+sandbox_mode = ""{sandboxMode}""
+
+rmcp_client = true
+model_reasoning_effort = ""{reasoningEffort}""
+model_reasoning_summary = ""{reasoningSummary}""
+model_verbosity = ""{modelVerbosity}""
+model_supports_reasoning_summaries = true
+
+[mcp_servers.claude]
+type = ""stdio""
+command = ""claude""
+args = [""mcp"", ""serve""]
+
+[model_providers.""{providerId}""]
+name = ""{providerName}""
+base_url = ""{baseUrl}""
+requires_openai_auth = true
+wire_api = ""{wireApi}""
+
+[windows]
+sandbox = ""elevated""
+";
     }
 
     /// <summary>
@@ -2326,4 +2329,3 @@ sandbox_mode = ""{sandboxMode}""
         }
     }
 }
-

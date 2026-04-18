@@ -142,6 +142,8 @@ public class FeishuCardActionService
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case "switch_session":
                     return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId, appId);
+                case "sync_session_provider":
+                    return await HandleSyncSessionProviderAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "close_session":
                     return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "show_create_session_form":
@@ -920,6 +922,52 @@ public class FeishuCardActionService
         }
 
         return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在，切换失败", "error");
+    }
+
+    /// <summary>
+    /// 显式同步会话固定的 cc-switch Provider 快照
+    /// </summary>
+    private async Task<CardActionTriggerResponseDto> HandleSyncSessionProviderAsync(string? sessionId, string? chatKey, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法同步 Provider", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再同步会话 Provider", "error");
+        }
+
+        var sessionEntities = await GetChatSessionEntitiesAsync(actualChatKey, username);
+        var session = sessionEntities.FirstOrDefault(s => string.Equals(s.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+        if (session == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在，无法同步 Provider", "error");
+        }
+
+        var effectiveToolId = NormalizeToolId(session.CcSwitchSnapshotToolId ?? session.ToolId);
+        if (!IsCcSwitchManagedTool(effectiveToolId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话未绑定 cc-switch 管理的 CLI 工具，无需同步 Provider", "warning");
+        }
+
+        try
+        {
+            await _cliExecutor.SyncSessionCcSwitchSnapshotAsync(sessionId, effectiveToolId);
+            var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId);
+            return _cardBuilder.BuildCardActionResponseV2(
+                card,
+                $"✅ 已将会话 {sessionId[..Math.Min(8, sessionId.Length)]} 同步到当前 cc-switch Provider",
+                "success");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "飞书端同步会话 Provider 失败: SessionId={SessionId}", sessionId);
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 同步当前 cc-switch Provider 失败: {ex.Message}", "error");
+        }
     }
 
     private async Task SendExternalCliHistoryAsync(
@@ -2110,9 +2158,16 @@ public class FeishuCardActionService
             var sessionId = session.SessionId;
             var workspacePath = GetSessionWorkspaceDisplay(sessionId);
             var isCurrent = sessionId == currentSessionId;
-            var toolLabel = GetToolDisplayName(session.ToolId);
+            var effectiveToolId = NormalizeToolId(session.CcSwitchSnapshotToolId ?? session.ToolId);
+            var toolLabel = GetToolDisplayName(effectiveToolId ?? session.ToolId);
+            var isManagedTool = IsCcSwitchManagedTool(effectiveToolId);
 
             var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
+            if (isManagedTool)
+            {
+                sessionInfo += $"\n🔌 Provider: {GetPinnedProviderDisplay(session)}";
+                sessionInfo += $"\n🔄 同步: {(session.CcSwitchSnapshotSyncedAt.HasValue ? session.CcSwitchSnapshotSyncedAt.Value.ToString("yyyy-MM-dd HH:mm") : "未同步")}";
+            }
 
             elements.Add(new
             {
@@ -2139,6 +2194,29 @@ public class FeishuCardActionService
                     }
                 }
             });
+
+            if (isManagedTool)
+            {
+                elements.Add(new
+                {
+                    tag = "button",
+                    text = new { tag = "plain_text", content = "同步 Provider" },
+                    type = "default",
+                    behaviors = new[]
+                    {
+                        new
+                        {
+                            type = "callback",
+                            value = new
+                            {
+                                action = "sync_session_provider",
+                                session_id = sessionId,
+                                chat_key = chatKey
+                            }
+                        }
+                    }
+                });
+            }
 
             elements.Add(new
             {
@@ -4800,5 +4878,25 @@ public class FeishuCardActionService
             "opencode" => "OpenCode",
             _ => "未设置"
         };
+    }
+
+    private static bool IsCcSwitchManagedTool(string? toolId)
+    {
+        return NormalizeToolId(toolId) is "claude-code" or "codex" or "opencode";
+    }
+
+    private static string GetPinnedProviderDisplay(ChatSessionEntity session)
+    {
+        if (!string.IsNullOrWhiteSpace(session.CcSwitchProviderName))
+        {
+            return session.CcSwitchProviderName!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(session.CcSwitchProviderId))
+        {
+            return session.CcSwitchProviderId!;
+        }
+
+        return "未同步";
     }
 }

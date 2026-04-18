@@ -5,103 +5,125 @@
 </p>
 
 <p align="center">
-  <strong>A workspace platform that connects AI CLIs, web sessions, multi-user controls, and Feishu bots</strong>
+  <strong>One control plane for AI CLIs, web sessions, mobile usage, and Feishu workflows</strong>
 </p>
 
 <p align="center">
-  Manage AI sessions, workspaces, projects, and command execution from the browser or Feishu cards, with desktop and mobile support.
+  Manage Claude Code, Codex, and OpenCode sessions, workspaces, projects, and command execution from the browser or Feishu cards.
 </p>
 
 ---
 
 ## Overview
 
-WebCode is an AI workspace platform built on `Blazor Server + .NET 10`. It is not just a chat UI. The goal is to turn local or server-side AI CLI tools into a manageable, collaborative, remotely accessible working system.
+WebCode is an AI CLI workspace platform built on `Blazor Server + .NET 10`. It is not just a chat shell. The goal is to turn local or server-side AI CLIs into a manageable, deployable, collaborative, remotely accessible working system.
 
-Typical scenarios already covered by the project include:
+The repository already covers these common scenarios:
 
-- Creating and managing AI sessions from the web UI
-- Binding a dedicated workspace to each session
-- Managing sessions, projects, and directories through Feishu bots and cards
-- Configuring per-user CLI environments, Feishu bots, workspace allowlists, and tool permissions
-- Using the same workflow across desktop, tablet, and mobile browsers
+- create, switch, close, and resume AI sessions from the web UI
+- bind an isolated workspace or project directory to each session
+- import existing local `Claude Code`, `Codex`, and `OpenCode` sessions from the current OS account
+- restore history from original CLI transcripts instead of relying only on WebCode-owned chat records
+- use the same sessions from desktop web, mobile web, and Feishu cards
+- configure multi-user permissions, tool access, workspace allowlists, and Feishu bots
+- treat `cc-switch` as the only provider authority for managed assistants
 
-If you need a deployable control plane for AI CLIs instead of a single-user local wrapper, this repository is designed for that use case.
+If you need a deployable control plane for AI CLIs rather than a single-user wrapper, this repository is designed for that job.
 
-## Core Capabilities
+## Current Highlights
 
-### 1. Multiple AI CLI integrations
+### Multiple AI CLI integrations
 
-The repository already includes adapters or runtime support for the following tools:
+The project already supports:
 
 | Tool | Notes | Status |
 |------|-------|--------|
-| `Claude Code` | Session management, streaming output, adapter parsing | Available |
+| `Claude Code` | Session management, streaming output, transcript recovery | Available |
 | `Codex CLI` | JSONL output, sandbox/approval modes, session execution | Available |
-| `OpenCode` | Multi-model workflow integration | Available |
-| Other CLIs | Can be added with the same adapter pattern | Extensible |
+| `OpenCode` | Multi-model workflows, session import, execution | Available |
+| Custom CLIs | Can be added with the adapter pattern | Extensible |
 
-Related implementations are primarily located in [WebCodeCli.Domain/Domain/Service/Adapters](./WebCodeCli.Domain/Domain/Service/Adapters).
+The relevant implementations live mainly under [WebCodeCli.Domain/Domain/Service/Adapters](./WebCodeCli.Domain/Domain/Service/Adapters).
 
-### 2. Web session and workspace management
+### Shared session flow across web, mobile, and Feishu
 
-- Each session can use its own workspace
-- Supports default directories, existing folders, project folders, and custom paths
-- Supports file browsing, preview, upload, and path copy operations
-- Supports session history, switching, closing, isolation, and cleanup
-- Can create sessions directly from project management flows
+- each session can use its own workspace
+- default directories, project directories, existing folders, and custom paths are supported
+- file browse, preview, upload, and copy-path flows are built in
+- session history, switching, closing, isolation, and cleanup are supported
+- existing local CLI sessions can be imported and continued inside WebCode
+- mobile session drawers and Feishu session cards can manage the same session set
 
-### 3. Multi-user controls and permissions
+### Multi-user controls
 
-The current system already includes the foundations for multi-user operation:
+- enable or disable users
+- restrict which CLI tools each user may use
+- define per-user workspace allowlists
+- configure per-user Feishu bot settings
+- combine shared defaults with user-specific overrides
 
-- Enable or disable users
-- Restrict which CLI tools each user can use
-- Configure per-user workspace allowlists
-- Configure per-user CLI environment variables
-- Configure per-user Feishu bot settings
-- Use shared defaults with user-level overrides
+### External session import and recovery
 
-That means the project is no longer just a local single-user tool. It can already operate as an internal team platform.
+External session import currently follows these rules:
 
-### 4. Feishu bots and card-driven workflows
+- it only scans sessions accessible to the current operating-system account
+- it only shows sessions whose workspaces are inside allowed directories
+- the same `(ToolId, CliThreadId)` pair can only be claimed by one WebCode user
+- both the web UI and Feishu cards support browsing, importing, and switching to those sessions
 
-The Feishu integration is more than simple message forwarding. It acts as a full operational entry point:
+### Windows packaging
 
-- Users can bind their own Feishu bots
-- Session management cards
-- Project management cards
-- Workspace allowlist browsing
-- Project clone, pull, and branch switching
-- Plain text completion notifications after session work finishes
+The repository already includes a Windows packaging script that builds:
 
-Relevant code is mainly located in [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels).
+- installer `WebCode-Setup-vX.Y.Z-win-x64.exe`
+- portable archive `WebCode-vX.Y.Z-win-x64-portable.zip`
+- checksum file `SHA256SUMS.txt`
+- release notes `RELEASE_NOTES.md`
 
-### 5. Unified desktop and mobile experience
+## `cc-switch` Managed Assistant Model
 
-- Responsive layouts
-- Mobile-friendly navigation and input areas
-- Works on phones and tablets
-- Shares the same session, file, preview, and settings workflow across devices
+From the current implementation onward, `Claude Code`, `Codex`, and `OpenCode` all follow the same rules:
 
-Mobile UI preview:
+1. `cc-switch` is the only provider authority.
+2. WebCode no longer allows manual env-var entry, provider editing, or profile switching for these managed tools.
+3. Provider activation and switching must happen in `cc-switch`.
+4. WebCode only reads `cc-switch` state and the live config files generated by `cc-switch`.
 
-![Mobile UI](images/mobile.png)
+WebCode reads these sources:
 
-## Screenshots
+- `~/.cc-switch/settings.json`
+- `~/.cc-switch/cc-switch.db`
+- the live config files written by `cc-switch`
 
-> The images below are bundled repo assets used to illustrate the product and workflow.
+### Session-pinned provider snapshots
 
-![Coding assistant](images/coding.png)
-![PPT and document helper](images/ppt.png)
-![Skills and workflows](images/skill.png)
-![Games and creative examples](images/games.png)
+Managed sessions now behave like real terminal windows:
+
+- a new session copies the currently active provider live config on first execution
+- an existing session keeps using that pinned snapshot even after `cc-switch` switches to another provider
+- an old session only moves to the current `cc-switch` provider when the user explicitly clicks sync
+
+That explicit sync entry point is available in:
+
+- the desktop web session list
+- the mobile web session drawer
+- Feishu session management cards
+
+If a pinned snapshot is missing or broken, WebCode blocks execution and asks for an explicit sync instead of silently falling back to the current machine-global live config.
+
+### Enabling OpenCode later
+
+`OpenCode` is managed exactly like `Claude Code` and `Codex`.
+
+- it can be selected during initialization
+- it can also be enabled later from assistant management
+- actual launch readiness still depends on `cc-switch` having a valid active provider and live config for OpenCode
 
 ## Quick Start
 
 ### Option 1: Docker deployment
 
-This is the most direct way to start the system and is suitable for trials, internal deployment, and small team usage.
+This is the fastest way to get started for trials, internal deployment, or a small team setup.
 
 ```bash
 git clone https://github.com/lusile2024/WebCode.git
@@ -109,26 +131,52 @@ cd WebCode
 docker compose up -d
 ```
 
-After startup, open:
+Then open:
 
 - `http://localhost:5000`
 
-The first visit will guide you through initialization.
-
-For more deployment details, see:
+More deployment details:
 
 - [QUICKSTART.md](./QUICKSTART.md)
 - [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
 - [docs/Docker-CLI-集成部署指南.md](./docs/Docker-CLI-集成部署指南.md)
 
-### Option 2: Local development
+### Option 2: Windows release package
 
-This is the better option for debugging, customization, and local integration work.
+Use this when you want to run WebCode directly on Windows without preinstalling the `.NET SDK`.
+
+Download:
+
+- [GitHub Releases](https://github.com/lusile2024/WebCode/releases/latest)
+
+The Windows release assets include:
+
+- `WebCode-Setup-vX.Y.Z-win-x64.exe`
+- `WebCode-vX.Y.Z-win-x64-portable.zip`
+- `SHA256SUMS.txt`
+- `RELEASE_NOTES.md`
+
+Both the installer and portable archive use a self-contained `win-x64` runtime. The default first-launch URL is:
+
+- `http://localhost:6021`
+
+The application directory is prepared with:
+
+- `data/`
+- `logs/`
+- `workspaces/`
+
+The installer keeps an existing `appsettings.json` during upgrades.
+
+### Option 3: Local development
+
+Use this for debugging, customization, and local integration work.
 
 #### Requirements
 
 - `.NET 10 SDK`
-- Installed target AI CLIs such as `claude`, `codex`, or `opencode`
+- `cc-switch` correctly installed and configured for the managed assistants you want to use
+- target CLIs such as `claude`, `codex`, and `opencode`
 
 #### Start commands
 
@@ -141,57 +189,45 @@ dotnet run --project WebCodeCli
 
 Default local URL:
 
-- `http://localhost:5000`
+- `http://localhost:6021`
 
-## Recommended first-time setup
+If you changed the `urls` setting in [appsettings.json](./appsettings.json) or [WebCodeCli/appsettings.json](./WebCodeCli/appsettings.json), use the actual configured port.
 
-For the initial setup, the recommended order is:
+## Recommended First-Time Setup
 
-1. Create the administrator account.
-2. Decide whether login authentication should be enabled.
-3. Configure environment variables for at least one usable CLI tool.
-4. Verify the workspace root and storage directories.
-5. Configure Feishu bot settings if Feishu integration is needed.
-6. Open the management UI to configure users, workspace allowlists, and tool permissions if multi-user mode is needed.
+The current initialization flow is best completed in this order:
 
-Setup wizard preview:
+1. create the administrator account
+2. decide whether login/authentication should be enabled
+3. select which managed assistants you want WebCode to expose
+4. review `cc-switch` readiness and make sure every selected assistant is launch-ready
+5. verify the workspace root and storage directories
+6. configure Feishu bot settings if Feishu integration is needed
+7. configure users, tool permissions, and workspace allowlists if multi-user mode is needed
+8. import local external CLI sessions if you want to continue existing context
 
-![Setup wizard - Step 1](images/setup1.png)
-![Setup wizard - Step 2](images/setup2.png)
-![Setup wizard - Step 3](images/setup3.png)
+The setup wizard no longer handles these tasks:
 
-## Configuration
+- manual env-var entry for managed assistants
+- manual provider switching for managed assistants
+- manual editing of managed live config files
 
-### CLI configuration
+Those actions now belong exclusively to `cc-switch`.
 
-CLI tool configuration can be maintained through either the UI or configuration files.
+## Configuration Notes
 
-A typical configuration shape looks like this:
+### Managed assistant configuration
 
-```json
-{
-  "CliTools": {
-    "Tools": [
-      {
-        "Id": "claude-code",
-        "Name": "Claude Code",
-        "Command": "claude",
-        "ArgumentTemplate": "-p \"{prompt}\"",
-        "Enabled": true
-      },
-      {
-        "Id": "codex",
-        "Name": "Codex",
-        "Command": "codex",
-        "ArgumentTemplate": "exec \"{prompt}\"",
-        "Enabled": true
-      }
-    ]
-  }
-}
-```
+For `Claude Code`, `Codex`, and `OpenCode`:
 
-More detailed references:
+- provider switching must happen in `cc-switch`
+- the WebCode settings UI only shows `cc-switch` status for managed tools
+- assistant management can enable or disable assistants but does not replace `cc-switch`
+- session-level sync only copies the current `cc-switch` active state into a specific session snapshot
+
+### Custom CLI configuration
+
+For non-managed tools, you can still extend `CliTools.Tools` with your own CLI definitions. See:
 
 - [cli/README.md](./cli/README.md)
 - [docs/CLI工具配置说明.md](./docs/CLI工具配置说明.md)
@@ -199,7 +235,7 @@ More detailed references:
 
 ### Docker data directories
 
-By default, `docker-compose.yml` mounts the following directories:
+By default, `docker-compose.yml` mounts:
 
 - `./webcodecli-data` for database and runtime data
 - `./webcodecli-workspaces` for workspace storage
@@ -213,47 +249,50 @@ The default database is SQLite:
 
 For local development, the default connection string comes from [appsettings.json](./appsettings.json).
 
-## Multi-user and Feishu deployment notes
+## Windows Packaging Maintenance
 
-If you plan to run WebCode as a team service, these points matter first:
+The repository ships with this packaging script:
 
-- Define separate workspace allowlists for each user
-- Restrict which CLI tools each user may use
-- Bind a dedicated Feishu bot per user
-- Keep database files out of Git
-- Separate shared default settings from user-specific overrides
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
+```
 
-Code related to multi-user and Feishu capabilities is mainly distributed across:
+It reads the version from [Directory.Build.props](./Directory.Build.props) and writes the release bundle under `artifacts/windows-installer/vX.Y.Z/`:
 
-- [WebCodeCli/Controllers](./WebCodeCli/Controllers)
-- [WebCodeCli/Components](./WebCodeCli/Components)
-- [WebCodeCli.Domain/Domain/Service/Channels](./WebCodeCli.Domain/Domain/Service/Channels)
-- [WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig](./WebCodeCli.Domain/Repositories/Base/UserFeishuBotConfig)
+- `publish/`
+- `WebCode-vX.Y.Z-win-x64-portable.zip`
+- `installer/WebCode-Setup-vX.Y.Z-win-x64.exe`
+- `SHA256SUMS.txt`
+- `RELEASE_NOTES.md`
 
-## Project structure
+Build machine requirements:
 
-The main repository structure is:
+- Windows
+- `.NET 10 SDK`
+- `Inno Setup 6`
+
+## Project Structure
 
 ```text
 WebCode/
-├── WebCodeCli/                # Web application (Blazor Server)
-├── WebCodeCli.Domain/         # Domain services, repositories, CLI and Feishu adapters
+├── WebCodeCli/                # Web app (Blazor Server)
+├── WebCodeCli.Domain/         # Domain services, repositories, CLI/Feishu adapters
 ├── WebCodeCli.Domain.Tests/   # Domain-layer tests
 ├── tests/WebCodeCli.Tests/    # Web and integration-related tests
-├── cli/                       # CLI usage documentation
+├── cli/                       # CLI usage docs
 ├── docs/                      # Additional documentation
-├── docker-compose.yml         # Docker deployment entrypoint
+├── docker-compose.yml         # Docker entrypoint
 └── README.md
 ```
 
-Compared with older documentation, the actual project names are now:
+The current real project names are:
 
 - `WebCodeCli`
 - `WebCodeCli.Domain`
 
-If you still see old references such as `WebCode` or `WebCode.Domain` in historical docs or notes, use the real repository structure instead.
+If you still see older names such as `WebCode` or `WebCode.Domain` in legacy notes, follow the actual repository layout instead.
 
-## Tech stack
+## Tech Stack
 
 | Category | Technology |
 |----------|------------|
@@ -264,9 +303,9 @@ If you still see old references such as `WebCode` or `WebCode.Domain` in histori
 | Default database | SQLite |
 | Reverse proxy | YARP |
 | Markdown | Markdig |
-| AI CLI integration | Claude Code, Codex, OpenCode, and more |
+| AI CLI integration | Claude Code / Codex / OpenCode |
 
-## Useful documentation
+## Useful Documentation
 
 - [QUICKSTART.md](./QUICKSTART.md)
 - [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)
@@ -275,31 +314,15 @@ If you still see old references such as `WebCode` or `WebCode.Domain` in histori
 - [docs/workspace-management-guide.md](./docs/workspace-management-guide.md)
 - [docs/workspace-management-deployment-guide.md](./docs/workspace-management-deployment-guide.md)
 
-## Public demo and community
-
-If you keep the current public demo online, the following information can still be used:
-
-| URL | Username | Password |
-|-----|----------|----------|
-| [https://webcode.tree456.com/](https://webcode.tree456.com/) | `treechat` | `treechat@123` |
-
-> Public demo environments are for evaluation only and should not be used for sensitive data.
-
-Community QR code:
-
-<p align="center">
-  <img src="images/qrcode.jpg" alt="WeChat group QR code" width="200" />
-</p>
-
 ## License
 
 This project is licensed under [AGPLv3](LICENSE).
 
-- Open source use: follow AGPLv3
-- Commercial licensing: contact the repository maintainer or relevant business channel
+- Open-source use: follow AGPLv3
+- Commercial licensing: contact the repository maintainer or business channel
 
 ---
 
 <p align="center">
-  <strong>Turn AI CLIs from local commands into a manageable working platform</strong>
+  <strong>Turn AI CLIs from local commands into a manageable, deployable, collaborative working platform</strong>
 </p>

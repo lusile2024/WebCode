@@ -103,6 +103,14 @@ public interface ICliExecutorService
     Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null);
 
     /// <summary>
+    /// 将会话固定的 Provider 快照同步到当前 cc-switch 激活 Provider
+    /// </summary>
+    /// <param name="sessionId">会话ID</param>
+    /// <param name="toolId">工具ID，留空时使用会话当前工具</param>
+    /// <returns>最新的会话快照元数据</returns>
+    Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 保存指定工具的环境变量配置到数据库
     /// </summary>
     /// <param name="toolId">工具ID</param>

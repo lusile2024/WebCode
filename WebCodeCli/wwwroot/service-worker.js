@@ -3,9 +3,9 @@
  * 提供离线缓存和后台同步功能
  */
 
-const CACHE_NAME = 'webcode-pwa-v0.2.3';
-const STATIC_CACHE_NAME = 'webcode-static-v0.2.3';
-const DYNAMIC_CACHE_NAME = 'webcode-dynamic-v0.2.3';
+const CACHE_NAME = 'webcode-pwa-v0.2.4';
+const STATIC_CACHE_NAME = 'webcode-static-v0.2.4';
+const DYNAMIC_CACHE_NAME = 'webcode-dynamic-v0.2.4';
 
 // 需要预缓存的静态资源
 const STATIC_ASSETS = [
@@ -26,16 +26,15 @@ const STATIC_ASSETS = [
   '/images/logo.png',
   '/images/icons/icon-192x192.png',
   '/images/icons/icon-512x512.png',
-  '/favicon.ico',
-  '/Resources/Localization/zh-CN.json',
-  '/Resources/Localization/en-US.json'
+  '/favicon.ico'
 ];
 
 // 需要网络优先的API路径
 const NETWORK_FIRST_PATHS = [
   '/api/',
   '/_blazor',
-  '/_framework'
+  '/_framework',
+  '/Resources/Localization/'
 ];
 
 // 安装事件：预缓存静态资源
@@ -120,6 +119,10 @@ function isCacheableRequest(request) {
 async function networkFirst(request) {
   try {
     const response = await fetch(request);
+    if (response.ok && request.mode !== 'navigate' && isCacheableRequest(request)) {
+      const cache = await caches.open(DYNAMIC_CACHE_NAME);
+      await cache.put(request, response.clone());
+    }
     return response;
   } catch (error) {
     const cachedResponse = await caches.match(request);
