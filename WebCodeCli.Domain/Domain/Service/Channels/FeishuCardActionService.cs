@@ -144,6 +144,10 @@ public class FeishuCardActionService
                     return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId, appId);
                 case "sync_session_provider":
                     return await HandleSyncSessionProviderAsync(action.SessionId, action.ChatKey, operatorUserId);
+                case "show_rename_session_form":
+                    return await HandleShowRenameSessionFormAsync(action.SessionId, action.ChatKey, operatorUserId);
+                case "rename_session":
+                    return await HandleRenameSessionAsync(action.SessionId, action.ChatKey, formValueElement, operatorUserId);
                 case "close_session":
                     return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId);
                 case "show_create_session_form":
@@ -2103,10 +2107,12 @@ public class FeishuCardActionService
         }
     }
 
-    private async Task<ElementsCardV2Dto> BuildSessionManagerCardAsync(string chatId, string? operatorUserId)
+    public async Task<ElementsCardV2Dto> BuildSessionManagerCardAsync(string chatId, string? operatorUserId, string? fallbackUsername = null)
     {
         var chatKey = chatId.ToLowerInvariant();
-        var username = ResolveFeishuUsername(chatKey, operatorUserId);
+        var username = string.IsNullOrWhiteSpace(fallbackUsername)
+            ? ResolveFeishuUsername(chatKey, operatorUserId)
+            : fallbackUsername;
         if (string.IsNullOrWhiteSpace(username))
         {
             throw new InvalidOperationException("请先绑定 Web 用户，再管理会话");
@@ -2158,11 +2164,12 @@ public class FeishuCardActionService
             var sessionId = session.SessionId;
             var workspacePath = GetSessionWorkspaceDisplay(sessionId);
             var isCurrent = sessionId == currentSessionId;
+            var sessionTitle = GetSessionDisplayTitle(session);
             var effectiveToolId = NormalizeToolId(session.CcSwitchSnapshotToolId ?? session.ToolId);
             var toolLabel = GetToolDisplayName(effectiveToolId ?? session.ToolId);
             var isManagedTool = IsCcSwitchManagedTool(effectiveToolId);
 
-            var sessionInfo = $"{(isCurrent ? "✅ " : "")}**会话ID: {sessionId[..8]}...**\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
+            var sessionInfo = $"{(isCurrent ? "✅ " : "")}**{sessionTitle}**\n🆔 {sessionId[..8]}...\n🛠️ {toolLabel}\n📂 {workspacePath}\n⏱️ {session.UpdatedAt:yyyy-MM-dd HH:mm}";
             if (isManagedTool)
             {
                 sessionInfo += $"\n🔌 Provider: {GetPinnedProviderDisplay(session)}";
@@ -2188,6 +2195,26 @@ public class FeishuCardActionService
                         value = new
                         {
                             action = "switch_session",
+                            session_id = sessionId,
+                            chat_key = chatKey
+                        }
+                    }
+                }
+            });
+
+            elements.Add(new
+            {
+                tag = "button",
+                text = new { tag = "plain_text", content = "重命名" },
+                type = "default",
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = new
+                        {
+                            action = "show_rename_session_form",
                             session_id = sessionId,
                             chat_key = chatKey
                         }
@@ -2344,6 +2371,186 @@ public class FeishuCardActionService
                 Elements = elements.ToArray()
             }
         };
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleShowRenameSessionFormAsync(string? sessionId, string? chatKey, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法重命名会话", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再重命名会话", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAndUsernameAsync(sessionId, username);
+        if (session == null || !string.Equals(session.FeishuChatKey, actualChatKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在或已失效，请重新打开会话管理", "error");
+        }
+
+        return _cardBuilder.BuildCardActionResponseV2(BuildRenameSessionFormCard(actualChatKey, session), string.Empty);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleRenameSessionAsync(
+        string? sessionId,
+        string? chatKey,
+        JsonElement? formValue,
+        string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，无法重命名会话", "error");
+        }
+
+        var newTitle = GetFormStringValue(formValue, "session_title")?.Trim();
+        if (string.IsNullOrWhiteSpace(newTitle))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话标题不能为空", "error");
+        }
+
+        const int maxTitleLength = 100;
+        if (newTitle.Length > maxTitleLength)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 会话标题不能超过 {maxTitleLength} 个字符", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再重命名会话", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAndUsernameAsync(sessionId, username);
+        if (session == null || !string.Equals(session.FeishuChatKey, actualChatKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在或已失效，请重新打开会话管理", "error");
+        }
+
+        var updated = await repo.UpdateSessionTitleAsync(sessionId, newTitle);
+        if (!updated)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 重命名会话失败，请稍后重试", "error");
+        }
+
+        var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username);
+        return _cardBuilder.BuildCardActionResponseV2(card, $"✅ 已将会话重命名为 {newTitle}", "success");
+    }
+
+    private ElementsCardV2Dto BuildRenameSessionFormCard(string chatKey, ChatSessionEntity session)
+    {
+        var currentTitle = GetSessionDisplayTitle(session);
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = $"## ✏️ 重命名会话\n- 当前标题：`{currentTitle}`\n- 会话 ID：`{session.SessionId}`\n- 标题最长支持 **100** 个字符"
+                }
+            },
+            new { tag = "hr" },
+            new
+            {
+                tag = "form",
+                name = $"rename_session_form__{session.SessionId}",
+                elements = new object[]
+                {
+                    new
+                    {
+                        tag = "input",
+                        input_type = "text",
+                        name = "session_title",
+                        label = new { tag = "plain_text", content = "会话标题" },
+                        placeholder = new { tag = "plain_text", content = "请输入新的会话标题" },
+                        default_value = currentTitle
+                    },
+                    new
+                    {
+                        tag = "column_set",
+                        flex_mode = "none",
+                        background_style = "default",
+                        columns = new object[]
+                        {
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    new
+                                    {
+                                        tag = "button",
+                                        text = new { tag = "plain_text", content = "保存标题" },
+                                        type = "primary",
+                                        action_type = "form_submit",
+                                        name = $"rename_session_submit__{session.SessionId}",
+                                        value = new
+                                        {
+                                            action = "rename_session",
+                                            session_id = session.SessionId,
+                                            chat_key = chatKey
+                                        }
+                                    }
+                                }
+                            },
+                            new
+                            {
+                                tag = "column",
+                                width = "auto",
+                                vertical_align = "top",
+                                elements = new object[]
+                                {
+                                    BuildActionButton(
+                                        "返回会话列表",
+                                        "default",
+                                        new
+                                        {
+                                            action = "open_session_manager",
+                                            chat_key = chatKey
+                                        })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        return new ElementsCardV2Dto
+        {
+            Header = new ElementsCardV2Dto.HeaderSuffix
+            {
+                Template = "orange",
+                Title = new HeaderTitleElement { Content = "✏️ 重命名会话" }
+            },
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private static string GetSessionDisplayTitle(ChatSessionEntity session)
+    {
+        return string.IsNullOrWhiteSpace(session.Title) ? "新会话" : session.Title.Trim();
     }
 
     private async Task<CardActionTriggerResponseDto> HandleDiscoverExternalCliSessionsAsync(

@@ -1125,6 +1125,7 @@ public class CliExecutorServiceTests
         }
 
         public Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace) => Task.FromResult(true);
+        public Task<bool> UpdateSessionTitleAsync(string sessionId, string title) => Task.FromResult(true);
         public Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot)
         {
             var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));

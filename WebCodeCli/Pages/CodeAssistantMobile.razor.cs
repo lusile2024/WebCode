@@ -1715,6 +1715,13 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private SessionHistory? _sessionToDelete = null;
     private bool _isDeletingSession = false;
 
+    // 重命名会话
+    private bool _showRenameDialog = false;
+    private SessionHistory? _sessionToRename = null;
+    private string _newSessionTitle = string.Empty;
+    private bool _isRenamingSession = false;
+    private string _renameError = string.Empty;
+
     // 目录授权
     private bool _showAuthorizeDialog = false;
     private SessionHistory? _sessionToAuthorize = null;
@@ -1820,6 +1827,89 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         if (_adminUserManagementModal != null)
         {
             await _adminUserManagementModal.ShowAsync();
+        }
+    }
+
+    private void ShowRenameDialog(SessionHistory session)
+    {
+        _sessionToRename = session;
+        _newSessionTitle = session.Title ?? string.Empty;
+        _showRenameDialog = true;
+        _renameError = string.Empty;
+        StateHasChanged();
+    }
+
+    private void CloseRenameDialog()
+    {
+        _showRenameDialog = false;
+        _sessionToRename = null;
+        _newSessionTitle = string.Empty;
+        _renameError = string.Empty;
+        _isRenamingSession = false;
+        StateHasChanged();
+    }
+
+    private async Task HandleRenameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_newSessionTitle))
+        {
+            await RenameSession();
+        }
+        else if (e.Key == "Escape")
+        {
+            CloseRenameDialog();
+        }
+    }
+
+    private async Task RenameSession()
+    {
+        if (_sessionToRename == null || _isRenamingSession)
+        {
+            return;
+        }
+
+        try
+        {
+            _isRenamingSession = true;
+            _renameError = string.Empty;
+            StateHasChanged();
+
+            var newTitle = _newSessionTitle.Trim();
+            if (string.IsNullOrWhiteSpace(newTitle))
+            {
+                _renameError = T("codeAssistant.renameErrorEmptyTitle");
+                return;
+            }
+
+            const int maxTitleLength = 100;
+            if (newTitle.Length > maxTitleLength)
+            {
+                _renameError = T("codeAssistant.renameErrorTooLong", ("max", maxTitleLength.ToString()));
+                return;
+            }
+
+            _sessionToRename.Title = newTitle;
+            _sessionToRename.UpdatedAt = DateTime.Now;
+
+            await SessionHistoryManager.SaveSessionImmediateAsync(_sessionToRename);
+
+            if (_currentSession?.SessionId == _sessionToRename.SessionId)
+            {
+                _currentSession.Title = newTitle;
+            }
+
+            await LoadSessions();
+            CloseRenameDialog();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"重命名会话失败: {ex.Message}");
+            _renameError = T("codeAssistant.renameErrorFailed", ("error", ex.Message));
+        }
+        finally
+        {
+            _isRenamingSession = false;
+            StateHasChanged();
         }
     }
 

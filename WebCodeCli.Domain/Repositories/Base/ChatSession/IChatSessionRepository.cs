@@ -49,6 +49,11 @@ public interface IChatSessionRepository : IRepository<ChatSessionEntity>
     Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace);
 
     /// <summary>
+    /// 更新会话标题
+    /// </summary>
+    Task<bool> UpdateSessionTitleAsync(string sessionId, string title);
+
+    /// <summary>
     /// 更新会话的 cc-switch Provider 快照元数据
     /// </summary>
     Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot);

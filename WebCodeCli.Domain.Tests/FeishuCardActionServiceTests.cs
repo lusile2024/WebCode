@@ -191,8 +191,74 @@ public class FeishuCardActionServiceTests
         Assert.Equal(chatId, sentChatId);
         Assert.Contains("\"action\":\"show_create_session_form\"", cardJson);
         Assert.Contains("\"action\":\"switch_session\"", cardJson);
+        Assert.Contains("\"action\":\"show_rename_session_form\"", cardJson);
         Assert.Contains("\"action\":\"sync_session_provider\"", cardJson);
         Assert.Contains("session-new", cardJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_RenameSession_UpdatesTitleAndRefreshesSessionManagerCard()
+    {
+        const string chatId = "oc_workspace_chat";
+        const string sessionId = "session-rename-target";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(sessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "luhaiyan",
+                Title = "旧会话标题",
+                WorkspacePath = @"D:\repo\superpowers",
+                ToolId = "codex",
+                FeishuChatKey = chatId,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                IsCustomWorkspace = true
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository));
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"rename_session","session_id":"session-rename-target","chat_key":"oc_workspace_chat"}""",
+            formValue: new Dictionary<string, object>
+            {
+                ["session_title"] = "新的会话标题"
+            },
+            chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
+        Assert.Contains("新的会话标题", response.Toast?.Content);
+
+        var updatedSession = await sessionRepository.GetByIdAndUsernameAsync(sessionId, "luhaiyan");
+        Assert.NotNull(updatedSession);
+        Assert.Equal("新的会话标题", updatedSession!.Title);
+
+        var payload = SerializeResponse(response);
+        Assert.Contains("\"action\":\"show_rename_session_form\"", payload);
+        using var document = JsonDocument.Parse(payload);
+        var cardPayload = document.RootElement
+            .GetProperty("card")
+            .GetProperty("data")
+            .GetProperty("body")
+            .GetProperty("elements")
+            .EnumerateArray()
+            .Where(element => element.TryGetProperty("text", out _))
+            .Select(element => element.GetProperty("text"))
+            .Where(text => text.TryGetProperty("content", out _))
+            .Select(text => text.GetProperty("content").GetString())
+            .Where(content => !string.IsNullOrWhiteSpace(content))
+            .ToList();
+
+        Assert.Contains(cardPayload, content => content!.Contains("新的会话标题", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1735,6 +1801,19 @@ public class FeishuCardActionServiceTests
 
             session.WorkspacePath = workspacePath;
             session.IsCustomWorkspace = isCustomWorkspace;
+            session.UpdatedAt = DateTime.Now;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UpdateSessionTitleAsync(string sessionId, string title)
+        {
+            var session = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            if (session == null)
+            {
+                return Task.FromResult(false);
+            }
+
+            session.Title = title;
             session.UpdatedAt = DateTime.Now;
             return Task.FromResult(true);
         }

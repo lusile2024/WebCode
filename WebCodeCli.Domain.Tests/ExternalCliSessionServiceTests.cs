@@ -175,6 +175,7 @@ public class ExternalCliSessionServiceTests
         public Task<ChatSessionEntity?> GetByToolAndCliThreadIdAsync(string toolId, string cliThreadId) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
         public Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId) => Task.FromResult(true);
         public Task<bool> UpdateWorkspaceBindingAsync(string sessionId, string? workspacePath, bool isCustomWorkspace) => Task.FromResult(true);
+        public Task<bool> UpdateSessionTitleAsync(string sessionId, string title) => Task.FromResult(true);
         public Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot) => Task.FromResult(true);
         public Task<List<ChatSessionEntity>> GetByFeishuChatKeyAsync(string feishuChatKey) => Task.FromResult(_sessions.Where(x => string.Equals(x.FeishuChatKey, feishuChatKey, StringComparison.OrdinalIgnoreCase)).ToList());
         public Task<ChatSessionEntity?> GetActiveByFeishuChatKeyAsync(string feishuChatKey) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.FeishuChatKey, feishuChatKey, StringComparison.OrdinalIgnoreCase) && x.IsFeishuActive));

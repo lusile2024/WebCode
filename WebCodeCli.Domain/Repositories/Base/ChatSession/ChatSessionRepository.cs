@@ -127,6 +127,25 @@ public class ChatSessionRepository : Repository<ChatSessionEntity>, IChatSession
     }
 
     /// <summary>
+    /// 更新会话标题
+    /// </summary>
+    public async Task<bool> UpdateSessionTitleAsync(string sessionId, string title)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(title))
+        {
+            return false;
+        }
+
+        var rows = await GetDB().Updateable<ChatSessionEntity>()
+            .SetColumns(x => x.Title == title.Trim())
+            .SetColumns(x => x.UpdatedAt == DateTime.Now)
+            .Where(x => x.SessionId == sessionId)
+            .ExecuteCommandAsync();
+
+        return rows > 0;
+    }
+
+    /// <summary>
     /// 更新会话的 cc-switch Provider 快照元数据
     /// </summary>
     public async Task<bool> UpdateCcSwitchSnapshotAsync(string sessionId, CcSwitchSessionSnapshot snapshot)
