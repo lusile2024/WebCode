@@ -14,6 +14,11 @@ public sealed class FeishuStreamingCardChrome
     /// 顶部右侧下拉菜单选项
     /// </summary>
     public List<FeishuStreamingCardOverflowOption> OverflowOptions { get; set; } = [];
+
+    /// <summary>
+    /// 鍗＄墖搴曢儴鍔ㄤ綔鎸夐挳
+    /// </summary>
+    public List<FeishuStreamingCardBottomAction> BottomActions { get; set; } = [];
 }
 
 internal static class FeishuStreamingStatusFormatter
@@ -50,6 +55,27 @@ public sealed class FeishuStreamingCardOverflowOption
 
     /// <summary>
     /// 选中后回传的动作值
+    /// </summary>
+    public object Value { get; set; } = new { };
+}
+
+/// <summary>
+/// 娴佸紡鍗＄墖搴曢儴鍔ㄤ綔
+/// </summary>
+public sealed class FeishuStreamingCardBottomAction
+{
+    /// <summary>
+    /// 鎸夐挳鏂囨湰
+    /// </summary>
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 鎸夐挳鏍峰紡
+    /// </summary>
+    public string Type { get; set; } = "default";
+
+    /// <summary>
+    /// 鐐瑰嚮鍚庡洖浼犵殑鍔ㄤ綔鍊?
     /// </summary>
     public object Value { get; set; } = new { };
 }

@@ -71,6 +71,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private bool _isJsonlOutputActive = false;
     private string _jsonlPendingBuffer = string.Empty;
     private string _activeThreadId = string.Empty;
+    private bool _latestCompletedAssistantHasStructuredTodoList = false;
     private StringBuilder? _jsonlAssistantMessageBuilder;
 
     // 输出结果（Tab=输出结果）持久化
@@ -1885,6 +1886,47 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         };
     }
 
+    private LowInterruptionContinueEligibility CurrentLowInterruptionContinueEligibility =>
+        LowInterruptionContinueHelper.Evaluate(
+            _messages,
+            hasStructuredTodoList: HasStructuredTodoListForLatestCompletedAssistant(),
+            isToolSupported: SupportsLowInterruptionContinue(),
+            hasCliThreadId: HasReusableCliThreadId(),
+            isProcessRunning: _isLoading);
+
+    private bool HasStructuredTodoListInCurrentOutput()
+    {
+        return _jsonlEvents.Any(static evt =>
+            string.Equals(evt.ItemType, "todo_list", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool HasStructuredTodoListForLatestCompletedAssistant()
+    {
+        return _isLoading
+            ? _latestCompletedAssistantHasStructuredTodoList
+            : HasStructuredTodoListInCurrentOutput();
+    }
+
+    private void CaptureLatestCompletedAssistantStructuredTodoList()
+    {
+        _latestCompletedAssistantHasStructuredTodoList = HasStructuredTodoListInCurrentOutput();
+    }
+
+    private bool SupportsLowInterruptionContinue()
+    {
+        return !string.IsNullOrWhiteSpace(_selectedToolId)
+            && CliExecutorService.SupportsLowInterruptionContinue(_selectedToolId);
+    }
+
+    private bool HasReusableCliThreadId()
+    {
+        var cliThreadId = CliExecutorService.GetCliThreadId(_sessionId)
+                          ?? _currentSession?.CliThreadId
+                          ?? _activeThreadId;
+
+        return !string.IsNullOrWhiteSpace(cliThreadId);
+    }
+
     private async Task SendMessage()
     {
         if (string.IsNullOrWhiteSpace(_inputMessage) || _isLoading)
@@ -1898,6 +1940,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         _currentAssistantMessage = string.Empty;
 
         var selectedTool = _availableTools.FirstOrDefault(t => t.Id == _selectedToolId);
+        CaptureLatestCompletedAssistantStructuredTodoList();
         InitializeJsonlState(IsJsonlTool(selectedTool));
 
         // 启动进度追踪器
@@ -2062,6 +2105,151 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             await ScrollToBottom();
             
             // 自动保存当前会话
+            await SaveCurrentSessionAsync();
+        }
+    }
+
+    private async Task StartLowInterruptionContinueAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentLowInterruptionContinueEligibility;
+        if (_isLoading
+            || eligibility.IsDisabled
+            || !LowInterruptionContinueHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        var selectedTool = _availableTools.FirstOrDefault(t => t.Id == _selectedToolId);
+        CaptureLatestCompletedAssistantStructuredTodoList();
+        InitializeJsonlState(IsJsonlTool(selectedTool));
+
+        if (_isJsonlOutputActive && _progressTracker != null)
+        {
+            _progressTracker.Start();
+        }
+
+        _isLoading = true;
+        _currentAssistantMessage = string.Empty;
+        StateHasChanged();
+        await ScrollToBottom();
+
+        var assistantMessage = new ChatMessage
+        {
+            Role = "assistant",
+            Content = string.Empty,
+            CliToolId = _selectedToolId,
+            IsCompleted = false
+        };
+
+        var contentBuilder = new StringBuilder();
+
+        try
+        {
+            await foreach (var chunk in CliExecutorService.ExecuteLowInterruptionContinueStreamAsync(
+                _sessionId,
+                _selectedToolId,
+                default))
+            {
+                if (chunk.IsError)
+                {
+                    assistantMessage.HasError = true;
+                    assistantMessage.ErrorMessage = chunk.ErrorMessage;
+                    assistantMessage.Content = chunk.ErrorMessage ?? "鍙戠敓閿欒";
+                    assistantMessage.IsCompleted = true;
+
+                    _messages.Add(assistantMessage);
+                    ChatSessionService.AddMessage(_sessionId, assistantMessage);
+
+                    await UpdatePreview(assistantMessage.Content);
+                    StateHasChanged();
+                    break;
+                }
+                else if (chunk.IsCompleted)
+                {
+                    if (_isJsonlOutputActive)
+                    {
+                        ProcessJsonlChunk(string.Empty, flush: true);
+                        var finalContent = GetJsonlAssistantMessage();
+                        assistantMessage.Content = finalContent;
+                        _currentAssistantMessage = finalContent;
+                        contentBuilder.Clear();
+                        contentBuilder.Append(finalContent);
+                    }
+
+                    assistantMessage.IsCompleted = true;
+                    if (!_isJsonlOutputActive)
+                    {
+                        assistantMessage.Content = contentBuilder.ToString();
+                    }
+
+                    _messages.Add(assistantMessage);
+                    ChatSessionService.AddMessage(_sessionId, assistantMessage);
+
+                    await UpdatePreview(assistantMessage.Content);
+                    StateHasChanged();
+                    break;
+                }
+                else
+                {
+                    var chunkContent = chunk.Content ?? string.Empty;
+                    if (_isJsonlOutputActive)
+                    {
+                        ProcessJsonlChunk(chunkContent, flush: false);
+                        var liveContent = GetJsonlAssistantMessage();
+                        _currentAssistantMessage = liveContent;
+                        assistantMessage.Content = liveContent;
+                    }
+                    else
+                    {
+                        contentBuilder.Append(chunkContent);
+                        _currentAssistantMessage = contentBuilder.ToString();
+                        assistantMessage.Content = _currentAssistantMessage;
+                    }
+
+                    await UpdatePreview(_currentAssistantMessage);
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"灏戞墦鏂墽琛屽け璐? {ex.Message}");
+
+            assistantMessage.HasError = true;
+            assistantMessage.ErrorMessage = ex.Message;
+            assistantMessage.Content = $"鎵ц澶辫触: {ex.Message}";
+            assistantMessage.IsCompleted = true;
+
+            _messages.Add(assistantMessage);
+            ChatSessionService.AddMessage(_sessionId, assistantMessage);
+
+            StateHasChanged();
+        }
+        finally
+        {
+            if (_isJsonlOutputActive)
+            {
+                ProcessJsonlChunk(string.Empty, flush: true);
+                _currentAssistantMessage = GetJsonlAssistantMessage();
+                CaptureLatestCompletedAssistantStructuredTodoList();
+
+                if (_progressTracker != null)
+                {
+                    if (assistantMessage.HasError)
+                    {
+                        _progressTracker.Fail(assistantMessage.ErrorMessage ?? "鎵ц澶辫触");
+                    }
+                    else
+                    {
+                        _progressTracker.Complete();
+                    }
+                }
+            }
+
+            _isLoading = false;
+            _currentAssistantMessage = string.Empty;
+            StateHasChanged();
+            await ScrollToBottom();
             await SaveCurrentSessionAsync();
         }
     }

@@ -35,6 +35,11 @@ public interface ICliToolAdapter
     string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context);
 
     /// <summary>
+    /// 构建少打断执行参数，不追加新的用户提示词
+    /// </summary>
+    string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context);
+
+    /// <summary>
     /// 解析输出流中的事件
     /// </summary>
     /// <param name="line">输出行</param>

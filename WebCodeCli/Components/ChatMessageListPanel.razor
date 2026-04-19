@@ -84,6 +84,19 @@
                     }
                 }
             </div>
+            @if (ShouldShowLowInterruptionContinue(message))
+            {
+                <div class="mt-3 flex justify-end">
+                    <button @onclick="@(() => OnLowInterruptionContinue.InvokeAsync(message))"
+                            disabled="@LowInterruptionContinueDisabled"
+                            class="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 px-3 py-1.5 text-xs sm:text-sm font-medium transition-colors @(LowInterruptionContinueDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-blue-50 text-blue-700 hover:bg-blue-100")">
+                        <svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                        </svg>
+                        <span>@LowInterruptionContinueText</span>
+                    </button>
+                </div>
+            }
         </div>
     }
 
@@ -223,10 +236,30 @@
     [Parameter] public Func<string, bool> IsJsonlContent { get; set; } = _ => false;
     [Parameter] public Func<string, string> RenderJsonlContent { get; set; } = _ => string.Empty;
     [Parameter] public Func<string, MarkupString> RenderMarkdown { get; set; } = _ => new MarkupString(string.Empty);
+    [Parameter] public string? LowInterruptionContinueMessageId { get; set; }
+    [Parameter] public bool LowInterruptionContinueDisabled { get; set; }
+    [Parameter] public string LowInterruptionContinueText { get; set; } = string.Empty;
+    [Parameter] public EventCallback<ChatMessage> OnLowInterruptionContinue { get; set; }
 
     private string? _copiedMessageId = null;
     private ChatMessage? _fullscreenMessage = null;
     private CancellationTokenSource? _copiedResetCts = null;
+
+    private bool ShouldShowLowInterruptionContinue(ChatMessage message)
+    {
+        if (!OnLowInterruptionContinue.HasDelegate)
+        {
+            return false;
+        }
+
+        if (!string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase) || message.HasError)
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(LowInterruptionContinueMessageId)
+            && string.Equals(message.Id, LowInterruptionContinueMessageId, StringComparison.Ordinal);
+    }
 
     private async Task CopyMessageContent(ChatMessage message)
     {

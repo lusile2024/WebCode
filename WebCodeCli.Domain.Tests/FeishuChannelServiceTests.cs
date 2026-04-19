@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SqlSugar;
@@ -143,7 +143,7 @@ public class FeishuChannelServiceTests
                 ChatId = "oc_takeover_chat",
                 SenderName = "luhaiyan",
                 MessageId = "msg-1",
-                Content = "先查一下 superpowers 计划文件"
+                Content = "鍏堟煡涓€涓?superpowers 璁″垝鏂囦欢"
             });
 
             await cliExecutor.ThreadIdPersisted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -153,7 +153,7 @@ public class FeishuChannelServiceTests
                 ChatId = "oc_takeover_chat",
                 SenderName = "luhaiyan",
                 MessageId = "msg-2",
-                Content = "补充：D:\\MMIS\\Base\\Docs\\superpowers"
+                Content = "琛ュ厖锛欴:\\MMIS\\Base\\Docs\\superpowers"
             });
 
             await Task.WhenAll(firstTask, secondTask);
@@ -170,7 +170,7 @@ public class FeishuChannelServiceTests
             Assert.Contains("已完成", cardKit.Handles[1].FinalStatusMarkdown);
             Assert.Equal(1, cardKit.ReplyTextCallCount);
             Assert.Equal($"当前会话：superpowers  {sessionId[..8]}\n已完成", cardKit.LastReplyTextContent);
-            Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "user" && message.Content.Contains("补充：D:\\MMIS\\Base\\Docs\\superpowers", StringComparison.Ordinal));
+            Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "user" && message.Content.Contains("琛ュ厖锛欴:\\MMIS\\Base\\Docs\\superpowers", StringComparison.Ordinal));
             Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "assistant" && message.Content == "补充完成");
         }
         finally
@@ -236,7 +236,7 @@ public class FeishuChannelServiceTests
             Assert.Equal("思考中...", handle.InitialContent);
             Assert.Equal("补充完成", handle.FinalContent);
             Assert.Contains("处理中", handle.InitialStatusMarkdown);
-            Assert.Contains("／", handle.InitialStatusMarkdown);
+            Assert.Contains("superpowers", handle.InitialStatusMarkdown);
             Assert.Contains("已完成", handle.FinalStatusMarkdown);
             Assert.Equal(1, cardKit.ReplyTextCallCount);
             Assert.Equal($"当前会话：superpowers  {sessionId[..8]}\n已完成", cardKit.LastReplyTextContent);
@@ -312,17 +312,17 @@ public class FeishuChannelServiceTests
                 ChatId = "oc_menu_chat",
                 SenderName = "luhaiyan",
                 MessageId = "msg-menu",
-                Content = "继续处理"
+                Content = "缁х画澶勭悊"
             });
 
             var handle = Assert.Single(cardKit.Handles);
             Assert.NotNull(handle.Chrome);
             var chrome = handle.Chrome!;
-            Assert.Contains("当前会话", chrome.StatusMarkdown);
+            Assert.Contains("褰撳墠浼氳瘽", chrome.StatusMarkdown);
             Assert.Contains("superpowers", chrome.StatusMarkdown);
             Assert.Contains("11111111", chrome.StatusMarkdown);
             Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
-            Assert.Contains(chrome.OverflowOptions, option => option.Text == "更多会话...");
+            Assert.Contains(chrome.OverflowOptions, option => option.Text == "鏇村浼氳瘽...");
 
             var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
             var valueJson = JsonSerializer.Serialize(switchOption.Value);
@@ -330,10 +330,90 @@ public class FeishuChannelServiceTests
             Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);
             Assert.Contains("\"chat_key\":\"oc_menu_chat\"", valueJson);
 
-            var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "更多会话...");
+            var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "鏇村浼氳瘽...");
             var moreValueJson = JsonSerializer.Serialize(moreOption.Value);
             Assert.Contains("\"action\":\"open_session_manager\"", moreValueJson);
             Assert.Contains("\"send_as_new_card\":true", moreValueJson);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_AttachesLowInterruptionButton_WhenFinalOutputContainsBacklog()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-low-interruption-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+
+        const string sessionId = "33333333-low";
+        repositoryProxy.Store(new ChatSessionEntity
+        {
+            SessionId = sessionId,
+            Username = "luhaiyan",
+            WorkspacePath = workspacePath,
+            ToolId = "codex",
+            FeishuChatKey = "oc_low_interrupt_chat",
+            IsFeishuActive = true,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath)
+        {
+            SupportsLowInterruption = true,
+            ReusableCliThreadId = "thread-low-interruption",
+            FinalContent = "backlog remains\n"
+        };
+
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_low_interrupt_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-low-interrupt",
+                Content = "继续"
+            });
+
+            var handle = Assert.Single(cardKit.Handles);
+            Assert.NotNull(handle.Chrome);
+            var chrome = handle.Chrome!;
+            var bottomAction = Assert.Single(chrome.BottomActions);
+
+            Assert.Equal("少打断执行", bottomAction.Text);
+
+            var valueJson = JsonSerializer.Serialize(bottomAction.Value);
+            Assert.Contains("\"action\":\"low_interruption_continue\"", valueJson);
+            Assert.Contains($"\"session_id\":\"{sessionId}\"", valueJson);
+            Assert.Contains("\"chat_key\":\"oc_low_interrupt_chat\"", valueJson);
+            Assert.Contains("\"tool_id\":\"codex\"", valueJson);
         }
         finally
         {
@@ -783,7 +863,7 @@ public class FeishuChannelServiceTests
 
             yield return new StreamOutputChunk
             {
-                Content = "补充完成\n",
+                Content = "\u8865\u5145\u5b8c\u6210\n",
                 IsCompleted = false
             };
 
@@ -792,6 +872,25 @@ public class FeishuChannelServiceTests
                 Content = string.Empty,
                 IsCompleted = true
             };
+        }
+
+        public bool SupportsLowInterruptionContinue(string toolId) => false;
+
+        public bool CanStartLowInterruptionContinue(string sessionId, string toolId) => false;
+
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(
+            string sessionId,
+            string toolId,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = "not implemented in test double"
+            };
+
+            await Task.CompletedTask;
         }
 
         public List<CliToolConfig> GetAvailableTools(string? username = null)
@@ -867,13 +966,19 @@ public class FeishuChannelServiceTests
     {
         public List<ExecutionCall> ExecuteCalls { get; } = new();
 
+        public bool SupportsLowInterruption { get; set; }
+
+        public string? ReusableCliThreadId { get; set; }
+
+        public string FinalContent { get; set; } = "\u8865\u5145\u5b8c\u6210\n";
+
         public ICliToolAdapter? GetAdapter(CliToolConfig tool) => null;
 
         public ICliToolAdapter? GetAdapterById(string toolId) => null;
 
         public bool SupportsStreamParsing(CliToolConfig tool) => false;
 
-        public string? GetCliThreadId(string sessionId) => null;
+        public string? GetCliThreadId(string sessionId) => ReusableCliThreadId;
 
         public void SetCliThreadId(string sessionId, string threadId)
         {
@@ -894,7 +999,7 @@ public class FeishuChannelServiceTests
 
             yield return new StreamOutputChunk
             {
-                Content = "补充完成\n",
+                Content = FinalContent,
                 IsCompleted = false
             };
 
@@ -902,6 +1007,26 @@ public class FeishuChannelServiceTests
             {
                 Content = string.Empty,
                 IsCompleted = true
+            };
+
+            await Task.CompletedTask;
+        }
+
+        public bool SupportsLowInterruptionContinue(string toolId) => SupportsLowInterruption;
+
+        public bool CanStartLowInterruptionContinue(string sessionId, string toolId)
+            => SupportsLowInterruption && !string.IsNullOrWhiteSpace(ReusableCliThreadId);
+
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(
+            string sessionId,
+            string toolId,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = "not implemented in test double"
             };
 
             await Task.CompletedTask;
@@ -1190,3 +1315,4 @@ public class FeishuChannelServiceTests
         }
     }
 }
+

@@ -327,6 +327,118 @@ public class CliExecutorService : ICliExecutorService
         }
     }
 
+    public bool SupportsLowInterruptionContinue(string toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return false;
+        }
+
+        var tool = GetTool(toolId);
+        return SupportsLowInterruptionContinue(tool);
+    }
+
+    public bool CanStartLowInterruptionContinue(string sessionId, string toolId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return false;
+        }
+
+        var username = ResolveUsernameForToolOperation(null, sessionId);
+        var tool = GetTool(toolId, username);
+        return SupportsLowInterruptionContinue(tool) && !string.IsNullOrWhiteSpace(GetCliThreadId(sessionId));
+    }
+
+    public async IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(
+        string sessionId,
+        string toolId,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var username = ResolveUsernameForToolOperation(null, sessionId);
+        var tool = GetTool(toolId, username);
+        if (tool == null && await HasValidCcSwitchSnapshotAsync(sessionId, toolId))
+        {
+            tool = _options.Tools
+                .Where(t => t.Enabled)
+                .FirstOrDefault(t => string.Equals(t.Id, toolId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (tool == null)
+        {
+            var launchBlockingMessage = await GetLaunchBlockingMessageAsync(toolId, cancellationToken);
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = launchBlockingMessage ?? $"CLI 宸ュ叿 '{toolId}' 涓嶅瓨鍦ㄦ垨褰撳墠鐢ㄦ埛鏃犳潈浣跨敤"
+            };
+            yield break;
+        }
+
+        if (!tool.Enabled)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = $"CLI 宸ュ叿 '{tool.Name}' 宸茬鐢?"
+            };
+            yield break;
+        }
+
+        if (!SupportsLowInterruptionContinue(tool))
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = $"CLI 宸ュ叿 '{tool.Name}' 涓嶆敮鎸佸皯鎵撴柇鎵ц"
+            };
+            yield break;
+        }
+
+        if (string.IsNullOrWhiteSpace(GetCliThreadId(sessionId)))
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = "Low-interruption continue requires an existing CLI thread/session id."
+            };
+            yield break;
+        }
+
+        await _concurrencyLimiter.WaitAsync(cancellationToken);
+
+        try
+        {
+            await foreach (var chunk in ExecuteOneTimeProcessAsync(sessionId, tool, string.Empty, true, cancellationToken))
+            {
+                yield return chunk;
+            }
+        }
+        finally
+        {
+            _concurrencyLimiter.Release();
+        }
+    }
+
+    private bool SupportsLowInterruptionContinue(CliToolConfig? tool)
+    {
+        if (tool == null || !tool.Enabled)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(tool.LowInterruptionArgumentTemplate))
+        {
+            return true;
+        }
+
+        return _adapterFactory.GetAdapter(tool) != null;
+    }
+
     private async IAsyncEnumerable<StreamOutputChunk> ExecuteProcessStreamAsync(
         string sessionId,
         CliToolConfig tool,
@@ -345,7 +457,7 @@ public class CliExecutorService : ICliExecutorService
         else
         {
             _logger.LogInformation("【一次性进程模式】工具: {Tool}, UsePersistentProcess={Flag}", tool.Name, tool.UsePersistentProcess);
-            await foreach (var chunk in ExecuteOneTimeProcessAsync(sessionId, tool, userPrompt, cancellationToken))
+            await foreach (var chunk in ExecuteOneTimeProcessAsync(sessionId, tool, userPrompt, false, cancellationToken))
             {
                 yield return chunk;
             }
@@ -445,6 +557,7 @@ public class CliExecutorService : ICliExecutorService
             Description = tool.Description,
             Command = resolvedCommand, // 使用解析后的命令路径
             ArgumentTemplate = tool.ArgumentTemplate,
+            LowInterruptionArgumentTemplate = tool.LowInterruptionArgumentTemplate,
             WorkingDirectory = tool.WorkingDirectory,
             Enabled = tool.Enabled,
             TimeoutSeconds = tool.TimeoutSeconds,
@@ -724,6 +837,7 @@ public class CliExecutorService : ICliExecutorService
         string sessionId,
         CliToolConfig tool,
         string userPrompt,
+        bool useLowInterruption,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var launchBlockingMessage = await GetLaunchBlockingMessageAsync(tool.Id, sessionId, cancellationToken);
@@ -772,14 +886,22 @@ public class CliExecutorService : ICliExecutorService
 
         // 构建参数，使用适配器（如果有）
         string arguments;
-        if (hasAdapter)
+        if (useLowInterruption)
+        {
+            arguments = BuildLowInterruptionArguments(tool, adapter, sessionContext);
+            _logger.LogInformation(
+                "Using low-interruption arguments for CLI launch: Tool={Tool}, Adapter={Adapter}, CliThreadId={CliThreadId}",
+                tool.Name,
+                adapter?.GetType().Name ?? "none",
+                sessionContext.CliThreadId);
+        }
+        else if (hasAdapter)
         {
             arguments = adapter!.BuildArguments(tool, userPrompt, sessionContext);
-            _logger.LogInformation("使用适配器 {Adapter} 构建命令, IsResume={IsResume}", adapter.GetType().Name, sessionContext.IsResume);
+            _logger.LogInformation("????????{Adapter} ??????, IsResume={IsResume}", adapter.GetType().Name, sessionContext.IsResume);
         }
         else
         {
-            // 无适配器时，使用传统方式构建参数
             var escapedPrompt = EscapeArgument(userPrompt);
             arguments = tool.ArgumentTemplate.Replace("{prompt}", escapedPrompt);
         }
@@ -1930,8 +2052,41 @@ public class CliExecutorService : ICliExecutorService
         return workspacePath;
     }
 
+    private static string BuildLowInterruptionArguments(
+        CliToolConfig tool,
+        ICliToolAdapter? adapter,
+        CliSessionContext sessionContext)
+    {
+        if (string.IsNullOrWhiteSpace(sessionContext.CliThreadId))
+        {
+            throw new InvalidOperationException("Low-interruption continue requires an existing CLI thread/session id.");
+        }
+
+        if (adapter != null)
+        {
+            return adapter.BuildLowInterruptionArguments(tool, sessionContext);
+        }
+
+        if (!string.IsNullOrWhiteSpace(tool.LowInterruptionArgumentTemplate))
+        {
+            var arguments = tool.LowInterruptionArgumentTemplate
+                .Replace("{cliThreadId}", sessionContext.CliThreadId, StringComparison.Ordinal)
+                .Replace("{session}", sessionContext.CliThreadId, StringComparison.Ordinal)
+                .Trim();
+
+            while (arguments.Contains("  ", StringComparison.Ordinal))
+            {
+                arguments = arguments.Replace("  ", " ", StringComparison.Ordinal);
+            }
+
+            return arguments;
+        }
+
+        throw new InvalidOperationException($"CLI tool '{tool.Id}' does not support low-interruption continue.");
+    }
+
     /// <summary>
-    /// 解析命令路径,如果配置了npm目录且命令是相对路径,则拼接完整路径
+    /// ?????????,????????pm???????????????,???????????
     /// </summary>
     private string ResolveCommandPath(string command)
     {

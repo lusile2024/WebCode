@@ -505,6 +505,8 @@
                 }
                 else
                 {
+                    var lowInterruptionEligibility = CurrentLowInterruptionContinueEligibility;
+
                     @for (var i = 0; i < _messages.Count; i++)
                     {
                         var message = _messages[i];
@@ -512,6 +514,7 @@
                         var isAssistant = message.Role == "assistant";
                         var hasOutputDetails = isAssistant && _isJsonlOutputActive && _jsonlEvents.Any();
                         var isExpanded = IsMessageExpanded(messageIndex);
+                        var showLowInterruptionContinue = IsLowInterruptionContinueEligible(message, lowInterruptionEligibility);
                         
                         <div class="@(message.Role == "user" ? "flex justify-end" : "flex justify-start flex-col items-start")">
                             <div class="@(message.Role == "user" 
@@ -560,6 +563,19 @@
                                         </button>
                                     }
                                 </div>
+                                @if (showLowInterruptionContinue)
+                                {
+                                    <div class="mt-2 flex justify-end">
+                                        <button @onclick="() => StartLowInterruptionContinueAsync(message)"
+                                                disabled="@lowInterruptionEligibility.IsDisabled"
+                                                class="inline-flex items-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(lowInterruptionEligibility.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-blue-50 text-blue-700 hover:bg-blue-100")">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                            </svg>
+                                            <span>少打断执行</span>
+                                        </button>
+                                    </div>
+                                }
                             </div>
                             
                             @* 内嵌输出详情面板 *@

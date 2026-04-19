@@ -23,6 +23,7 @@ public class ClaudeCodeAdapter : ICliToolAdapter
     /// - {session}: 会话恢复参数（如果有）
     /// </summary>
     public const string DefaultArgumentTemplate = "-p --verbose --output-format=stream-json --dangerously-skip-permissions {session} \"{prompt}\"";
+    public const string DefaultLowInterruptionArgumentTemplate = "-p --verbose --output-format=stream-json --dangerously-skip-permissions --permission-mode auto --resume {cliThreadId}";
 
     public string[] SupportedToolIds => new[] { "claude-code", "claude" };
 
@@ -67,6 +68,23 @@ public class ClaudeCodeAdapter : ICliToolAdapter
         }
 
         return result;
+    }
+
+    public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.CliThreadId))
+        {
+            throw new InvalidOperationException("Low-interruption continue requires an existing CLI thread/session id.");
+        }
+
+        var template = !string.IsNullOrWhiteSpace(tool.LowInterruptionArgumentTemplate)
+            ? tool.LowInterruptionArgumentTemplate
+            : DefaultLowInterruptionArgumentTemplate;
+
+        return NormalizeArguments(
+            template
+                .Replace("{cliThreadId}", context.CliThreadId)
+                .Replace("{session}", $"--resume {context.CliThreadId}"));
     }
 
     public CliOutputEvent? ParseOutputLine(string line)
@@ -1024,6 +1042,18 @@ public class ClaudeCodeAdapter : ICliToolAdapter
             .Replace("\n", "\\n")
             .Replace("\r", "\\r")
             .Replace("\t", "\\t");
+    }
+
+    private static string NormalizeArguments(string arguments)
+    {
+        var normalized = arguments.Trim();
+
+        while (normalized.Contains("  ", StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return normalized;
     }
 
     #endregion

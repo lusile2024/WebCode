@@ -154,6 +154,57 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateStreamingHandleAsync_RendersBottomActionButtons()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+        chrome.BottomActions.Add(new FeishuStreamingCardBottomAction
+        {
+            Text = "少打断执行",
+            Type = "primary",
+            Value = new
+            {
+                action = "low_interruption_continue",
+                session_id = "session-1",
+                chat_key = "oc_stream_chat",
+                tool_id = "codex"
+            }
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+        var bottomActionModule = elements.EnumerateArray().Last();
+
+        Assert.Equal("action", bottomActionModule.GetProperty("tag").GetString());
+        Assert.Equal("flow", bottomActionModule.GetProperty("layout").GetString());
+
+        var button = bottomActionModule.GetProperty("actions")[0];
+        Assert.Equal("button", button.GetProperty("tag").GetString());
+        Assert.Equal("primary", button.GetProperty("type").GetString());
+        Assert.Equal("少打断执行", button.GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("low_interruption_continue", button.GetProperty("behaviors")[0].GetProperty("value").GetProperty("action").GetString());
+    }
+
+    [Fact]
     public async Task FeishuStreamingHandle_FinishAsync_WaitsForInflightUpdate_AndBlocksLaterUpdates()
     {
         var updateEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

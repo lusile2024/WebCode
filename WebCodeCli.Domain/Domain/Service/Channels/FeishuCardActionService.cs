@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Collections.Concurrent;
 using FeishuNetSdk.CallbackEvents;
 using FeishuNetSdk.Im.Dtos;
 using WebCodeCli.Domain.Domain.Model;
@@ -46,6 +47,8 @@ public class FeishuCardActionService
         "LPT8",
         "LPT9"
     };
+
+    private static readonly ConcurrentDictionary<string, byte> LowInterruptionRunningSessions = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly FeishuCommandService _commandService;
     private readonly FeishuHelpCardBuilder _cardBuilder;
@@ -140,6 +143,8 @@ public class FeishuCardActionService
                     return await HandleBackToListAsync(chatId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
+                case LowInterruptionContinueHelper.ActionName:
+                    return await HandleLowInterruptionContinueAsync(action.SessionId, action.ChatKey ?? chatId, action.ToolId, operatorUserId, appId);
                 case "switch_session":
                     return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId, appId);
                 case "sync_session_provider":
@@ -435,6 +440,81 @@ public class FeishuCardActionService
         return toastResponse;
     }
 
+    private async Task<CardActionTriggerResponseDto> HandleLowInterruptionContinueAsync(
+        string? sessionId,
+        string? chatKey,
+        string? toolId,
+        string? operatorUserId,
+        string? appId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少会话信息，无法少打断执行", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        var effectiveToolId = await ResolveSessionToolIdAsync(sessionId, toolId, actualChatKey, username);
+
+        if (string.IsNullOrWhiteSpace(effectiveToolId) || !_cliExecutor.SupportsLowInterruptionContinue(effectiveToolId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前工具不支持少打断执行", "warning");
+        }
+
+        if (_feishuChannel.IsSessionExecutionActive(sessionId) || LowInterruptionRunningSessions.ContainsKey(sessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已有任务在执行，请等待完成后再试", "warning");
+        }
+
+        if (!_cliExecutor.CanStartLowInterruptionContinue(sessionId, effectiveToolId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话缺少可复用的 CLI 线程，无法少打断执行", "warning");
+        }
+
+        if (!LowInterruptionRunningSessions.TryAdd(sessionId, 0))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已有任务在执行，请等待完成后再试", "warning");
+        }
+
+        var toastResponse = _cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始少打断执行...", "info");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
+                var (streamingChrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(actualChatKey, sessionId, username, effectiveToolId);
+
+                var handle = await _cardKit.CreateStreamingHandleAsync(
+                    actualChatKey,
+                    null,
+                    effectiveOptions.ThinkingMessage,
+                    effectiveOptions.DefaultCardTitle,
+                    optionsOverride: effectiveOptions,
+                    chrome: streamingChrome);
+
+                await ExecuteLowInterruptionContinueAndStreamAsync(
+                    handle,
+                    streamingChrome,
+                    baseStatusMarkdown,
+                    sessionId,
+                    effectiveToolId,
+                    actualChatKey,
+                    effectiveOptions.ThinkingMessage);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ [FeishuHelp] 少打断执行失败: SessionId={SessionId}", sessionId);
+            }
+            finally
+            {
+                LowInterruptionRunningSessions.TryRemove(sessionId, out _);
+            }
+        });
+
+        return toastResponse;
+    }
+
     /// <summary>
     /// 获取或创建会话
     /// </summary>
@@ -470,6 +550,30 @@ public class FeishuCardActionService
             normalizedToolId);
 
         return newSessionId;
+    }
+
+    private async Task<string> ResolveSessionToolIdAsync(
+        string sessionId,
+        string? preferredToolId,
+        string chatKey,
+        string? username)
+    {
+        var normalizedToolId = NormalizeToolId(preferredToolId);
+        if (!string.IsNullOrWhiteSpace(normalizedToolId))
+        {
+            return normalizedToolId;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAsync(sessionId);
+        var sessionToolId = NormalizeToolId(session?.ToolId);
+        if (!string.IsNullOrWhiteSpace(sessionToolId))
+        {
+            return sessionToolId;
+        }
+
+        return ResolveToolIdForChat(chatKey, username);
     }
 
     /// <summary>
@@ -520,6 +624,7 @@ public class FeishuCardActionService
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
         var jsonlBuffer = new System.Text.StringBuilder();
+        var hasStructuredTodoList = false;
         var latestRenderedContent = thinkingMessage;
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
@@ -569,7 +674,7 @@ public class FeishuCardActionService
                 string displayContent;
                 if (useAdapter)
                 {
-                    ProcessJsonlChunk(chunk.Content, adapter!, assistantMessageBuilder, jsonlBuffer);
+                    hasStructuredTodoList |= ProcessJsonlChunk(chunk.Content, adapter!, assistantMessageBuilder, jsonlBuffer);
                     displayContent = assistantMessageBuilder.ToString();
 
                     if (string.IsNullOrWhiteSpace(displayContent))
@@ -594,6 +699,12 @@ public class FeishuCardActionService
             string finalOutput;
             if (useAdapter)
             {
+                if (jsonlBuffer.Length > 0)
+                {
+                    hasStructuredTodoList |= ProcessJsonlLine(jsonlBuffer.ToString(), adapter!, assistantMessageBuilder);
+                    jsonlBuffer.Clear();
+                }
+
                 finalOutput = assistantMessageBuilder.ToString().Trim();
                 if (string.IsNullOrWhiteSpace(finalOutput))
                 {
@@ -608,6 +719,7 @@ public class FeishuCardActionService
             latestRenderedContent = finalOutput;
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+            TryAttachLowInterruptionAction(streamingChrome, sessionId, tool.Id, chatId, hasStructuredTodoList, finalOutput);
             try
             {
                 // NOTE: 这条带会话标识的“已完成”普通文本通知不能删除。
@@ -658,6 +770,185 @@ public class FeishuCardActionService
         }
     }
 
+    private async Task ExecuteLowInterruptionContinueAndStreamAsync(
+        FeishuStreamingHandle handle,
+        FeishuStreamingCardChrome streamingChrome,
+        string baseStatusMarkdown,
+        string sessionId,
+        string toolId,
+        string chatId,
+        string thinkingMessage)
+    {
+        var outputBuilder = new System.Text.StringBuilder();
+        var assistantMessageBuilder = new System.Text.StringBuilder();
+        var jsonlBuffer = new System.Text.StringBuilder();
+        var hasStructuredTodoList = false;
+        var latestRenderedContent = thinkingMessage;
+        var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
+        var tool = _cliExecutor.GetTool(resolvedToolId);
+
+        if (tool == null)
+        {
+            streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
+            await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
+            _logger.LogWarning("CLI tool not found for low interruption continue: {ToolId}", resolvedToolId);
+            return;
+        }
+
+        var adapter = _cliExecutor.GetAdapter(tool);
+        var useAdapter = adapter != null && _cliExecutor.SupportsStreamParsing(tool);
+
+        using var statusPulseCts = new CancellationTokenSource();
+        var statusPulseTask = RunStreamingStatusPulseAsync(
+            handle,
+            streamingChrome,
+            baseStatusMarkdown,
+            () => latestRenderedContent,
+            statusPulseCts.Token);
+
+        try
+        {
+            await foreach (var chunk in _cliExecutor.ExecuteLowInterruptionContinueStreamAsync(sessionId, tool.Id))
+            {
+                if (chunk.IsError)
+                {
+                    _logger.LogError(
+                        "Low interruption continue error: {Error}",
+                        chunk.ErrorMessage ?? "Unknown error");
+                    statusPulseCts.Cancel();
+                    streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
+                    await handle.FinishAsync($"错误：{chunk.ErrorMessage ?? "执行失败"}");
+                    return;
+                }
+
+                outputBuilder.Append(chunk.Content);
+
+                string displayContent;
+                if (useAdapter)
+                {
+                    hasStructuredTodoList |= ProcessJsonlChunk(chunk.Content, adapter!, assistantMessageBuilder, jsonlBuffer);
+                    displayContent = assistantMessageBuilder.ToString();
+
+                    if (string.IsNullOrWhiteSpace(displayContent))
+                    {
+                        displayContent = thinkingMessage;
+                    }
+                }
+                else
+                {
+                    displayContent = FormatMarkdownOutput(outputBuilder.ToString());
+                }
+
+                latestRenderedContent = displayContent;
+                await handle.UpdateAsync(displayContent);
+
+                if (chunk.IsCompleted)
+                {
+                    break;
+                }
+            }
+
+            string finalOutput;
+            if (useAdapter)
+            {
+                if (jsonlBuffer.Length > 0)
+                {
+                    hasStructuredTodoList |= ProcessJsonlLine(jsonlBuffer.ToString(), adapter!, assistantMessageBuilder);
+                    jsonlBuffer.Clear();
+                }
+
+                finalOutput = assistantMessageBuilder.ToString().Trim();
+                if (string.IsNullOrWhiteSpace(finalOutput))
+                {
+                    finalOutput = ExtractFallbackOutput(outputBuilder.ToString(), adapter!) ?? "无输出";
+                }
+            }
+            else
+            {
+                finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
+            }
+
+            latestRenderedContent = finalOutput;
+            statusPulseCts.Cancel();
+            streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+            TryAttachLowInterruptionAction(streamingChrome, sessionId, tool.Id, chatId, hasStructuredTodoList, finalOutput);
+
+            try
+            {
+                await _feishuChannel.SendMessageAsync(
+                    chatId,
+                    BuildCompletionNotificationText(sessionId));
+            }
+            catch (Exception notificationEx)
+            {
+                _logger.LogWarning(notificationEx, "发送少打断执行完成通知失败: ChatId={ChatId}", chatId);
+            }
+
+            await handle.FinishAsync(finalOutput);
+
+            _chatSessionService.AddMessage(sessionId, new Domain.Model.ChatMessage
+            {
+                Role = "assistant",
+                Content = finalOutput,
+                CliToolId = tool.Id,
+                IsCompleted = true,
+                CreatedAt = DateTime.Now
+            });
+
+            _logger.LogInformation(
+                "Low interruption continue completed for session: {SessionId}",
+                sessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Low interruption continue failed for session: {SessionId}", sessionId);
+            statusPulseCts.Cancel();
+            streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
+            await handle.FinishAsync($"执行出错：{ex.Message}");
+        }
+        finally
+        {
+            statusPulseCts.Cancel();
+            try
+            {
+                await statusPulseTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
+    private void TryAttachLowInterruptionAction(
+        FeishuStreamingCardChrome streamingChrome,
+        string sessionId,
+        string toolId,
+        string chatId,
+        bool hasStructuredTodoList,
+        string finalOutput)
+    {
+        var normalizedToolId = NormalizeToolId(toolId) ?? toolId;
+        var hasCliThreadId = !string.IsNullOrWhiteSpace(_cliExecutor.GetCliThreadId(sessionId));
+        var isToolSupported = !string.IsNullOrWhiteSpace(normalizedToolId)
+                              && _cliExecutor.SupportsLowInterruptionContinue(normalizedToolId);
+
+        if (!LowInterruptionContinueHelper.IsEligible(
+                finalOutput,
+                hasStructuredTodoList,
+                isToolSupported,
+                hasCliThreadId,
+                isProcessRunning: false))
+        {
+            return;
+        }
+
+        streamingChrome.BottomActions.Clear();
+        streamingChrome.BottomActions.Add(LowInterruptionContinueHelper.CreateBottomAction(
+            sessionId,
+            NormalizeChatKey(chatId),
+            normalizedToolId));
+    }
+
     private async Task RunStreamingStatusPulseAsync(
         FeishuStreamingHandle handle,
         FeishuStreamingCardChrome streamingChrome,
@@ -687,14 +978,15 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理 JSONL 输出块
     /// </summary>
-    private void ProcessJsonlChunk(string content, ICliToolAdapter adapter, System.Text.StringBuilder assistantMessageBuilder, System.Text.StringBuilder jsonlBuffer)
+    private bool ProcessJsonlChunk(string content, ICliToolAdapter adapter, System.Text.StringBuilder assistantMessageBuilder, System.Text.StringBuilder jsonlBuffer)
     {
         if (string.IsNullOrEmpty(content))
         {
-            return;
+            return false;
         }
 
         jsonlBuffer.Append(content);
+        var hasStructuredTodoList = false;
 
         while (true)
         {
@@ -709,24 +1001,26 @@ public class FeishuCardActionService
             var line = bufferContent.Substring(0, newlineIndex).TrimEnd('\r');
             jsonlBuffer.Remove(0, newlineIndex + 1);
 
-            ProcessJsonlLine(line, adapter, assistantMessageBuilder);
+            hasStructuredTodoList |= ProcessJsonlLine(line, adapter, assistantMessageBuilder);
         }
+
+        return hasStructuredTodoList;
     }
 
     /// <summary>
     /// 处理单行 JSONL
     /// </summary>
-    private void ProcessJsonlLine(string line, ICliToolAdapter adapter, System.Text.StringBuilder assistantMessageBuilder)
+    private bool ProcessJsonlLine(string line, ICliToolAdapter adapter, System.Text.StringBuilder assistantMessageBuilder)
     {
         var trimmedLine = line.Trim();
         if (string.IsNullOrWhiteSpace(trimmedLine))
         {
-            return;
+            return false;
         }
 
         if (!trimmedLine.StartsWith("{"))
         {
-            return;
+            return false;
         }
 
         try
@@ -734,7 +1028,7 @@ public class FeishuCardActionService
             var outputEvent = adapter.ParseOutputLine(trimmedLine);
             if (outputEvent == null)
             {
-                return;
+                return false;
             }
 
             var assistantMessage = adapter.ExtractAssistantMessage(outputEvent);
@@ -742,10 +1036,13 @@ public class FeishuCardActionService
             {
                 assistantMessageBuilder.Append(assistantMessage);
             }
+
+            return LowInterruptionContinueHelper.HasStructuredTodoList(outputEvent);
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to parse JSONL line: {Line}", trimmedLine.Length > 100 ? trimmedLine[..100] : trimmedLine);
+            return false;
         }
     }
 

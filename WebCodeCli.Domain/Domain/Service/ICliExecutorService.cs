@@ -53,8 +53,26 @@ public interface ICliExecutorService
     /// <returns>流式输出块</returns>
     IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
         string sessionId,
-        string toolId, 
-        string userPrompt, 
+        string toolId,
+        string userPrompt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 判断工具是否支持少打断执行
+    /// </summary>
+    bool SupportsLowInterruptionContinue(string toolId);
+
+    /// <summary>
+    /// 判断当前会话是否可以启动少打断执行
+    /// </summary>
+    bool CanStartLowInterruptionContinue(string sessionId, string toolId);
+
+    /// <summary>
+    /// 以原生 resume/continue 方式启动一次少打断执行
+    /// </summary>
+    IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(
+        string sessionId,
+        string toolId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

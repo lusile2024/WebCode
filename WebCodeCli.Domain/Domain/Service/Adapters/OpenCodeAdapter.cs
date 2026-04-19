@@ -37,6 +37,7 @@ public class OpenCodeAdapter : ICliToolAdapter
     /// - {session}: 会话恢复参数（如果有，格式为 "--session id" 或 "--continue"）
     /// </summary>
     public const string DefaultArgumentTemplate = "run {session} \"{prompt}\" --format json";
+    public const string DefaultLowInterruptionArgumentTemplate = "run --session {cliThreadId} --format json";
 
     public string[] SupportedToolIds => new[] { "opencode", "opencode-cli" };
 
@@ -90,6 +91,23 @@ public class OpenCodeAdapter : ICliToolAdapter
         }
 
         return result;
+    }
+
+    public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.CliThreadId))
+        {
+            throw new InvalidOperationException("Low-interruption continue requires an existing CLI thread/session id.");
+        }
+
+        var template = !string.IsNullOrWhiteSpace(tool.LowInterruptionArgumentTemplate)
+            ? tool.LowInterruptionArgumentTemplate
+            : DefaultLowInterruptionArgumentTemplate;
+
+        return NormalizeArguments(
+            template
+                .Replace("{cliThreadId}", context.CliThreadId)
+                .Replace("{session}", $"--session {context.CliThreadId}"));
     }
 
     public CliOutputEvent? ParseOutputLine(string line)
@@ -601,6 +619,18 @@ public class OpenCodeAdapter : ICliToolAdapter
             .Replace("\"", "\\\"");
 
         return escaped;
+    }
+
+    private static string NormalizeArguments(string arguments)
+    {
+        var normalized = arguments.Trim();
+
+        while (normalized.Contains("  ", StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return normalized;
     }
 
     private static long GetLongProperty(JsonElement element, string propertyName)

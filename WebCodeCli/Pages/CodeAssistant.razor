@@ -415,7 +415,11 @@
                               ExitFullscreenLabel="@T("common.exitFullscreen")"
                               IsJsonlContent="IsJsonlContent"
                               RenderJsonlContent="RenderJsonlContent"
-                              RenderMarkdown="RenderMarkdown" />
+                              RenderMarkdown="RenderMarkdown"
+                              LowInterruptionContinueMessageId="@CurrentLowInterruptionContinueEligibility.MessageId"
+                              LowInterruptionContinueDisabled="@CurrentLowInterruptionContinueEligibility.IsDisabled"
+                              LowInterruptionContinueText="少打断执行"
+                              OnLowInterruptionContinue="StartLowInterruptionContinueAsync" />
 
         <ChatInputPanel UploadFileText="@T("codeAssistant.uploadFile")"
                         RootFolderText="@T("codeAssistant.rootFolder")"

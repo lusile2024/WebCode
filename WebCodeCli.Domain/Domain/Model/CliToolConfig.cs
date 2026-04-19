@@ -31,6 +31,11 @@ public class CliToolConfig
     public string ArgumentTemplate { get; set; } = string.Empty;
 
     /// <summary>
+    /// 少打断执行参数模板，使用 {cliThreadId} 作为原生会话占位符
+    /// </summary>
+    public string LowInterruptionArgumentTemplate { get; set; } = string.Empty;
+
+    /// <summary>
     /// 持久化模式参数（用于启动长期运行的交互式进程）
     /// 如果为null，则使用一次性进程模式
     /// </summary>

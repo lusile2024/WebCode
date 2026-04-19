@@ -100,6 +100,187 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public void CodexAdapter_BuildLowInterruptionArguments_UsesResumeFullAutoWithoutPrompt()
+    {
+        var adapter = new CodexAdapter();
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+        var context = new CliSessionContext
+        {
+            SessionId = "session-low-interruption",
+            CliThreadId = "thread-123",
+            WorkingDirectory = Path.GetTempPath()
+        };
+
+        var arguments = adapter.BuildLowInterruptionArguments(tool, context);
+
+        Assert.Equal("exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json --full-auto thread-123", arguments);
+        Assert.DoesNotContain("{prompt}", arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("keep going", arguments, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SupportsLowInterruptionContinue_WhenAdapterProvidesNativeDefaults_ReturnsTrue()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new CodexAdapter()),
+            new StubCcSwitchService());
+
+        Assert.True(service.SupportsLowInterruptionContinue(tool.Id));
+    }
+
+    [Fact]
+    public void CanStartLowInterruptionContinue_WhenThreadIdMissing_ReturnsFalse()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new CodexAdapter()),
+            new StubCcSwitchService());
+
+        Assert.False(service.CanStartLowInterruptionContinue("session-without-thread", tool.Id));
+    }
+
+    [Fact]
+    public void CanStartLowInterruptionContinue_WhenThreadIdExistsAndToolSupported_ReturnsTrue()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new CodexAdapter()),
+            new StubCcSwitchService());
+
+        service.SetCliThreadId("session-with-thread", "thread-123");
+
+        Assert.True(service.CanStartLowInterruptionContinue("session-with-thread", tool.Id));
+    }
+
+    [Fact]
+    public async Task ExecuteLowInterruptionContinueStreamAsync_WhenThreadIdMissing_ReturnsCompletedErrorChunk()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new CodexAdapter()),
+            new StubCcSwitchService());
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteLowInterruptionContinueStreamAsync("session-without-thread", tool.Id))
+        {
+            chunks.Add(chunk);
+        }
+
+        var failureChunk = Assert.Single(chunks.Where(chunk => chunk.IsError && chunk.IsCompleted));
+        Assert.Contains("thread/session id", failureChunk.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteLowInterruptionContinueStreamAsync_UsesLowInterruptionAdapterPath()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "recording-low-interruption-tool",
+            Name = "Recording Low Interruption Tool",
+            Command = "powershell.exe",
+            Enabled = true
+        };
+        var adapter = new RecordingLowInterruptionAdapter();
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(adapter),
+            new StubCcSwitchService());
+
+        service.SetCliThreadId("session-low-interruption", "thread-123");
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteLowInterruptionContinueStreamAsync("session-low-interruption", tool.Id))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Equal(1, adapter.BuildLowInterruptionArgumentsCallCount);
+        Assert.Equal(0, adapter.BuildArgumentsCallCount);
+        Assert.Equal("thread-123", adapter.LastLowInterruptionContext?.CliThreadId);
+        Assert.Contains(chunks, chunk => !chunk.IsError);
+    }
+
+    [Fact]
     public async Task CleanupSessionWorkspace_WhenCustomWorkspaceMetadataWasDeleted_PreservesDirectoryContents()
     {
         const string sessionId = "session-custom-workspace";
@@ -974,6 +1155,9 @@ public class CliExecutorServiceTests
         public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
             => tool.ArgumentTemplate;
 
+        public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+            => tool.ArgumentTemplate;
+
         public CliOutputEvent? ParseOutputLine(string line)
         {
             if (line.StartsWith("RETRY: ", StringComparison.OrdinalIgnoreCase))
@@ -998,6 +1182,47 @@ public class CliExecutorServiceTests
 
             return null;
         }
+
+        public string? ExtractSessionId(CliOutputEvent outputEvent) => null;
+
+        public string? ExtractAssistantMessage(CliOutputEvent outputEvent) => null;
+
+        public string GetEventTitle(CliOutputEvent outputEvent) => outputEvent.Title ?? string.Empty;
+
+        public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
+
+        public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
+    }
+
+    private sealed class RecordingLowInterruptionAdapter : ICliToolAdapter
+    {
+        public string[] SupportedToolIds => ["recording-low-interruption-tool"];
+
+        public bool SupportsStreamParsing => false;
+
+        public int BuildArgumentsCallCount { get; private set; }
+
+        public int BuildLowInterruptionArgumentsCallCount { get; private set; }
+
+        public CliSessionContext? LastLowInterruptionContext { get; private set; }
+
+        public bool CanHandle(CliToolConfig tool)
+            => string.Equals(tool.Id, "recording-low-interruption-tool", StringComparison.OrdinalIgnoreCase);
+
+        public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+        {
+            BuildArgumentsCallCount++;
+            return "-NoProfile -Command \"Write-Output 'normal-path'\"";
+        }
+
+        public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+        {
+            BuildLowInterruptionArgumentsCallCount++;
+            LastLowInterruptionContext = context;
+            return "-NoProfile -Command \"Write-Output 'low-interruption-path'\"";
+        }
+
+        public CliOutputEvent? ParseOutputLine(string line) => null;
 
         public string? ExtractSessionId(CliOutputEvent outputEvent) => null;
 

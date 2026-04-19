@@ -150,6 +150,120 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_AttachesLowInterruptionButton_WhenLatestOutputShowsPlan()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-low-interruption-button";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            SupportsLowInterruption = true,
+            StandardExecutionContent = "plan still pending"
+        };
+        cliExecutor.SetCliThreadId(activeSessionId, "thread-low-interruption");
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit);
+
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "继续");
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(cardKit.LastStreamingChrome);
+        var chrome = cardKit.LastStreamingChrome!;
+        var bottomAction = Assert.Single(chrome.BottomActions);
+        Assert.Equal("少打断执行", bottomAction.Text);
+
+        var valueJson = JsonSerializer.Serialize(bottomAction.Value);
+        Assert.Contains("\"action\":\"low_interruption_continue\"", valueJson);
+        Assert.Contains($"\"session_id\":\"{activeSessionId}\"", valueJson);
+        Assert.Contains($"\"chat_key\":\"{chatId}\"", valueJson);
+        Assert.Contains("\"tool_id\":\"claude-code\"", valueJson);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_LowInterruptionContinue_StartsNewStreamingCardWithoutPromptInjection()
+    {
+        const string chatId = "oc_current_chat";
+        const string sessionId = "session-low-interruption-run";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            SupportsLowInterruption = true,
+            LowInterruptionExecutionContent = "backlog remains"
+        };
+        cliExecutor.SetCliThreadId(sessionId, "thread-low-interruption");
+        cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
+
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(sessionId);
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"low_interruption_continue","session_id":"session-low-interruption-run","chat_key":"oc_current_chat","tool_id":"codex"}""",
+            chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+
+        var usedSessionId = await cliExecutor.WaitForLowInterruptionExecutionAsync(TimeSpan.FromSeconds(3));
+        await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(sessionId, usedSessionId);
+        Assert.Empty(cliExecutor.ExecutedPrompts);
+        Assert.Equal([sessionId], cliExecutor.LowInterruptionSessionIds);
+        Assert.NotNull(cardKit.LastStreamingChrome);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_LowInterruptionContinue_WhenThreadMissing_ReturnsWarning()
+    {
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            SupportsLowInterruption = true
+        };
+        var feishuChannel = new StubFeishuChannelService("session-no-thread");
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"low_interruption_continue","session_id":"session-no-thread","chat_key":"oc_current_chat","tool_id":"codex"}""",
+            chatId: "oc_current_chat");
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning, response.Toast?.Type);
+        Assert.Contains("CLI 线程", response.Toast?.Content);
+        Assert.Empty(cliExecutor.LowInterruptionSessionIds);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_LowInterruptionContinue_WhenSessionAlreadyRunning_ReturnsWarning()
+    {
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            SupportsLowInterruption = true
+        };
+        cliExecutor.SetCliThreadId("session-running", "thread-running");
+
+        var feishuChannel = new StubFeishuChannelService("session-running")
+        {
+            SessionExecutionActive = true
+        };
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"low_interruption_continue","session_id":"session-running","chat_key":"oc_current_chat","tool_id":"codex"}""",
+            chatId: "oc_current_chat");
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning, response.Toast?.Type);
+        Assert.Contains("已有任务在执行", response.Toast?.Content);
+        Assert.Empty(cliExecutor.LowInterruptionSessionIds);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_OpenSessionManager_SendAsNewCard_SendsSessionManagerCardToChat()
     {
         const string chatId = "oc_workspace_chat";
@@ -1199,16 +1313,26 @@ public class FeishuCardActionServiceTests
     private sealed class RecordingCliExecutorService : ICliExecutorService
     {
         private readonly TaskCompletionSource<string> _executionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _lowInterruptionExecutionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Dictionary<string, CliToolConfig> _tools = new(StringComparer.OrdinalIgnoreCase)
         {
             ["claude-code"] = new CliToolConfig { Id = "claude-code", Name = "Claude Code" },
             ["codex"] = new CliToolConfig { Id = "codex", Name = "Codex" }
         };
+        private readonly Dictionary<string, string> _cliThreadIds = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _workspacePaths = new(StringComparer.OrdinalIgnoreCase);
 
         public bool WasExecuted { get; private set; }
 
+        public bool SupportsLowInterruption { get; set; }
+
+        public string StandardExecutionContent { get; set; } = "initialized";
+
+        public string LowInterruptionExecutionContent { get; set; } = "continued";
+
         public List<string> ExecutedPrompts { get; } = new();
+
+        public List<string> LowInterruptionSessionIds { get; } = new();
 
         public List<(string SessionId, string? ToolId)> SyncRequests { get; } = new();
 
@@ -1224,15 +1348,26 @@ public class FeishuCardActionServiceTests
             return await _executionStarted.Task;
         }
 
+        public async Task<string> WaitForLowInterruptionExecutionAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _lowInterruptionExecutionStarted.TrySetCanceled(cts.Token));
+            return await _lowInterruptionExecutionStarted.Task;
+        }
+
         public ICliToolAdapter? GetAdapter(CliToolConfig tool) => null;
 
         public ICliToolAdapter? GetAdapterById(string toolId) => null;
 
         public bool SupportsStreamParsing(CliToolConfig tool) => false;
 
-        public string? GetCliThreadId(string sessionId) => null;
+        public string? GetCliThreadId(string sessionId)
+            => _cliThreadIds.TryGetValue(sessionId, out var cliThreadId) ? cliThreadId : null;
 
-        public void SetCliThreadId(string sessionId, string threadId) { }
+        public void SetCliThreadId(string sessionId, string threadId)
+        {
+            _cliThreadIds[sessionId] = threadId;
+        }
 
         public async IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
             string sessionId,
@@ -1245,9 +1380,31 @@ public class FeishuCardActionServiceTests
             _executionStarted.TrySetResult(sessionId);
             yield return new StreamOutputChunk
             {
-                Content = "initialized",
+                Content = StandardExecutionContent,
                 IsCompleted = true
             };
+            await Task.CompletedTask;
+        }
+
+        public bool SupportsLowInterruptionContinue(string toolId)
+            => SupportsLowInterruption && _tools.ContainsKey(toolId);
+
+        public bool CanStartLowInterruptionContinue(string sessionId, string toolId)
+            => SupportsLowInterruptionContinue(toolId) && !string.IsNullOrWhiteSpace(GetCliThreadId(sessionId));
+
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(
+            string sessionId,
+            string toolId,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            LowInterruptionSessionIds.Add(sessionId);
+            _lowInterruptionExecutionStarted.TrySetResult(sessionId);
+            yield return new StreamOutputChunk
+            {
+                Content = LowInterruptionExecutionContent,
+                IsCompleted = true
+            };
+
             await Task.CompletedTask;
         }
 
@@ -1399,6 +1556,8 @@ public class FeishuCardActionServiceTests
 
         public bool IsRunning => true;
 
+        public bool SessionExecutionActive { get; set; }
+
         public string? CreatedWorkspacePath { get; private set; }
 
         public string? CreatedToolId { get; private set; }
@@ -1450,6 +1609,8 @@ public class FeishuCardActionServiceTests
             LastClosedSessionId = sessionId;
             return true;
         }
+
+        public bool IsSessionExecutionActive(string sessionId) => SessionExecutionActive;
 
         public string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null, string? toolId = null)
         {

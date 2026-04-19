@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using FeishuNetSdk.Im.Dtos;
@@ -12,7 +12,7 @@ using WebCodeCli.Domain.Domain.Model.Channels;
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
 /// <summary>
-/// 飞书 CardKit 客户端实现
+/// 椋炰功 CardKit 瀹㈡埛绔疄鐜?
 /// </summary>
 [ServiceDescription(typeof(IFeishuCardKitClient), ServiceLifetime.Scoped)]
 public class FeishuCardKitClient : IFeishuCardKitClient
@@ -139,7 +139,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
-        _logger.LogInformation("📤 [FeishuCardKit] ReplyCardMessageAsync: ReplyMessageId={ReplyMessageId}, CardId={CardId}",
+        _logger.LogInformation("馃摛 [FeishuCardKit] ReplyCardMessageAsync: ReplyMessageId={ReplyMessageId}, CardId={CardId}",
             replyMessageId, cardId);
 
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
@@ -158,7 +158,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             })
         };
 
-        _logger.LogInformation("📤 [FeishuCardKit] 发送 POST 请求到 /open-apis/im/v1/messages/{ReplyMessageId}/reply", replyMessageId);
+        _logger.LogInformation("馃摛 [FeishuCardKit] 鍙戦€?POST 璇锋眰鍒?/open-apis/im/v1/messages/{ReplyMessageId}/reply", replyMessageId);
         var response = await PostAsync(
             $"/open-apis/im/v1/messages/{replyMessageId}/reply",
             token,
@@ -166,12 +166,12 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             effectiveOptions,
             cancellationToken);
 
-        _logger.LogInformation("📤 [FeishuCardKit] 响应状态码: {StatusCode}", response.StatusCode);
+        _logger.LogInformation("馃摛 [FeishuCardKit] 鍝嶅簲鐘舵€佺爜: {StatusCode}", response.StatusCode);
         var result = await ParseResponseAsync(response, cancellationToken);
         EnsureBusinessSuccess(result, "Reply Feishu card message");
-        _logger.LogDebug("📤 [FeishuCardKit] 响应内容: {Response}", result);
+        _logger.LogDebug("馃摛 [FeishuCardKit] 鍝嶅簲鍐呭: {Response}", result);
         var messageId = ExtractMessageId(result, "reply card message");
-        _logger.LogInformation("✅ [FeishuCardKit] 回复成功, MessageId={MessageId}", messageId);
+        _logger.LogInformation("鉁?[FeishuCardKit] 鍥炲鎴愬姛, MessageId={MessageId}", messageId);
         return messageId;
     }
 
@@ -217,7 +217,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var cardTitle = title ?? effectiveOptions.DefaultCardTitle;
 
-        // 1. 创建卡片
+        // 1. 鍒涘缓鍗＄墖
         var cardId = await CreateCardCoreAsync(
             initialContent,
             cardTitle,
@@ -225,7 +225,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             effectiveOptions,
             chrome);
 
-        // 2. 发送或回复卡片消息
+        // 2. 鍙戦€佹垨鍥炲鍗＄墖娑堟伅
         string messageId;
         if (!string.IsNullOrEmpty(replyMessageId))
         {
@@ -236,7 +236,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             messageId = await SendCardMessageAsync(chatId, cardId, cancellationToken, effectiveOptions);
         }
 
-        // 3. 创建流式句柄
+        // 3. 鍒涘缓娴佸紡鍙ユ焺
         return new FeishuStreamingHandle(
             cardId,
             messageId,
@@ -371,7 +371,21 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
     private object[] BuildStreamingCardElements(string content, FeishuStreamingCardChrome? chrome)
     {
-        if (chrome == null || (string.IsNullOrWhiteSpace(chrome.StatusMarkdown) && chrome.OverflowOptions.Count == 0))
+        if (chrome == null)
+        {
+            return
+            [
+                new
+                {
+                    tag = "markdown",
+                    content
+                }
+            ];
+        }
+
+        var hasStatusSection = !string.IsNullOrWhiteSpace(chrome.StatusMarkdown) || chrome.OverflowOptions.Count > 0;
+        var hasBottomActions = chrome.BottomActions.Count > 0;
+        if (!hasStatusSection && !hasBottomActions)
         {
             return
             [
@@ -384,46 +398,61 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         }
 
         var elements = new List<object>();
-        var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
-            ? "当前会话"
-            : chrome.StatusMarkdown;
-
-        if (chrome.OverflowOptions.Count > 0)
+        if (hasStatusSection)
         {
-            elements.Add(new
+            var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
+                ? "褰撳墠浼氳瘽"
+                : chrome.StatusMarkdown;
+
+            if (chrome.OverflowOptions.Count > 0)
             {
-                tag = "div",
-                text = new
+                elements.Add(new
                 {
-                    tag = "lark_md",
-                    content = statusMarkdown
-                },
-                extra = new
-                {
-                    tag = "overflow",
-                    options = BuildOverflowOptions(chrome.OverflowOptions)
-                }
-            });
-        }
-        else
-        {
-            elements.Add(new
+                    tag = "div",
+                    text = new
+                    {
+                        tag = "lark_md",
+                        content = statusMarkdown
+                    },
+                    extra = new
+                    {
+                        tag = "overflow",
+                        options = BuildOverflowOptions(chrome.OverflowOptions)
+                    }
+                });
+            }
+            else
             {
-                tag = "div",
-                text = new
+                elements.Add(new
                 {
-                    tag = "lark_md",
-                    content = statusMarkdown
-                }
-            });
+                    tag = "div",
+                    text = new
+                    {
+                        tag = "lark_md",
+                        content = statusMarkdown
+                    }
+                });
+            }
+
+            elements.Add(new { tag = "hr" });
         }
 
-        elements.Add(new { tag = "hr" });
         elements.Add(new
         {
             tag = "markdown",
             content
         });
+
+        if (hasBottomActions)
+        {
+            elements.Add(new { tag = "hr" });
+            elements.Add(new
+            {
+                tag = "action",
+                layout = "flow",
+                actions = BuildBottomActions(chrome.BottomActions)
+            });
+        }
 
         return elements.ToArray();
     }
@@ -444,6 +473,31 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             .ToArray();
     }
 
+    private object[] BuildBottomActions(IEnumerable<FeishuStreamingCardBottomAction> actions)
+    {
+        return actions
+            .Where(action => !string.IsNullOrWhiteSpace(action.Text))
+            .Select(action => (object)new
+            {
+                tag = "button",
+                text = new
+                {
+                    tag = "plain_text",
+                    content = action.Text
+                },
+                type = string.IsNullOrWhiteSpace(action.Type) ? "default" : action.Type,
+                behaviors = new[]
+                {
+                    new
+                    {
+                        type = "callback",
+                        value = action.Value
+                    }
+                }
+            })
+            .ToArray();
+    }
+
     private string ExtractMessageId(JsonElement result, string operationName)
     {
         if (result.TryGetProperty("data", out var data) &&
@@ -452,19 +506,19 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             return messageIdProp.GetString() ?? string.Empty;
         }
 
-        _logger.LogError("❌ [FeishuCardKit] 响应中没有 message_id, Operation={Operation}", operationName);
+        _logger.LogError("鉂?[FeishuCardKit] 鍝嶅簲涓病鏈?message_id, Operation={Operation}", operationName);
         throw new InvalidOperationException($"Failed to {operationName}: invalid response");
     }
 
     /// <summary>
-    /// 获取或刷新访问令牌
-    /// 使用 SemaphoreSlim 实现异步安全的双重检查锁定
+    /// 鑾峰彇鎴栧埛鏂拌闂护鐗?
+    /// 浣跨敤 SemaphoreSlim 瀹炵幇寮傛瀹夊叏鐨勫弻閲嶆鏌ラ攣瀹?
     /// </summary>
     private async Task<string> EnsureTokenAsync(FeishuOptions options, CancellationToken cancellationToken)
     {
         var cacheEntry = GetTokenCacheEntry(options);
 
-        // 快速路径：token 有效直接返回
+        // 蹇€熻矾寰勶細token 鏈夋晥鐩存帴杩斿洖
         if (!string.IsNullOrEmpty(cacheEntry.AccessToken) && DateTime.UtcNow < cacheEntry.TokenExpiresAt)
         {
             return cacheEntry.AccessToken;
@@ -473,7 +527,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         await cacheEntry.TokenLock.WaitAsync(cancellationToken);
         try
         {
-            // 双重检查
+            // 鍙岄噸妫€鏌?
             if (!string.IsNullOrEmpty(cacheEntry.AccessToken) && DateTime.UtcNow < cacheEntry.TokenExpiresAt)
             {
                 return cacheEntry.AccessToken;
@@ -498,7 +552,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to refresh access token for AppId={AppId}", options.AppId);
-                // 回退：使用上次有效的 token（如果还有效）
+                // 鍥為€€锛氫娇鐢ㄤ笂娆℃湁鏁堢殑 token锛堝鏋滆繕鏈夋晥锛?
                 if (!string.IsNullOrEmpty(cacheEntry.LastValidToken))
                 {
                     _logger.LogWarning("Using fallback token due to refresh failure for AppId={AppId}", options.AppId);
@@ -524,7 +578,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 return cacheEntry.AccessToken;
             }
 
-            // 解析失败但可能还有旧 token 可用
+            // 瑙ｆ瀽澶辫触浣嗗彲鑳借繕鏈夋棫 token 鍙敤
             if (!string.IsNullOrEmpty(cacheEntry.LastValidToken))
             {
                 _logger.LogWarning("Token parse failed, using fallback token for AppId={AppId}", options.AppId);
@@ -646,8 +700,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     }
 
     /// <summary>
-    /// 发送原始JSON卡片消息（帮助功能专用）
-    /// 通过 CardKit 创建卡片，避免JSON格式问题
+    /// 鍙戦€佸師濮婮SON鍗＄墖娑堟伅锛堝府鍔╁姛鑳戒笓鐢級
+    /// 閫氳繃 CardKit 鍒涘缓鍗＄墖锛岄伩鍏岼SON鏍煎紡闂
     /// </summary>
     public async Task<string> SendRawCardAsync(
         string chatId,
@@ -655,9 +709,9 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
-        _logger.LogInformation("📤 [FeishuCardKit] 通过CardKit发送卡片");
+        _logger.LogInformation("馃摛 [FeishuCardKit] 閫氳繃 CardKit 鍙戦€佸崱鐗?");
 
-        // 1. 先用 CardKit API 创建卡片
+        // 1. 鍏堢敤 CardKit API 鍒涘缓鍗＄墖
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
@@ -684,14 +738,14 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         }
 
         var cardId = cardIdProp.GetString() ?? string.Empty;
-        _logger.LogInformation("📤 [FeishuCardKit] CardKit创建成功: CardId={CardId}", cardId);
+        _logger.LogInformation("馃摛 [FeishuCardKit] CardKit鍒涘缓鎴愬姛: CardId={CardId}", cardId);
 
-        // 2. 再发送卡片消息
+        // 2. 鍐嶅彂閫佸崱鐗囨秷鎭?
         return await SendCardMessageAsync(chatId, cardId, cancellationToken, effectiveOptions);
     }
 
     /// <summary>
-    /// 回复 V2 DTO 卡片消息（帮助功能专用）
+    /// 鍥炲 V2 DTO 鍗＄墖娑堟伅锛堝府鍔╁姛鑳戒笓鐢級
     /// </summary>
     public Task<string> ReplyElementsCardAsync(
         string replyMessageId,
@@ -704,8 +758,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     }
 
     /// <summary>
-    /// 回复原始JSON卡片消息(帮助功能专用)
-    /// 参考 OpenCowork 实现:先创建卡片获取 card_id,再发送
+    /// 鍥炲鍘熷JSON鍗＄墖娑堟伅(甯姪鍔熻兘涓撶敤)
+    /// 鍙傝€?OpenCowork 瀹炵幇:鍏堝垱寤哄崱鐗囪幏鍙?card_id,鍐嶅彂閫?
     /// </summary>
     public async Task<string> ReplyRawCardAsync(
         string replyMessageId,
@@ -713,21 +767,21 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
-        _logger.LogInformation("📤 [FeishuCardKit] 回复交互式卡片, ReplyMessageId={ReplyMessageId}", replyMessageId);
-        _logger.LogDebug("📤 [FeishuCardKit] 卡片JSON: {CardJson}", cardJson);
+        _logger.LogInformation("馃摛 [FeishuCardKit] 鍥炲浜や簰寮忓崱鐗? ReplyMessageId={ReplyMessageId}", replyMessageId);
+        _logger.LogDebug("馃摛 [FeishuCardKit] 鍗＄墖JSON: {CardJson}", cardJson);
 
         try
         {
             var effectiveOptions = GetEffectiveOptions(optionsOverride);
             var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
 
-            // 步骤1: 使用 CardKit API 创建卡片,获取 card_id
-            _logger.LogInformation("📤 [FeishuCardKit] 步骤1: 创建卡片...");
+            // 姝ラ1: 浣跨敤 CardKit API 鍒涘缓鍗＄墖,鑾峰彇 card_id
+            _logger.LogInformation("馃摛 [FeishuCardKit] 姝ラ1: 鍒涘缓鍗＄墖...");
 
             var createCardPayload = new
             {
                 type = "card_json",
-                data = cardJson  // cardJson 是字符串
+                data = cardJson  // cardJson 鏄瓧绗︿覆
             };
 
             var createResponse = await PostAsync(
@@ -738,11 +792,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 cancellationToken);
 
             var createContent = await createResponse.Content.ReadAsStringAsync(cancellationToken);
-            _logger.LogDebug("📤 [FeishuCardKit] 创建卡片响应: {Response}", createContent);
+            _logger.LogDebug("馃摛 [FeishuCardKit] 鍒涘缓鍗＄墖鍝嶅簲: {Response}", createContent);
 
             if (!createResponse.IsSuccessStatusCode)
             {
-                _logger.LogError("❌ [FeishuCardKit] 创建卡片失败: {Content}", createContent);
+                _logger.LogError("鉂?[FeishuCardKit] 鍒涘缓鍗＄墖澶辫触: {Content}", createContent);
                 throw new HttpRequestException($"Create card failed: {createResponse.StatusCode}");
             }
 
@@ -752,15 +806,15 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             if (!createResult.TryGetProperty("data", out var createData) ||
                 !createData.TryGetProperty("card_id", out var cardIdProp))
             {
-                _logger.LogError("❌ [FeishuCardKit] 响应中没有 card_id");
+                _logger.LogError("鉂?[FeishuCardKit] 鍝嶅簲涓病鏈?card_id");
                 throw new InvalidOperationException("Failed to get card_id from response");
             }
 
             var cardId = cardIdProp.GetString() ?? string.Empty;
-            _logger.LogInformation("📤 [FeishuCardKit] 步骤1: 卡片创建成功, CardId={CardId}", cardId);
+            _logger.LogInformation("馃摛 [FeishuCardKit] 姝ラ1: 鍗＄墖鍒涘缓鎴愬姛, CardId={CardId}", cardId);
 
-            // 步骤2: 使用消息 API 回复卡片(发送 card_id)
-            _logger.LogInformation("📤 [FeishuCardKit] 步骤2: 回复卡片消息...");
+            // 姝ラ2: 浣跨敤娑堟伅 API 鍥炲鍗＄墖(鍙戦€?card_id)
+            _logger.LogInformation("馃摛 [FeishuCardKit] 姝ラ2: 鍥炲鍗＄墖娑堟伅...");
 
             var replyPayload = new
             {
@@ -780,11 +834,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 cancellationToken);
 
             var replyContent = await replyResponse.Content.ReadAsStringAsync(cancellationToken);
-            _logger.LogDebug("📤 [FeishuCardKit] 回复消息响应: {Response}", replyContent);
+            _logger.LogDebug("馃摛 [FeishuCardKit] 鍥炲娑堟伅鍝嶅簲: {Response}", replyContent);
 
             if (!replyResponse.IsSuccessStatusCode)
             {
-                _logger.LogError("❌ [FeishuCardKit] 回复消息失败: {Content}", replyContent);
+                _logger.LogError("鉂?[FeishuCardKit] 鍥炲娑堟伅澶辫触: {Content}", replyContent);
                 throw new HttpRequestException($"Reply message failed: {replyResponse.StatusCode}");
             }
 
@@ -795,16 +849,16 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 data.TryGetProperty("message_id", out var messageIdProp))
             {
                 var messageId = messageIdProp.GetString() ?? string.Empty;
-                _logger.LogInformation("✅ [FeishuCardKit] 卡片回复成功, MessageId={MessageId}", messageId);
+                _logger.LogInformation("鉁?[FeishuCardKit] 鍗＄墖鍥炲鎴愬姛, MessageId={MessageId}", messageId);
                 return messageId;
             }
 
-            _logger.LogError("❌ [FeishuCardKit] 响应中没有 message_id");
+            _logger.LogError("鉂?[FeishuCardKit] 鍝嶅簲涓病鏈?message_id");
             throw new InvalidOperationException("Failed to get message_id from response");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ [FeishuCardKit] ReplyRawCardAsync 失败");
+            _logger.LogError(ex, "鉂?[FeishuCardKit] ReplyRawCardAsync 澶辫触");
             throw;
         }
     }
@@ -831,3 +885,4 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return JsonSerializer.Serialize(payload);
     }
 }
+
