@@ -2259,8 +2259,9 @@ public class FeishuCardActionService
             string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
 
         var workspaceName = GetSessionWorkspaceName(sessionId, currentSession?.WorkspacePath);
+        var sessionLabel = GetSessionDisplayLabel(currentSession);
         var toolLabel = GetToolDisplayName(currentSession?.ToolId ?? currentToolId);
-        var baseStatusMarkdown = $"当前会话：**{workspaceName}** · `{ShortSessionId(sessionId)}` · {toolLabel}";
+        var baseStatusMarkdown = $"当前会话：**{workspaceName}** · {sessionLabel} · {toolLabel}";
 
         var chrome = new FeishuStreamingCardChrome
         {
@@ -2314,13 +2315,22 @@ public class FeishuCardActionService
     private static string BuildSessionOptionText(ChatSessionEntity session)
     {
         var workspaceName = ExtractWorkspaceDirectoryName(session.WorkspacePath) ?? "未命名会话";
-        return $"{workspaceName} · {ShortSessionId(session.SessionId)} · {GetToolDisplayName(session.ToolId)}";
+        var sessionLabel = GetSessionDisplayLabel(session);
+        return $"{workspaceName} · {sessionLabel} · {GetToolDisplayName(session.ToolId)}";
     }
 
     private string BuildCompletionNotificationText(string sessionId, string? fallbackWorkspacePath = null)
     {
+        ChatSessionEntity? session;
+        using (var scope = _serviceProvider.CreateScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        }
+
         var workspaceName = GetSessionWorkspaceName(sessionId, fallbackWorkspacePath);
-        return $"当前会话：{workspaceName}  {ShortSessionId(sessionId)}\n已完成";
+        var sessionLabel = GetSessionDisplayLabel(session);
+        return $"当前会话：{workspaceName}  {sessionLabel}\n已完成";
     }
 
     private static string? ExtractWorkspaceDirectoryName(string? workspacePath)
@@ -2347,6 +2357,16 @@ public class FeishuCardActionService
             : sessionId.Length <= 8
                 ? sessionId
                 : sessionId[..8];
+    }
+
+    private static string GetSessionDisplayLabel(ChatSessionEntity? session)
+    {
+        if (!string.IsNullOrWhiteSpace(session?.Title))
+        {
+            return session.Title.Trim();
+        }
+
+        return ShortSessionId(session?.SessionId ?? string.Empty);
     }
 
     /// <summary>

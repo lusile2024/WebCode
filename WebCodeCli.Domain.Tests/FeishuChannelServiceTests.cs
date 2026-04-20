@@ -264,6 +264,7 @@ public class FeishuChannelServiceTests
         {
             SessionId = "11111111-current",
             Username = "luhaiyan",
+            Title = "MMIS-Server*",
             WorkspacePath = currentWorkspace,
             ToolId = "codex",
             FeishuChatKey = "oc_menu_chat",
@@ -276,6 +277,7 @@ public class FeishuChannelServiceTests
         {
             SessionId = "22222222-other",
             Username = "luhaiyan",
+            Title = "Backend API",
             WorkspacePath = otherWorkspace,
             ToolId = "claude-code",
             FeishuChatKey = "oc_menu_chat",
@@ -318,19 +320,21 @@ public class FeishuChannelServiceTests
             var handle = Assert.Single(cardKit.Handles);
             Assert.NotNull(handle.Chrome);
             var chrome = handle.Chrome!;
-            Assert.Contains("褰撳墠浼氳瘽", chrome.StatusMarkdown);
+            Assert.Contains("当前会话：**superpowers**", chrome.StatusMarkdown);
             Assert.Contains("superpowers", chrome.StatusMarkdown);
-            Assert.Contains("11111111", chrome.StatusMarkdown);
-            Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
-            Assert.Contains(chrome.OverflowOptions, option => option.Text == "鏇村浼氳瘽...");
+            Assert.Contains("MMIS-Server*", chrome.StatusMarkdown);
+            Assert.DoesNotContain("11111111", chrome.StatusMarkdown);
+            Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
+            Assert.Contains(chrome.OverflowOptions, option => option.Text == "更多会话...");
 
-            var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+            var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
+            Assert.DoesNotContain("22222222", switchOption.Text);
             var valueJson = JsonSerializer.Serialize(switchOption.Value);
             Assert.Contains("\"action\":\"switch_session\"", valueJson);
             Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);
             Assert.Contains("\"chat_key\":\"oc_menu_chat\"", valueJson);
 
-            var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "鏇村浼氳瘽...");
+            var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "更多会话...");
             var moreValueJson = JsonSerializer.Serialize(moreOption.Value);
             Assert.Contains("\"action\":\"open_session_manager\"", moreValueJson);
             Assert.Contains("\"send_as_new_card\":true", moreValueJson);

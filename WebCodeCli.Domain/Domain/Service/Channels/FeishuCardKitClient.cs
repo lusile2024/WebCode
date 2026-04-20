@@ -401,7 +401,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         if (hasStatusSection)
         {
             var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
-                ? "褰撳墠浼氳瘽"
+                ? "当前会话"
                 : chrome.StatusMarkdown;
 
             if (chrome.OverflowOptions.Count > 0)

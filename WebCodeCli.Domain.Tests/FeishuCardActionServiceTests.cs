@@ -90,6 +90,7 @@ public class FeishuCardActionServiceTests
             {
                 SessionId = activeSessionId,
                 Username = "luhaiyan",
+                Title = "旧会话标题",
                 ToolId = "codex",
                 WorkspacePath = @"D:\repo\superpowers",
                 FeishuChatKey = chatId,
@@ -102,6 +103,7 @@ public class FeishuCardActionServiceTests
             {
                 SessionId = "22222222-other",
                 Username = "luhaiyan",
+                Title = "Backend API",
                 ToolId = "claude-code",
                 WorkspacePath = @"D:\repo\backend",
                 FeishuChatKey = chatId,
@@ -129,15 +131,17 @@ public class FeishuCardActionServiceTests
         Assert.NotNull(cardKit.LastStreamingChrome);
         Assert.Contains("处理中", cardKit.InitialStreamingStatusMarkdown);
         Assert.Equal(chatId, completionMessage.ChatId);
-        Assert.Equal("当前会话：superpowers  11111111\n已完成", completionMessage.Content);
+        Assert.Equal("当前会话：superpowers  旧会话标题\n已完成", completionMessage.Content);
         var chrome = cardKit.LastStreamingChrome!;
         Assert.Contains("当前会话", chrome.StatusMarkdown);
         Assert.Contains("superpowers", chrome.StatusMarkdown);
-        Assert.Contains("11111111", chrome.StatusMarkdown);
-        Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+        Assert.Contains("旧会话标题", chrome.StatusMarkdown);
+        Assert.DoesNotContain("11111111", chrome.StatusMarkdown);
+        Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
         Assert.Contains(chrome.OverflowOptions, option => option.Text == "更多会话...");
 
-        var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("backend", StringComparison.Ordinal));
+        var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
+        Assert.DoesNotContain("22222222", switchOption.Text);
         var valueJson = JsonSerializer.Serialize(switchOption.Value);
         Assert.Contains("\"action\":\"switch_session\"", valueJson);
         Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);

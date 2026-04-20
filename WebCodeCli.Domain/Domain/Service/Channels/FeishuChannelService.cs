@@ -959,9 +959,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
             ?? ExtractWorkspaceDirectoryName(currentSession?.WorkspacePath)
-            ?? "褰撳墠浼氳瘽";
+            ?? "当前会话";
+        var sessionLabel = GetSessionDisplayLabel(currentSession);
         var toolLabel = GetToolDisplayName(currentSession?.ToolId);
-        var baseStatusMarkdown = $"褰撳墠浼氳瘽锛?*{workspaceName}** 路 `{ShortSessionId(sessionId)}` 路 {toolLabel}";
+        var baseStatusMarkdown = $"当前会话：**{workspaceName}** · {sessionLabel} · {toolLabel}";
 
         var chrome = new FeishuStreamingCardChrome
         {
@@ -986,7 +987,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
         {
-            Text = "鏇村浼氳瘽...",
+            Text = "更多会话...",
             Value = new
             {
                 action = "open_session_manager",
@@ -1084,16 +1085,36 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private static string BuildSessionOptionText(ChatSessionEntity session)
     {
         var workspaceName = ExtractWorkspaceDirectoryName(session.WorkspacePath) ?? "未命名会话";
-        return $"{workspaceName} 路 {ShortSessionId(session.SessionId)} 路 {GetToolDisplayName(session.ToolId)}";
+        var sessionLabel = GetSessionDisplayLabel(session);
+        return $"{workspaceName} · {sessionLabel} · {GetToolDisplayName(session.ToolId)}";
     }
 
     private string BuildCompletionNotificationText(string sessionId, string? fallbackWorkspacePath = null)
     {
-        var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
-            ?? ExtractWorkspaceDirectoryName(fallbackWorkspacePath)
-            ?? "褰撳墠浼氳瘽";
+        ChatSessionEntity? session;
+        using (var scope = _serviceProvider.CreateScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        }
 
-        return $"当前会话：{workspaceName}  {ShortSessionId(sessionId)}\n已完成";
+        var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
+            ?? ExtractWorkspaceDirectoryName(session?.WorkspacePath)
+            ?? ExtractWorkspaceDirectoryName(fallbackWorkspacePath)
+            ?? "当前会话";
+        var sessionLabel = GetSessionDisplayLabel(session);
+
+        return $"当前会话：{workspaceName}  {sessionLabel}\n已完成";
+    }
+
+    private static string GetSessionDisplayLabel(ChatSessionEntity? session)
+    {
+        if (!string.IsNullOrWhiteSpace(session?.Title))
+        {
+            return session.Title.Trim();
+        }
+
+        return ShortSessionId(session?.SessionId ?? string.Empty);
     }
 
     private static string ShortSessionId(string sessionId)

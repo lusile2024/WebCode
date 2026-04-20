@@ -154,6 +154,39 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateStreamingHandleAsync_FallsBackToReadableChineseStatusHeader()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome();
+        chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+        {
+            Text = "更多会话...",
+            Value = new { action = "open_session_manager" }
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var statusModule = cardDoc.RootElement.GetProperty("body").GetProperty("elements")[0];
+
+        Assert.Equal("当前会话", statusModule.GetProperty("text").GetProperty("content").GetString());
+    }
+
+    [Fact]
     public async Task CreateStreamingHandleAsync_RendersBottomActionButtons()
     {
         var handler = new StubHttpMessageHandler(
