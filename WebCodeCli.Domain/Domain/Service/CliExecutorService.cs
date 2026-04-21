@@ -658,7 +658,11 @@ public class CliExecutorService : ICliExecutorService
             cancellationToken, outputCts.Token);
 
         bool cancelled = false;
-    var fullOutput = new StringBuilder(); // 用于解析thread id
+        bool terminalEventDetected = false;
+        bool terminalEventIsError = false;
+        string? terminalEventErrorMessage = null;
+        var terminalEventBuffer = hasAdapter && adapter!.SupportsStreamParsing ? new StringBuilder() : null;
+        var fullOutput = new StringBuilder(); // 用于解析thread id
 
         await using (var enumerator = ReadPersistentProcessOutputAsync(processInfo, linkedCts.Token)
             .GetAsyncEnumerator(linkedCts.Token))
@@ -694,8 +698,51 @@ public class CliExecutorService : ICliExecutorService
                 {
                     fullOutput.Append(chunk.Content);
                 }
+
+                if (terminalEventBuffer != null && !string.IsNullOrEmpty(chunk.Content))
+                {
+                    var terminalSignal = InspectAdapterTerminalSignal(
+                        sessionId,
+                        chunk.Content,
+                        adapter!,
+                        terminalEventBuffer);
+
+                    if (terminalSignal.IsTerminal)
+                    {
+                        terminalEventDetected = true;
+                        terminalEventIsError = terminalSignal.IsError;
+                        terminalEventErrorMessage = terminalSignal.ErrorMessage;
+                    }
+                }
                 
                 yield return chunk;
+
+                if (terminalEventDetected)
+                {
+                    _logger.LogInformation(
+                        "检测到适配器终止事件，提前结束当前轮输出读取: Tool={ToolId}, Session={SessionId}, IsError={IsError}",
+                        tool.Id,
+                        sessionId,
+                        terminalEventIsError);
+                    break;
+                }
+            }
+        }
+
+        if (!terminalEventDetected && terminalEventBuffer is { Length: > 0 })
+        {
+            var terminalSignal = InspectAdapterTerminalSignal(
+                sessionId,
+                string.Empty,
+                adapter!,
+                terminalEventBuffer,
+                flushRemaining: true);
+
+            if (terminalSignal.IsTerminal)
+            {
+                terminalEventDetected = true;
+                terminalEventIsError = terminalSignal.IsError;
+                terminalEventErrorMessage = terminalSignal.ErrorMessage;
             }
         }
         
@@ -720,6 +767,15 @@ public class CliExecutorService : ICliExecutorService
                 IsError = true,
                 IsCompleted = true,
                 ErrorMessage = "执行已取消或超时"
+            };
+        }
+        else if (terminalEventDetected && terminalEventIsError)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = terminalEventErrorMessage ?? "执行失败"
             };
         }
         else
@@ -915,6 +971,103 @@ public class CliExecutorService : ICliExecutorService
         {
             _logger.LogDebug(ex, "{StreamName}读取任务在收尾阶段结束异常", streamName);
         }
+    }
+
+    private AdapterTerminalSignal InspectAdapterTerminalSignal(
+        string sessionId,
+        string content,
+        ICliToolAdapter adapter,
+        StringBuilder lineBuffer,
+        bool flushRemaining = false)
+    {
+        if (!string.IsNullOrEmpty(content))
+        {
+            lineBuffer.Append(content);
+        }
+
+        while (TryReadBufferedAdapterLine(lineBuffer, flushRemaining, out var line))
+        {
+            var trimmedLine = line.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedLine))
+            {
+                continue;
+            }
+
+            CliOutputEvent? outputEvent;
+            try
+            {
+                outputEvent = adapter.ParseOutputLine(trimmedLine);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "解析适配器输出行失败: {Line}", trimmedLine.Length > 120 ? trimmedLine[..120] : trimmedLine);
+                continue;
+            }
+
+            if (outputEvent == null)
+            {
+                continue;
+            }
+
+            var parsedSessionId = adapter.ExtractSessionId(outputEvent);
+            if (!string.IsNullOrWhiteSpace(parsedSessionId))
+            {
+                var existingThreadId = GetCliThreadId(sessionId);
+                if (!string.Equals(existingThreadId, parsedSessionId, StringComparison.Ordinal))
+                {
+                    SetCliThreadId(sessionId, parsedSessionId);
+                }
+            }
+
+            if (outputEvent.EventType == "turn.completed")
+            {
+                return AdapterTerminalSignal.Completed();
+            }
+
+            if (outputEvent.EventType == "turn.failed")
+            {
+                return AdapterTerminalSignal.Failed(
+                    outputEvent.ErrorMessage
+                    ?? outputEvent.Content
+                    ?? "本轮交互失败。");
+            }
+        }
+
+        return AdapterTerminalSignal.None;
+    }
+
+    private static bool TryReadBufferedAdapterLine(StringBuilder lineBuffer, bool flushRemaining, out string line)
+    {
+        for (var i = 0; i < lineBuffer.Length; i++)
+        {
+            if (lineBuffer[i] != '\n')
+            {
+                continue;
+            }
+
+            line = lineBuffer.ToString(0, i).TrimEnd('\r');
+            lineBuffer.Remove(0, i + 1);
+            return true;
+        }
+
+        if (!flushRemaining || lineBuffer.Length == 0)
+        {
+            line = string.Empty;
+            return false;
+        }
+
+        line = lineBuffer.ToString().TrimEnd('\r');
+        lineBuffer.Clear();
+        return true;
+    }
+
+    private readonly record struct AdapterTerminalSignal(bool IsTerminal, bool IsError, string? ErrorMessage)
+    {
+        public static AdapterTerminalSignal None => new(false, false, null);
+
+        public static AdapterTerminalSignal Completed() => new(true, false, null);
+
+        public static AdapterTerminalSignal Failed(string errorMessage) => new(true, true, errorMessage);
     }
 
     /// <summary>

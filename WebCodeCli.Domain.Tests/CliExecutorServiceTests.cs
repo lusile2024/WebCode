@@ -478,6 +478,163 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public async Task ExecuteStreamAsync_WhenCodexTurnCompletedArrives_CompletesBeforeIdleFallbackOrTimeout()
+    {
+        const string sessionId = "session-codex-turn-completed";
+        const string cliThreadId = "thread-turn-completed";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var scriptPath = Path.Combine(tempRoot, "codex-semantic-completed.cmd");
+
+        Directory.CreateDirectory(tempRoot);
+        await File.WriteAllTextAsync(
+            scriptPath,
+            """
+            @echo off
+            set /p INPUT=
+            echo {"type":"thread.started","thread_id":"thread-turn-completed"}
+            echo {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+            powershell.exe -NoProfile -Command "Start-Sleep -Seconds 10"
+            """);
+
+        var tool = new CliToolConfig
+        {
+            Id = "codex-semantic-completed",
+            Name = "Codex Semantic Completed",
+            Command = "cmd.exe",
+            PersistentModeArguments = $"/d /c \"{scriptPath}\"",
+            UsePersistentProcess = true,
+            TimeoutSeconds = 1,
+            Enabled = true
+        };
+
+        var options = Options.Create(new CliToolsOption
+        {
+            TempWorkspaceRoot = tempRoot,
+            Tools = [tool]
+        });
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            options,
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new TestCodexLikeAdapter("codex-semantic-completed")),
+            new StubCcSwitchService());
+
+        try
+        {
+            var chunks = new List<StreamOutputChunk>();
+            await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "ignored"))
+            {
+                chunks.Add(chunk);
+            }
+
+            Assert.DoesNotContain(chunks, c => c.IsError && c.IsCompleted);
+            Assert.Contains(
+                chunks,
+                c => !string.IsNullOrEmpty(c.Content) && c.Content.Contains("\"turn.completed\"", StringComparison.Ordinal));
+            Assert.Contains(chunks, c => c.IsCompleted && !c.IsError);
+            Assert.Equal(cliThreadId, service.GetCliThreadId(sessionId));
+        }
+        finally
+        {
+            service.CleanupSessionWorkspace(sessionId);
+            if (Directory.Exists(tempRoot))
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenCodexTurnFailedArrives_ReturnsFailureWithoutWaitingForTimeout()
+    {
+        const string sessionId = "session-codex-turn-failed";
+        const string upstreamError = "network retry exhausted";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var scriptPath = Path.Combine(tempRoot, "codex-semantic-failed.cmd");
+
+        Directory.CreateDirectory(tempRoot);
+        await File.WriteAllTextAsync(
+            scriptPath,
+            """
+            @echo off
+            set /p INPUT=
+            echo {"type":"turn.failed","error":{"message":"network retry exhausted","code":500}}
+            powershell.exe -NoProfile -Command "Start-Sleep -Seconds 10"
+            """);
+
+        var tool = new CliToolConfig
+        {
+            Id = "codex-semantic-failed",
+            Name = "Codex Semantic Failed",
+            Command = "cmd.exe",
+            PersistentModeArguments = $"/d /c \"{scriptPath}\"",
+            UsePersistentProcess = true,
+            TimeoutSeconds = 1,
+            Enabled = true
+        };
+
+        var options = Options.Create(new CliToolsOption
+        {
+            TempWorkspaceRoot = tempRoot,
+            Tools = [tool]
+        });
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            options,
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new TestCodexLikeAdapter("codex-semantic-failed")),
+            new StubCcSwitchService());
+
+        try
+        {
+            var chunks = new List<StreamOutputChunk>();
+            await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "ignored"))
+            {
+                chunks.Add(chunk);
+            }
+
+            Assert.Contains(
+                chunks,
+                c => !string.IsNullOrEmpty(c.Content) && c.Content.Contains("\"turn.failed\"", StringComparison.Ordinal));
+            var failureChunk = Assert.Single(chunks, chunk => chunk.IsError && chunk.IsCompleted);
+            Assert.Contains(upstreamError, failureChunk.ErrorMessage);
+            Assert.DoesNotContain("执行已取消或超时", failureChunk.ErrorMessage, StringComparison.Ordinal);
+        }
+        finally
+        {
+            service.CleanupSessionWorkspace(sessionId);
+            if (Directory.Exists(tempRoot))
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task ExecuteStreamAsync_WhenAdapterProvidesDetailedFailure_ReturnsUpstreamErrorMessage()
     {
         const string upstreamError = "unexpected status 402 Payment Required";
@@ -1241,6 +1398,36 @@ public class CliExecutorServiceTests
         public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
 
         public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
+    }
+
+    private sealed class TestCodexLikeAdapter(string toolId) : ICliToolAdapter
+    {
+        private readonly CodexAdapter _inner = new();
+
+        public string[] SupportedToolIds => [toolId];
+
+        public bool SupportsStreamParsing => true;
+
+        public bool CanHandle(CliToolConfig tool)
+            => string.Equals(tool.Id, toolId, StringComparison.OrdinalIgnoreCase);
+
+        public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+            => prompt;
+
+        public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+            => throw new NotSupportedException();
+
+        public CliOutputEvent? ParseOutputLine(string line) => _inner.ParseOutputLine(line);
+
+        public string? ExtractSessionId(CliOutputEvent outputEvent) => _inner.ExtractSessionId(outputEvent);
+
+        public string? ExtractAssistantMessage(CliOutputEvent outputEvent) => _inner.ExtractAssistantMessage(outputEvent);
+
+        public string GetEventTitle(CliOutputEvent outputEvent) => _inner.GetEventTitle(outputEvent);
+
+        public string GetEventBadgeClass(CliOutputEvent outputEvent) => _inner.GetEventBadgeClass(outputEvent);
+
+        public string GetEventBadgeLabel(CliOutputEvent outputEvent) => _inner.GetEventBadgeLabel(outputEvent);
     }
 
     private sealed class RecordingLowInterruptionAdapter : ICliToolAdapter
