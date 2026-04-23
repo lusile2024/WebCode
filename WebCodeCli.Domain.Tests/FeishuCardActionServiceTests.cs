@@ -138,7 +138,7 @@ public class FeishuCardActionServiceTests
         Assert.Contains("旧会话标题", chrome.StatusMarkdown);
         Assert.DoesNotContain("11111111", chrome.StatusMarkdown);
         Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
-        Assert.Contains(chrome.OverflowOptions, option => option.Text == "更多会话...");
+        Assert.Contains(chrome.OverflowOptions, option => option.Text == "模型/会话管理...");
 
         var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
         Assert.DoesNotContain("22222222", switchOption.Text);
@@ -147,7 +147,7 @@ public class FeishuCardActionServiceTests
         Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);
         Assert.Contains("\"chat_key\":\"oc_current_chat\"", valueJson);
 
-        var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "更多会话...");
+        var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "模型/会话管理...");
         var moreValueJson = JsonSerializer.Serialize(moreOption.Value);
         Assert.Contains("\"action\":\"open_session_manager\"", moreValueJson);
         Assert.Contains("\"send_as_new_card\":true", moreValueJson);

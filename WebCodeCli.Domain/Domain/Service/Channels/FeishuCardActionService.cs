@@ -2424,7 +2424,7 @@ public class FeishuCardActionService
 
         chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
         {
-            Text = chrome.OverflowOptions.Count > 0 ? "更多会话..." : "会话管理...",
+            Text = "模型/会话管理...",
             Value = new
             {
                 action = "open_session_manager",
