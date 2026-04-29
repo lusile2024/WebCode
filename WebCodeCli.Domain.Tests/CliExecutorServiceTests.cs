@@ -1294,7 +1294,9 @@ public class CliExecutorServiceTests
 
             Assert.NotNull(snapshot);
             Assert.True(File.Exists(snapshotPath));
-            Assert.Equal(liveConfigContent, await File.ReadAllTextAsync(snapshotPath));
+            Assert.Equal(
+                liveConfigContent.ReplaceLineEndings("\n"),
+                (await File.ReadAllTextAsync(snapshotPath)).ReplaceLineEndings("\n"));
 
             var persistedSession = repository.GetById(sessionId);
             Assert.True(persistedSession.UsesCcSwitchSnapshot);
@@ -1582,7 +1584,9 @@ args = ["mcp", "serve"]
 
             Assert.NotNull(refreshedSnapshot);
             Assert.Equal("Provider B", refreshedSnapshot.ProviderName);
-            Assert.Equal(secondConfigContent, await File.ReadAllTextAsync(snapshotPath));
+            Assert.Equal(
+                secondConfigContent.ReplaceLineEndings("\n"),
+                (await File.ReadAllTextAsync(snapshotPath)).ReplaceLineEndings("\n"));
             Assert.Equal(secondAuthContent, await File.ReadAllTextAsync(snapshotAuthPath));
 
             var persistedSession = repository.GetById(sessionId);
@@ -2683,7 +2687,9 @@ args = ["mcp", "serve"]
             }
 
             Assert.Contains(secondRunChunks, c => c.Content.Contains("override-ok", StringComparison.OrdinalIgnoreCase));
-            Assert.Equal(baseConfigContent, await File.ReadAllTextAsync(snapshotPath));
+            Assert.Equal(
+                baseConfigContent.ReplaceLineEndings("\n"),
+                (await File.ReadAllTextAsync(snapshotPath)).ReplaceLineEndings("\n"));
         }
         finally
         {

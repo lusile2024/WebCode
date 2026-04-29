@@ -14,9 +14,9 @@ The new interaction must:
 - keep those options visible during streaming but disabled until the current streaming reply completes
 - allow one-tap switching after completion
 - show a toast after each switch
-- apply the change only to the current session workspace's project-level config
+- apply the change only to the current session's launch-override state
 
-This feature is a direct-action surface for session launch configuration. It must not replace `cc-switch` provider authority and must not mutate chat-global defaults.
+This feature is a direct-action surface for session launch configuration. It must reuse the existing session launch-override mechanism, must not replace `cc-switch` provider authority, and must not mutate chat-global defaults.
 
 ## Scope
 
@@ -26,8 +26,7 @@ In scope:
 - top-level chip rendering for model options
 - top-level chip rendering for reasoning-effort options when supported
 - click-to-switch behavior after streaming completion
-- project-level config write for managed tools
-- provider bootstrap when a project-level config does not yet exist
+- session launch-override write for managed tools
 - toast feedback and card-top refresh after successful switching
 
 Out of scope:
@@ -57,8 +56,8 @@ The desired interaction is much tighter:
 This design must fit the existing architecture:
 
 - `cc-switch` remains the authority for provider selection
-- session-local launch configuration remains isolated to the current session workspace
-- each managed tool continues to use its own project-level config path and merge rules
+- session-local launch overrides remain stored on the `ChatSession`
+- each managed tool continues to consume the same launch-override merge rules already used by session launch settings
 
 ## User Experience
 
@@ -115,7 +114,7 @@ Example toasts:
 
 ### Session Boundaries
 
-The switch applies only to the current session workspace.
+The switch applies only to the current session.
 
 It must not:
 
@@ -129,21 +128,19 @@ It must not:
 Provider authority remains unchanged:
 
 - `cc-switch` still determines provider selection for managed tools
-- this feature can bootstrap a project-level config from the active provider state when needed
 - this feature must not edit `cc-switch` global provider selection
 
-### Project-Level Config Rules
+### Session Override Rules
 
-Per tool, the switch writes to the tool's existing project-level config target:
+Per tool, the switch writes to the existing session launch-override store on `ChatSession.ToolLaunchOverridesJson`.
 
-- `codex`: `.codex/config.toml`
-- `claude-code`: that tool's existing project-level config path
-- `opencode`: that tool's existing project-level config path
+That means:
 
-If no project-level config exists for the current session workspace:
+- `codex` stores `model` and `reasoningEffort`
+- `claude-code` stores `model`
+- `opencode` stores `model`
 
-1. bootstrap project-level provider state from the active global provider snapshot
-2. write the chosen model and, when supported, the chosen reasoning setting
+The quick-switch path must reuse the same normalization, validation, serialization, and runtime-reset rules already used by the existing session launch-settings flow.
 
 ### Tool Capability Rules
 
@@ -164,7 +161,7 @@ The client UI should disable chips during streaming, but the server must also en
 1. Keep the interaction on the current card.
 2. Prefer direct action over secondary forms for the post-completion switch path.
 3. Preserve existing provider authority boundaries.
-4. Reuse current project-level config and session reset infrastructure.
+4. Reuse current session launch-override storage and session reset infrastructure.
 5. Keep the feature additive to existing card overflow and session-management flows.
 
 ## Architecture
@@ -258,9 +255,9 @@ Reasoning options:
 
 ### 5. Current Active Value Resolution
 
-The active chip highlight must reflect the effective project-level or session-effective launch config for the current workspace, not just the machine-global default.
+The active chip highlight must reflect the effective session launch override for the current session when present. If no override exists for the current tool, the card may fall back to the current default/provider-derived value already surfaced by the existing session launch-settings flow.
 
-This prevents the card from showing a false active value after a project-local override already exists.
+The important rule is consistency with session launch settings: the top-card quick-switch path and the session launch-settings path must always describe the same effective override state.
 
 ## Click Flow
 
@@ -269,8 +266,7 @@ This prevents the card from showing a false active value after a project-local o
 1. user clicks a model chip on a completed streaming card
 2. Feishu posts the action payload
 3. server validates session, chat ownership, tool capability, and completion state
-4. server ensures project-level provider bootstrap exists when required
-5. server writes the selected model to the tool's project-level config
+4. server writes the selected model to `ToolLaunchOverridesJson` for the current tool
 6. server resets only the current session runtime so the next execution starts cleanly
 7. server returns:
    - updated card chrome with new active chip highlight
@@ -281,8 +277,7 @@ This prevents the card from showing a false active value after a project-local o
 1. user clicks a reasoning-effort chip on a completed streaming card
 2. Feishu posts the action payload
 3. server validates session, chat ownership, tool capability, and completion state
-4. server ensures project-level provider bootstrap exists when required
-5. server writes the selected reasoning setting to the tool's project-level config
+4. server writes the selected reasoning setting to `ToolLaunchOverridesJson` for the current tool
 6. server resets only the current session runtime
 7. server returns:
    - updated card chrome with new active chip highlight
@@ -290,7 +285,7 @@ This prevents the card from showing a false active value after a project-local o
 
 ## Runtime Reset Semantics
 
-Any successful switch must reset the current session runtime so the next execution uses the new launch config deterministically.
+Any successful switch must reset the current session runtime so the next execution uses the new launch override deterministically.
 
 This reset must:
 
@@ -322,7 +317,7 @@ Recommended messages:
 
 ### Config and Bootstrap Failures
 
-If provider bootstrap or project-config write fails:
+If override serialization or persistence fails:
 
 - log the exception with session and tool context
 - return a concise failure toast
@@ -330,7 +325,6 @@ If provider bootstrap or project-config write fails:
 
 Recommended messages:
 
-- `同步项目级 Provider 失败: ...`
 - `切换模型失败: ...`
 - `切换思考等级失败: ...`
 
@@ -344,7 +338,7 @@ For repeated fast clicks on a completed card:
 - the last successful write wins
 - card refresh should always reflect the persisted result returned by the server
 
-The card must not claim a switch succeeded before the project-level config write and session runtime reset complete successfully.
+The card must not claim a switch succeeded before the session override write and session runtime reset complete successfully.
 
 ## Testing Strategy
 
@@ -356,9 +350,8 @@ At minimum, cover:
 - tools with reasoning support render all reasoning chips
 - tools without reasoning support omit the reasoning group
 - running streaming card marks all chips disabled
-- switching model on a completed card writes project-level config and returns success toast
-- switching reasoning effort on a completed card writes project-level config and returns success toast
-- missing project-level config triggers provider bootstrap before write
+- switching model on a completed card writes the current tool override and returns success toast
+- switching reasoning effort on a completed card writes the current tool override and returns success toast
 - successful switch resets only the current session runtime
 - server rejects switch attempts when the current reply is not completed
 - server rejects switch attempts for stale sessions or unsupported capabilities
@@ -375,7 +368,7 @@ The key distinction is interaction surface:
 - session launch overrides remain the general settings path
 - streaming-card top switches become the fast path for immediate next-turn adjustments
 
-Both paths must converge on the same project-level config and session reset semantics.
+Both paths must converge on the same `ToolLaunchOverridesJson` storage and session reset semantics.
 
 ## Implementation Notes
 
