@@ -170,6 +170,10 @@ public class FeishuCardActionService
                     return await HandleSaveSessionLaunchSettingsAsync(action.SessionId, action.ChatKey, formValueElement, operatorUserId, action.ShowAllSessions == true);
                 case "clear_session_launch_settings":
                     return await HandleClearSessionLaunchSettingsAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true);
+                case "switch_streaming_card_model":
+                    return await HandleSwitchStreamingCardModelAsync(action.SessionId, action.ChatKey, action.Model, operatorUserId);
+                case "switch_streaming_card_reasoning_effort":
+                    return await HandleSwitchStreamingCardReasoningEffortAsync(action.SessionId, action.ChatKey, action.ReasoningEffort, operatorUserId);
                 case "show_create_session_form":
                     return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId, action.ToolId);
                 case "create_session":
@@ -741,6 +745,7 @@ public class FeishuCardActionService
             latestRenderedContent = finalOutput;
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+            SetTopChipGroupsEnabled(streamingChrome, true);
             TryAttachLowInterruptionAction(streamingChrome, sessionId, tool.Id, chatId, hasStructuredTodoList, finalOutput, userPrompt);
             try
             {
@@ -898,6 +903,7 @@ public class FeishuCardActionService
             latestRenderedContent = finalOutput;
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+            SetTopChipGroupsEnabled(streamingChrome, true);
             TryAttachLowInterruptionAction(streamingChrome, sessionId, tool.Id, chatId, hasStructuredTodoList, finalOutput, recentUserContent: null);
 
             try
@@ -2452,6 +2458,8 @@ public class FeishuCardActionService
         {
             StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
         };
+        chrome.OverflowOptions.AddRange(await BuildStreamingStatusOverflowOptionsAsync(chatKey, sessionId, currentSession, currentToolId));
+        chrome.TopChipGroups.AddRange(await BuildStreamingTopChipGroupsAsync(chatKey, sessionId, currentSession, currentToolId, isEnabled: false));
 
         foreach (var session in sessions
                      .Where(session => !string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
@@ -2495,6 +2503,247 @@ public class FeishuCardActionService
         {
             return ExtractWorkspaceDirectoryName(fallbackWorkspacePath) ?? ShortSessionId(sessionId);
         }
+    }
+
+    private async Task<List<FeishuStreamingCardTopChipGroup>> BuildStreamingTopChipGroupsAsync(
+        string chatKey,
+        string sessionId,
+        ChatSessionEntity? session,
+        string? toolId,
+        bool isEnabled)
+    {
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(toolId, session?.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return [];
+        }
+
+        var launchState = await FeishuStreamingLaunchStateResolver.ResolveAsync(session, effectiveToolId);
+
+        var groups = new List<FeishuStreamingCardTopChipGroup>();
+        if (string.Equals(effectiveToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            groups.Add(new FeishuStreamingCardTopChipGroup
+            {
+                Kind = "switch_hint",
+                IsEnabled = isEnabled,
+                SummaryMarkdown = "模型/思考等级在流式回复完成后可切换，会话随时可切换，但手机端飞书可能需点多次才能成功"
+            });
+
+            groups.Add(new FeishuStreamingCardTopChipGroup
+            {
+                Kind = "reasoning_effort",
+                IsEnabled = isEnabled,
+                Items =
+                [
+                    BuildReasoningChip("low", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("medium", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("high", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("xhigh", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId)
+                ]
+            });
+        }
+
+        return groups;
+    }
+
+    private async Task<List<FeishuStreamingCardOverflowOption>> BuildStreamingStatusOverflowOptionsAsync(
+        string chatKey,
+        string sessionId,
+        ChatSessionEntity? session,
+        string? toolId)
+    {
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(toolId, session?.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return [];
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var ccSwitchService = scope.ServiceProvider.GetService<ICcSwitchService>();
+        var launchState = await FeishuStreamingLaunchStateResolver.ResolveAsync(session, effectiveToolId);
+        var modelOptions = await LoadSessionLaunchModelOptionsAsync(
+            ccSwitchService,
+            effectiveToolId,
+            session?.CcSwitchProviderId,
+            launchState.Model);
+
+        return modelOptions
+            .Where(option => !string.IsNullOrWhiteSpace(option.Id))
+            .Select(option => new FeishuStreamingCardOverflowOption
+            {
+                Text = $"模型：{option.DisplayName}",
+                Value = new
+                {
+                    action = "switch_streaming_card_model",
+                    session_id = sessionId,
+                    chat_key = chatKey,
+                    tool_id = effectiveToolId,
+                    model = option.Id
+                }
+            })
+            .ToList();
+    }
+
+    private static FeishuStreamingCardTopChipItem BuildReasoningChip(
+        string value,
+        string? currentValue,
+        bool isEnabled,
+        string sessionId,
+        string chatKey,
+        string toolId)
+    {
+        return new FeishuStreamingCardTopChipItem
+        {
+            Text = value,
+            IsActive = string.Equals(value, currentValue, StringComparison.OrdinalIgnoreCase),
+            IsEnabled = isEnabled,
+            PreferredWidthPx = CalculateReasoningChipWidthPx(value),
+            Value = new
+            {
+                action = "switch_streaming_card_reasoning_effort",
+                session_id = sessionId,
+                chat_key = chatKey,
+                tool_id = toolId,
+                reasoning_effort = value
+            }
+        };
+    }
+
+    private static int CalculateModelChipWidthPx(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return 180;
+        }
+
+        var trimmed = modelName.Trim();
+        var effectiveLength = trimmed.Length;
+        var uppercaseCount = trimmed.Count(char.IsUpper);
+        var punctuationCount = trimmed.Count(ch => ch is '-' or '_' or '.' or '/');
+        var digitCount = trimmed.Count(char.IsDigit);
+
+        // Model names are mostly ASCII identifiers. Bias by length first so longer
+        // names like gpt-5.3-codex-spark keep their full label on Feishu PC cards.
+        var width = 72
+            + (effectiveLength * 7)
+            + (uppercaseCount * 2)
+            + punctuationCount
+            + digitCount;
+
+        var scaledWidth = (int)Math.Ceiling(width * 1.0);
+        return Math.Clamp(scaledWidth, 180, 720);
+    }
+
+    private static int CalculateReasoningChipWidthPx(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return 96;
+        }
+
+        var trimmed = label.Trim();
+        var uppercaseCount = trimmed.Count(char.IsUpper);
+        var punctuationCount = trimmed.Count(ch => ch is '-' or '_' or '.' or '/');
+        var digitCount = trimmed.Count(char.IsDigit);
+        var width = 24
+            + (trimmed.Length * 9)
+            + (uppercaseCount * 2)
+            + punctuationCount
+            + digitCount;
+        var scaledWidth = (int)Math.Ceiling(width * 1.0);
+        return Math.Clamp(scaledWidth, 96, 440);
+    }
+
+    private static void SetTopChipGroupsEnabled(FeishuStreamingCardChrome chrome, bool isEnabled)
+    {
+        foreach (var group in chrome.TopChipGroups)
+        {
+            group.IsEnabled = isEnabled;
+
+            foreach (var item in group.Items)
+            {
+                item.IsEnabled = isEnabled;
+            }
+        }
+    }
+
+    private ElementsCardV2Dto BuildStreamingCardRefreshCard(string content, FeishuStreamingCardChrome chrome)
+    {
+        var elements = new List<object>();
+        var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
+            ? "当前会话"
+            : chrome.StatusMarkdown;
+
+        if (chrome.OverflowOptions.Count > 0)
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = statusMarkdown
+                },
+                extra = new
+                {
+                    tag = "overflow",
+                    options = chrome.OverflowOptions.Select(option => new
+                    {
+                        text = new { tag = "plain_text", content = option.Text },
+                        value = JsonSerializer.Serialize(option.Value)
+                    }).ToArray()
+                }
+            });
+        }
+        else
+        {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = statusMarkdown
+                }
+            });
+        }
+
+        elements.Add(new { tag = "hr" });
+
+        foreach (var module in FeishuStreamingTopChipLayout.BuildModules(chrome.TopChipGroups, BuildStreamingChipButton))
+        {
+            elements.Add(module);
+        }
+
+        if (chrome.TopChipGroups.Count > 0)
+        {
+            elements.Add(new { tag = "hr" });
+        }
+
+        elements.Add(new
+        {
+            tag = "markdown",
+            content
+        });
+
+        return new ElementsCardV2Dto
+        {
+            Config = new ElementsCardV2Dto.ConfigSuffix
+            {
+                EnableForward = true,
+                UpdateMulti = true
+            },
+            Body = new ElementsCardV2Dto.BodySuffix
+            {
+                Elements = elements.ToArray()
+            }
+        };
+    }
+
+    private static object BuildStreamingChipButton(FeishuStreamingCardTopChipItem item)
+    {
+        return FeishuStreamingTopChipLayout.BuildButton(item);
     }
 
     private static string BuildSessionOptionText(ChatSessionEntity session)
@@ -3230,6 +3479,138 @@ public class FeishuCardActionService
         {
             _logger.LogError(ex, "保存飞书会话启动设置失败: SessionId={SessionId}", sessionId);
             return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 保存模型设置失败: {ex.Message}", "error");
+        }
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleSwitchStreamingCardModelAsync(
+        string? sessionId,
+        string? chatKey,
+        string? model,
+        string? operatorUserId)
+    {
+        return HandleSwitchStreamingCardOverrideAsync(
+            sessionId,
+            chatKey,
+            model,
+            reasoningEffort: null,
+            operatorUserId,
+            "✅ 已切换到 {value}，下次执行生效",
+            "❌ 切换模型失败，请稍后重试");
+    }
+
+    private Task<CardActionTriggerResponseDto> HandleSwitchStreamingCardReasoningEffortAsync(
+        string? sessionId,
+        string? chatKey,
+        string? reasoningEffort,
+        string? operatorUserId)
+    {
+        return HandleSwitchStreamingCardOverrideAsync(
+            sessionId,
+            chatKey,
+            model: null,
+            reasoningEffort,
+            operatorUserId,
+            "✅ 已切换思考等级为 {value}，下次执行生效",
+            "❌ 切换思考等级失败，请稍后重试");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleSwitchStreamingCardOverrideAsync(
+        string? sessionId,
+        string? chatKey,
+        string? model,
+        string? reasoningEffort,
+        string? operatorUserId,
+        string successTemplate,
+        string failureMessage)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 参数错误，请重新打开会话后再试", "error");
+        }
+
+        if (_feishuChannel.IsSessionExecutionActive(sessionId) || LowInterruptionRunningSessions.ContainsKey(sessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前回复尚未完成，暂时不能切换", "warning");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再切换模型设置", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAndUsernameAsync(sessionId, username);
+        if (session == null || !string.Equals(session.FeishuChatKey, actualChatKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在或已失效，请重新打开会话", "error");
+        }
+
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(session.ToolId, session.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话工具不支持模型设置", "warning");
+        }
+
+        try
+        {
+            var currentOverrides = SessionLaunchOverrideHelper.Deserialize(session.ToolLaunchOverridesJson);
+            var currentOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(
+                currentOverrides,
+                effectiveToolId,
+                session.ToolId,
+                session.CcSwitchSnapshotToolId);
+
+            var updatedOverrides = SessionLaunchOverrideHelper.ApplyOverride(
+                currentOverrides,
+                effectiveToolId,
+                model ?? currentOverride?.Model,
+                reasoningEffort ?? currentOverride?.ReasoningEffort);
+
+            session.ToolLaunchOverridesJson = SessionLaunchOverrideHelper.Serialize(updatedOverrides);
+            session.UpdatedAt = DateTime.Now;
+            if (!await repo.UpdateAsync(session))
+            {
+                return _cardBuilder.BuildCardActionToastOnlyResponse(failureMessage, "error");
+            }
+
+            await _cliExecutor.ResetSessionRuntimeAsync(sessionId, clearCliThreadId: false);
+
+            var refreshedSession = await repo.GetByIdAndUsernameAsync(sessionId, username) ?? session;
+            var (chrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(actualChatKey, sessionId, username, effectiveToolId);
+            chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+            SetTopChipGroupsEnabled(chrome, true);
+
+            var latestAssistantContent = _chatSessionService.GetMessages(sessionId)
+                .Where(message => string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase))
+                .Select(message => message.Content)
+                .LastOrDefault();
+            if (string.IsNullOrWhiteSpace(latestAssistantContent))
+            {
+                latestAssistantContent = BuildCompletionNotificationText(sessionId, refreshedSession.WorkspacePath);
+            }
+
+            var card = BuildStreamingCardRefreshCard(latestAssistantContent, chrome);
+            var successValue = model ?? reasoningEffort ?? string.Empty;
+            return _cardBuilder.BuildCardActionResponseV2(
+                card,
+                successTemplate.Replace("{value}", successValue, StringComparison.Ordinal),
+                "success");
+        }
+        catch (ArgumentException ex)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ {ex.Message}", "error");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "飞书流式卡片快捷切换失败: SessionId={SessionId}, ToolId={ToolId}",
+                sessionId,
+                SessionLaunchOverrideHelper.ResolveEffectiveToolId(session.ToolId, session.CcSwitchSnapshotToolId));
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"{failureMessage}: {ex.Message}", "error");
         }
     }
 

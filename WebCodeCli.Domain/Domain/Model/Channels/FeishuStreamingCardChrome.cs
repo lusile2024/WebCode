@@ -15,6 +15,8 @@ public sealed class FeishuStreamingCardChrome
     /// </summary>
     public List<FeishuStreamingCardOverflowOption> OverflowOptions { get; set; } = [];
 
+    public List<FeishuStreamingCardTopChipGroup> TopChipGroups { get; set; } = [];
+
     /// <summary>
     /// 鍗＄墖搴曢儴鍔ㄤ綔鎸夐挳
     /// </summary>
@@ -24,6 +26,32 @@ public sealed class FeishuStreamingCardChrome
     /// 卡片底部少打断执行提示词表单
     /// </summary>
     public FeishuStreamingCardBottomPrompt? BottomPrompt { get; set; }
+}
+
+public sealed class FeishuStreamingCardTopChipGroup
+{
+    public string Kind { get; set; } = string.Empty;
+
+    public bool IsEnabled { get; set; } = true;
+
+    public string? SummaryMarkdown { get; set; }
+
+    public List<FeishuStreamingCardOverflowOption> OverflowOptions { get; set; } = [];
+
+    public List<FeishuStreamingCardTopChipItem> Items { get; set; } = [];
+}
+
+public sealed class FeishuStreamingCardTopChipItem
+{
+    public string Text { get; set; } = string.Empty;
+
+    public bool IsActive { get; set; }
+
+    public bool IsEnabled { get; set; }
+
+    public int? PreferredWidthPx { get; set; }
+
+    public object? Value { get; set; }
 }
 
 internal static class FeishuStreamingStatusFormatter

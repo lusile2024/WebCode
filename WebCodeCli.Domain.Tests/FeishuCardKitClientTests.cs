@@ -262,6 +262,124 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateStreamingHandleAsync_RendersTopChipGroupsBetweenStatusAndBody()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "褰撳墠浼氳瘽"
+        };
+        chrome.TopChipGroups.Add(new FeishuStreamingCardTopChipGroup
+        {
+            Kind = "model",
+            IsEnabled = true,
+            SummaryMarkdown = "🤖 模型：`gpt-5.3-codex-spark`",
+            OverflowOptions =
+            [
+                new FeishuStreamingCardOverflowOption
+                {
+                    Text = "gpt-5.3-codex-spark",
+                    Value = new { action = "switch_streaming_card_model", session_id = "session-1", chat_key = "oc_stream_chat", model = "gpt-5.3-codex-spark" }
+                },
+                new FeishuStreamingCardOverflowOption
+                {
+                    Text = "gpt-5.2",
+                    Value = new { action = "switch_streaming_card_model", session_id = "session-1", chat_key = "oc_stream_chat", model = "gpt-5.2" }
+                }
+            ]
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 鍔╂墜",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("div", elements[0].GetProperty("tag").GetString());
+        Assert.Equal("div", elements[2].GetProperty("tag").GetString());
+        Assert.Equal("markdown", elements[4].GetProperty("tag").GetString());
+        Assert.Equal("🤖 模型：`gpt-5.3-codex-spark`", elements[2].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("overflow", elements[2].GetProperty("extra").GetProperty("tag").GetString());
+        var options = elements[2].GetProperty("extra").GetProperty("options");
+        Assert.Equal(2, options.GetArrayLength());
+        Assert.Equal("gpt-5.3-codex-spark", options[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("gpt-5.2", options[1].GetProperty("text").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_SplitsTopChipGroupIntoMultipleRowsWhenMoreThanSixItems()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+
+        var items = Enumerable.Range(1, 7)
+            .Select(index => new FeishuStreamingCardTopChipItem
+            {
+                Text = $"gpt-5.{index}",
+                IsActive = index == 1,
+                IsEnabled = true,
+                Value = new
+                {
+                    action = "switch_streaming_card_model",
+                    session_id = "session-1",
+                    chat_key = "oc_stream_chat",
+                    model = $"gpt-5.{index}"
+                }
+            })
+            .ToList();
+
+        chrome.TopChipGroups.Add(new FeishuStreamingCardTopChipGroup
+        {
+            Kind = "model",
+            Items = items
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("column_set", elements[2].GetProperty("tag").GetString());
+        Assert.Equal("column_set", elements[3].GetProperty("tag").GetString());
+        Assert.Equal(6, elements[2].GetProperty("columns").GetArrayLength());
+        Assert.Equal(1, elements[3].GetProperty("columns").GetArrayLength());
+        Assert.Equal("gpt-5.1", elements[2].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("gpt-5.7", elements[3].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("hr", elements[4].GetProperty("tag").GetString());
+        Assert.Equal("markdown", elements[5].GetProperty("tag").GetString());
+    }
+
+    [Fact]
     public async Task CreateStreamingHandleAsync_KeepsClientStreamingMode_WhenNoOverflowActionsExist()
     {
         var handler = new StubHttpMessageHandler(

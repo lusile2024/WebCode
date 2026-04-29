@@ -410,9 +410,13 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         }
 
         var hasStatusSection = !string.IsNullOrWhiteSpace(chrome.StatusMarkdown) || chrome.OverflowOptions.Count > 0;
+        var hasTopChipGroups = chrome.TopChipGroups.Any(group =>
+            !string.IsNullOrWhiteSpace(group.SummaryMarkdown)
+            || group.OverflowOptions.Count > 0
+            || group.Items.Any(item => !string.IsNullOrWhiteSpace(item.Text)));
         var hasBottomActions = chrome.BottomActions.Count > 0;
         var hasBottomPrompt = chrome.BottomPrompt != null;
-        if (!hasStatusSection && !hasBottomActions && !hasBottomPrompt)
+        if (!hasStatusSection && !hasTopChipGroups && !hasBottomActions && !hasBottomPrompt)
         {
             return
             [
@@ -459,6 +463,16 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                         content = statusMarkdown
                     }
                 });
+            }
+
+            elements.Add(new { tag = "hr" });
+        }
+
+        if (hasTopChipGroups)
+        {
+            foreach (var module in FeishuStreamingTopChipLayout.BuildModules(chrome.TopChipGroups, BuildTopChipAction))
+            {
+                elements.Add(module);
             }
 
             elements.Add(new { tag = "hr" });
@@ -566,6 +580,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 value = JsonSerializer.Serialize(option.Value)
             })
             .ToArray();
+    }
+
+    private static object BuildTopChipAction(FeishuStreamingCardTopChipItem item)
+    {
+        return FeishuStreamingTopChipLayout.BuildButton(item);
     }
 
     private object[] BuildBottomActionColumns(IEnumerable<FeishuStreamingCardBottomAction> actions)

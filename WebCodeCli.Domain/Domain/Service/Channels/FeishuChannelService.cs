@@ -311,7 +311,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 CreatedAt = DateTime.UtcNow
             });
 
-            var (streamingChrome, baseStatusMarkdown) = BuildStreamingCardChrome(message.ChatId, sessionId, message.SenderName);
+            var (streamingChrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(message.ChatId, sessionId, message.SenderName);
 
             // Create the streaming reply and show the thinking state immediately.
             var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
@@ -778,6 +778,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             activeExecution.SetLatestRenderedContent(finalOutput);
             activeExecution.CancelPulse();
             activeExecution.SetCompletedStatus();
+            SetTopChipGroupsEnabled(activeExecution.Chrome, true);
             TryAttachLowInterruptionAction(activeExecution.Chrome, sessionId, tool.Id, hasStructuredTodoList, finalOutput, userPrompt);
             // NOTE: Keep the explicit completion text notification for Feishu users.
             try
@@ -970,7 +971,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         return lastUsefulContent;
     }
 
-    private (FeishuStreamingCardChrome Chrome, string BaseStatusMarkdown) BuildStreamingCardChrome(string chatId, string sessionId, string? username)
+    private async Task<(FeishuStreamingCardChrome Chrome, string BaseStatusMarkdown)> BuildStreamingCardChromeAsync(string chatId, string sessionId, string? username)
     {
         var chatKey = chatId.ToLowerInvariant();
         var sessions = GetChatSessionEntities(chatKey, username);
@@ -990,6 +991,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         {
             StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
         };
+        chrome.OverflowOptions.AddRange(await BuildStreamingStatusOverflowOptionsAsync(chatKey, sessionId, currentSession, currentSession?.ToolId));
+        chrome.TopChipGroups.AddRange(await BuildStreamingTopChipGroupsAsync(chatKey, sessionId, currentSession, currentSession?.ToolId, isEnabled: false));
 
         foreach (var session in sessions
                      .Where(session => !string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
@@ -1019,6 +1022,222 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         });
 
         return (chrome, baseStatusMarkdown);
+    }
+
+    private async Task<List<FeishuStreamingCardTopChipGroup>> BuildStreamingTopChipGroupsAsync(
+        string chatKey,
+        string sessionId,
+        ChatSessionEntity? session,
+        string? toolId,
+        bool isEnabled)
+    {
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(toolId, session?.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return [];
+        }
+
+        var groups = new List<FeishuStreamingCardTopChipGroup>();
+        var launchState = await FeishuStreamingLaunchStateResolver.ResolveAsync(session, effectiveToolId);
+
+        if (string.Equals(effectiveToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            groups.Add(new FeishuStreamingCardTopChipGroup
+            {
+                Kind = "switch_hint",
+                IsEnabled = isEnabled,
+                SummaryMarkdown = "模型/思考等级在流式回复完成后可切换，会话随时可切换，但手机端飞书可能需点多次才能成功"
+            });
+
+            groups.Add(new FeishuStreamingCardTopChipGroup
+            {
+                Kind = "reasoning_effort",
+                IsEnabled = isEnabled,
+                Items =
+                [
+                    BuildReasoningChip("low", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("medium", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("high", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("xhigh", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId)
+                ]
+            });
+        }
+
+        return groups;
+    }
+
+    private async Task<List<FeishuStreamingCardOverflowOption>> BuildStreamingStatusOverflowOptionsAsync(
+        string chatKey,
+        string sessionId,
+        ChatSessionEntity? session,
+        string? toolId)
+    {
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(toolId, session?.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return [];
+        }
+
+        var launchState = await FeishuStreamingLaunchStateResolver.ResolveAsync(session, effectiveToolId);
+        var modelOptions = await LoadStreamingModelOptionsAsync(
+            effectiveToolId,
+            session?.CcSwitchProviderId,
+            launchState.Model);
+
+        return modelOptions
+            .Where(option => !string.IsNullOrWhiteSpace(option.Id))
+            .Select(option => new FeishuStreamingCardOverflowOption
+            {
+                Text = $"模型：{option.DisplayName}",
+                Value = new
+                {
+                    action = "switch_streaming_card_model",
+                    session_id = sessionId,
+                    chat_key = chatKey,
+                    tool_id = effectiveToolId,
+                    model = option.Id
+                }
+            })
+            .ToList();
+    }
+
+    private async Task<List<CcSwitchModelOption>> LoadStreamingModelOptionsAsync(string toolId, string? providerId, string? currentModel)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var ccSwitchService = scope.ServiceProvider.GetService<ICcSwitchService>();
+            if (ccSwitchService == null)
+            {
+                return MergeStreamingModelOptions([], currentModel);
+            }
+
+            var catalog = await ccSwitchService.GetModelCatalogAsync(toolId, providerId);
+            return MergeStreamingModelOptions(catalog.Models, currentModel);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "飞书流式卡片读取模型列表失败: ToolId={ToolId}, ProviderId={ProviderId}", toolId, providerId);
+            return MergeStreamingModelOptions([], currentModel);
+        }
+    }
+
+    private static List<CcSwitchModelOption> MergeStreamingModelOptions(IEnumerable<CcSwitchModelOption> options, string? currentModel)
+    {
+        var merged = new List<CcSwitchModelOption>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var option in options)
+        {
+            if (option == null || string.IsNullOrWhiteSpace(option.Id))
+            {
+                continue;
+            }
+
+            var id = option.Id.Trim();
+            if (!seen.Add(id))
+            {
+                continue;
+            }
+
+            merged.Add(new CcSwitchModelOption
+            {
+                Id = id,
+                DisplayName = string.IsNullOrWhiteSpace(option.DisplayName) ? id : option.DisplayName.Trim()
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentModel) && seen.Add(currentModel.Trim()))
+        {
+            merged.Insert(0, new CcSwitchModelOption
+            {
+                Id = currentModel.Trim(),
+                DisplayName = currentModel.Trim()
+            });
+        }
+
+        return merged;
+    }
+
+    private static FeishuStreamingCardTopChipItem BuildReasoningChip(
+        string value,
+        string? currentValue,
+        bool isEnabled,
+        string sessionId,
+        string chatKey,
+        string toolId)
+    {
+        return new FeishuStreamingCardTopChipItem
+        {
+            Text = value,
+            IsActive = string.Equals(value, currentValue, StringComparison.OrdinalIgnoreCase),
+            IsEnabled = isEnabled,
+            PreferredWidthPx = CalculateReasoningChipWidthPx(value),
+            Value = new
+            {
+                action = "switch_streaming_card_reasoning_effort",
+                session_id = sessionId,
+                chat_key = chatKey,
+                tool_id = toolId,
+                reasoning_effort = value
+            }
+        };
+    }
+
+    private static int CalculateModelChipWidthPx(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return 180;
+        }
+
+        var trimmed = modelName.Trim();
+        var effectiveLength = trimmed.Length;
+        var uppercaseCount = trimmed.Count(char.IsUpper);
+        var punctuationCount = trimmed.Count(ch => ch is '-' or '_' or '.' or '/');
+        var digitCount = trimmed.Count(char.IsDigit);
+
+        var width = 72
+            + (effectiveLength * 7)
+            + (uppercaseCount * 2)
+            + punctuationCount
+            + digitCount;
+
+        var scaledWidth = (int)Math.Ceiling(width * 1.0);
+        return Math.Clamp(scaledWidth, 180, 720);
+    }
+
+    private static int CalculateReasoningChipWidthPx(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return 96;
+        }
+
+        var trimmed = label.Trim();
+        var uppercaseCount = trimmed.Count(char.IsUpper);
+        var punctuationCount = trimmed.Count(ch => ch is '-' or '_' or '.' or '/');
+        var digitCount = trimmed.Count(char.IsDigit);
+        var width = 24
+            + (trimmed.Length * 9)
+            + (uppercaseCount * 2)
+            + punctuationCount
+            + digitCount;
+        var scaledWidth = (int)Math.Ceiling(width * 1.0);
+        return Math.Clamp(scaledWidth, 96, 440);
+    }
+
+    private static void SetTopChipGroupsEnabled(FeishuStreamingCardChrome chrome, bool isEnabled)
+    {
+        foreach (var group in chrome.TopChipGroups)
+        {
+            group.IsEnabled = isEnabled;
+
+            foreach (var item in group.Items)
+            {
+                item.IsEnabled = isEnabled;
+            }
+        }
     }
 
     private void TryAttachLowInterruptionAction(

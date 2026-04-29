@@ -485,8 +485,99 @@ public class FeishuChannelServiceTests
             Assert.Contains("🧠 思考: `high`", handle.InitialStatusMarkdown);
             Assert.Contains("🤖 模型: `gpt-5.4`", handle.FinalStatusMarkdown);
             Assert.Contains("🧠 思考: `high`", handle.FinalStatusMarkdown);
+            var initialChrome = Assert.IsType<FeishuStreamingCardChrome>(handle.InitialChromeSnapshot);
+            Assert.Contains(initialChrome.OverflowOptions, item => item.Text == "模型：gpt-5.4");
+            Assert.Collection(initialChrome.TopChipGroups,
+                hintGroup =>
+                {
+                    Assert.Equal("switch_hint", hintGroup.Kind);
+                    Assert.False(hintGroup.IsEnabled);
+                    Assert.False(string.IsNullOrWhiteSpace(hintGroup.SummaryMarkdown));
+                },
+                reasoningGroup =>
+                {
+                    Assert.Equal("reasoning_effort", reasoningGroup.Kind);
+                    Assert.False(reasoningGroup.IsEnabled);
+                    Assert.All(reasoningGroup.Items, item => Assert.False(item.IsEnabled));
+                    Assert.Contains(reasoningGroup.Items, item => item.Text == "high" && item.IsActive);
+                });
+            var finalChrome = Assert.IsType<FeishuStreamingCardChrome>(handle.FinalChromeSnapshot);
+            Assert.All(finalChrome.TopChipGroups, group => Assert.True(group.IsEnabled));
+            Assert.All(finalChrome.TopChipGroups.SelectMany(group => group.Items), item => Assert.True(item.IsEnabled));
             Assert.Contains("🤖 模型: `gpt-5.4`", cardKit.LastReplyTextContent);
             Assert.Contains("🧠 思考: `high`", cardKit.LastReplyTextContent);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_HighlightsCurrentLaunchStateFromCodexProjectConfig()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-streaming-config-state-{Guid.NewGuid():N}");
+        var currentWorkspace = Path.Combine(workspaceRoot, "superpowers");
+        var codexDirectory = Path.Combine(currentWorkspace, ".codex");
+        Directory.CreateDirectory(codexDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(codexDirectory, "config.toml.base"),
+            "model = \"gpt-5.4\"\nmodel_reasoning_effort = \"medium\"\n");
+
+        repositoryProxy.Store(new ChatSessionEntity
+        {
+            SessionId = "11111111-current",
+            Username = "luhaiyan",
+            Title = "MMIS-Server*",
+            WorkspacePath = currentWorkspace,
+            ToolId = "codex",
+            FeishuChatKey = "oc_config_state_chat",
+            IsFeishuActive = true,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-30),
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var cliExecutor = new PromptCapturingCliExecutor(currentWorkspace);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_config_state_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-config-state",
+                Content = "继续处理"
+            });
+
+            var handle = Assert.Single(cardKit.Handles);
+            var initialChrome = Assert.IsType<FeishuStreamingCardChrome>(handle.InitialChromeSnapshot);
+            Assert.DoesNotContain(initialChrome.TopChipGroups, group => group.Kind == "model");
+            Assert.Contains(initialChrome.TopChipGroups, group => group.Kind == "switch_hint" && !string.IsNullOrWhiteSpace(group.SummaryMarkdown));
+            Assert.Contains(initialChrome.OverflowOptions, item => item.Text == "模型：gpt-5.4");
+            Assert.Contains(initialChrome.TopChipGroups.SelectMany(group => group.Items), item => item.Text == "medium" && item.IsActive);
         }
         finally
         {
@@ -1018,7 +1109,8 @@ public class FeishuChannelServiceTests
                 ReplyMessageId = replyMessageId,
                 InitialContent = initialContent,
                 Chrome = chrome,
-                InitialStatusMarkdown = chrome?.StatusMarkdown
+                InitialStatusMarkdown = chrome?.StatusMarkdown,
+                InitialChromeSnapshot = CloneChrome(chrome)
             };
             if (!string.IsNullOrWhiteSpace(record.InitialStatusMarkdown))
             {
@@ -1042,6 +1134,7 @@ public class FeishuChannelServiceTests
                 {
                     record.FinalContent = content;
                     record.FinalStatusMarkdown = chrome?.StatusMarkdown;
+                    record.FinalChromeSnapshot = CloneChrome(chrome);
                     if (!string.IsNullOrWhiteSpace(record.FinalStatusMarkdown))
                     {
                         record.StatusMarkdownSnapshots.Add(record.FinalStatusMarkdown);
@@ -1059,6 +1152,74 @@ public class FeishuChannelServiceTests
 
         public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
+
+        private static FeishuStreamingCardChrome? CloneChrome(FeishuStreamingCardChrome? chrome)
+        {
+            if (chrome == null)
+            {
+                return null;
+            }
+
+            return new FeishuStreamingCardChrome
+            {
+                StatusMarkdown = chrome.StatusMarkdown,
+                OverflowOptions = chrome.OverflowOptions
+                    .Select(option => new FeishuStreamingCardOverflowOption
+                    {
+                        Text = option.Text,
+                        Type = option.Type,
+                        Value = option.Value
+                    })
+                    .ToList(),
+                TopChipGroups = chrome.TopChipGroups
+                    .Select(group => new FeishuStreamingCardTopChipGroup
+                    {
+                        Kind = group.Kind,
+                        IsEnabled = group.IsEnabled,
+                        SummaryMarkdown = group.SummaryMarkdown,
+                        OverflowOptions = group.OverflowOptions
+                            .Select(option => new FeishuStreamingCardOverflowOption
+                            {
+                                Text = option.Text,
+                                Type = option.Type,
+                                Value = option.Value
+                            })
+                            .ToList(),
+                        Items = group.Items
+                            .Select(item => new FeishuStreamingCardTopChipItem
+                            {
+                                Text = item.Text,
+                                IsActive = item.IsActive,
+                                IsEnabled = item.IsEnabled,
+                                PreferredWidthPx = item.PreferredWidthPx,
+                                Value = item.Value
+                            })
+                            .ToList()
+                    })
+                    .ToList(),
+                BottomActions = chrome.BottomActions
+                    .Select(action => new FeishuStreamingCardBottomAction
+                    {
+                        Text = action.Text,
+                        Type = action.Type,
+                        Value = action.Value
+                    })
+                    .ToList(),
+                BottomPrompt = chrome.BottomPrompt == null
+                    ? null
+                    : new FeishuStreamingCardBottomPrompt
+                    {
+                        FormName = chrome.BottomPrompt.FormName,
+                        InputName = chrome.BottomPrompt.InputName,
+                        InputLabel = chrome.BottomPrompt.InputLabel,
+                        Placeholder = chrome.BottomPrompt.Placeholder,
+                        DefaultValue = chrome.BottomPrompt.DefaultValue,
+                        ButtonText = chrome.BottomPrompt.ButtonText,
+                        ButtonType = chrome.BottomPrompt.ButtonType,
+                        Value = chrome.BottomPrompt.Value
+                    }
+            };
+        }
     }
 
     private sealed class StreamingHandleRecord
@@ -1078,6 +1239,10 @@ public class FeishuChannelServiceTests
         public string? FinalContent { get; set; }
 
         public string? FinalStatusMarkdown { get; set; }
+
+        public FeishuStreamingCardChrome? InitialChromeSnapshot { get; set; }
+
+        public FeishuStreamingCardChrome? FinalChromeSnapshot { get; set; }
 
         public List<string> StatusMarkdownSnapshots { get; } = new();
 
