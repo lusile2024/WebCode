@@ -16,7 +16,7 @@ The new interaction must:
 - add the same quick-input field to the bottom of the `feishuhelp` help card
 - automatically prepend `使用superpowers技能，` when the user submits quick-input text without that prefix
 - send a fixed prompt `使用superpowers的executing-plans技能执行计划` when the user clicks `执行 plan`
-- send a fixed prompt `使用superpowers的subagent-driven-development技能执行计划` when the user clicks `子代理执行 plan`
+- send a fixed prompt `使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能` when the user clicks `子代理执行 plan`
 - keep desktop Web, mobile Web, and Feishu help card behavior aligned through shared eligibility and prompt-building rules
 
 This change is a semantic replacement, not a skin-deep label swap. The repository should stop modeling this affordance as CLI thread resume and instead model it as a Superpowers quick-action surface.
@@ -50,7 +50,7 @@ The desired workflow is:
 - use the presence of Superpowers plans in the workspace as the gating signal
 - use session history containing `superpowers` as the conversational relevance signal
 - expose an explicit `执行 plan` action that delegates plan discovery to the model
-- expose an explicit `子代理执行 plan` action that routes to the subagent execution skill
+- expose an explicit `子代理执行 plan` action that routes to a combined executing-plans plus subagent-driven-development prompt
 - expose a compact text field that can quickly route follow-up requests through Superpowers skills
 
 The current implementation has several mismatches:
@@ -89,7 +89,7 @@ Secondary button text:
 Button behavior:
 
 - clicking the button submits the fixed prompt `使用superpowers的executing-plans技能执行计划`
-- clicking the secondary button submits the fixed prompt `使用superpowers的subagent-driven-development技能执行计划`
+- clicking the secondary button submits the fixed prompt `使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能`
 - no plan picker, modal, or file selector is shown
 - the model is expected to inspect the workspace and choose the relevant plan itself
 
@@ -123,7 +123,7 @@ The Feishu card behavior must match Web semantics:
 
 - input submission auto-prefixes with `使用superpowers技能，` when needed
 - button click sends `使用superpowers的executing-plans技能执行计划`
-- secondary button click sends `使用superpowers的subagent-driven-development技能执行计划`
+- secondary button click sends `使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能`
 - the action routes through the active chat session rather than requiring a separate plan selection step
 
 ## Eligibility Rules
@@ -152,7 +152,7 @@ The system needs three canonical prompt builders:
 
 2. `BuildSubagentExecutePlanPrompt()`
    Returns exactly:
-   `使用superpowers的subagent-driven-development技能执行计划`
+   `使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能`
 
 3. `BuildQuickSkillPrompt(input)`
    Rules:
@@ -258,7 +258,11 @@ The selected subagent skill name is based on the current Superpowers skill catal
 - the formal skill name is `superpowers:subagent-driven-development`
 - `superpowers:executing-plans` explicitly advises switching to `superpowers:subagent-driven-development` when subagents are available
 
-Because of that guidance, the new button should use the direct subagent-driven prompt rather than combining both skill names in one instruction.
+The approved button prompt intentionally references both skills in one instruction:
+
+- `superpowers:executing-plans` remains the plan-execution anchor
+- `superpowers:subagent-driven-development` is added explicitly to bias the model toward subagent-backed execution
+- this combined wording follows the user-approved prompt contract even though the skill guidance alone would otherwise prefer the direct subagent-driven path
 
 ### 4. Web UI Integration
 
@@ -360,7 +364,7 @@ If the session is currently running:
 4. Click `执行 plan`:
    - the sent message is exactly `使用superpowers的executing-plans技能执行计划`
 5. Click `子代理执行 plan`:
-   - the sent message is exactly `使用superpowers的subagent-driven-development技能执行计划`
+   - the sent message is exactly `使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能`
 6. Submit quick input without prefix:
    - the sent message is prefixed with `使用superpowers技能，`
 7. Submit quick input with prefix already present:
@@ -374,7 +378,7 @@ If the session is currently running:
 2. Submitting input without prefix auto-prefixes correctly
 3. Submitting input with existing prefix leaves the text unchanged
 4. Clicking `执行 plan` sends the fixed plan-execution prompt into the active session flow
-5. Clicking `子代理执行 plan` sends the fixed subagent plan-execution prompt into the active session flow
+5. Clicking `子代理执行 plan` sends the fixed combined plan-and-subagent prompt into the active session flow
 6. Busy state disables the interactive controls
 
 ## Open Questions
@@ -385,7 +389,7 @@ None. The following decisions were explicitly resolved in discussion:
 - any session-history message containing `superpowers` is sufficient
 - quick input auto-prefixes only when the prefix is not already present
 - `执行 plan` does not target a specific file and instead lets the model find the plan
-- `子代理执行 plan` uses the `superpowers:subagent-driven-development` skill name, not a combined two-skill prompt
+- `子代理执行 plan` uses the combined prompt `使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能`
 - `feishuhelp` should expose the same quick-action capability at the bottom
 
 ## Recommended Next Step
