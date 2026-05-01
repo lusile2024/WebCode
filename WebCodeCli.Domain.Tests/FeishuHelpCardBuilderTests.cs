@@ -1,4 +1,5 @@
 using System.Text.Json;
+using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -71,6 +72,67 @@ public class FeishuHelpCardBuilderTests
         Assert.False(ContainsProperty(bodyDoc.RootElement, "extra"));
     }
 
+    [Fact]
+    public void BuildCommandListCard_AppendsSuperpowersQuickActionsFooter()
+    {
+        var cardJson = _builder.BuildCommandListCard(CreateCategories());
+        using var document = JsonDocument.Parse(cardJson);
+        var elements = document.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.True(ContainsStringValue(elements, SuperpowersQuickActionDefaults.InstructionText));
+
+        var quickInput = GetInputByName(elements, SuperpowersQuickActionDefaults.QuickInputFieldName);
+        Assert.Equal(
+            SuperpowersQuickActionDefaults.QuickInputPlaceholder,
+            quickInput.GetProperty("placeholder").GetProperty("content").GetString());
+        Assert.Equal(1, CountInputsByName(elements, SuperpowersQuickActionDefaults.QuickInputFieldName));
+
+        var quickInputAction = quickInput
+            .GetProperty("behaviors")[0]
+            .GetProperty("value");
+        Assert.Equal(
+            FeishuHelpCardAction.SubmitSuperpowersQuickInputAction,
+            quickInputAction.GetProperty("action").GetString());
+        Assert.False(ContainsAction(elements, FeishuHelpCardAction.ExecuteSuperpowersPlanAction));
+        Assert.False(ContainsAction(elements, FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction));
+    }
+
+    [Fact]
+    public void BuildFilteredCard_AppendsSuperpowersQuickActionsFooter()
+    {
+        var cardJson = _builder.BuildFilteredCard(CreateCategories(), "help");
+        using var document = JsonDocument.Parse(cardJson);
+        var elements = document.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.True(ContainsStringValue(elements, SuperpowersQuickActionDefaults.InstructionText));
+        Assert.Equal(1, CountInputsByName(elements, SuperpowersQuickActionDefaults.QuickInputFieldName));
+
+        var quickInput = GetInputByName(elements, SuperpowersQuickActionDefaults.QuickInputFieldName);
+        Assert.Equal(
+            FeishuHelpCardAction.SubmitSuperpowersQuickInputAction,
+            quickInput.GetProperty("behaviors")[0].GetProperty("value").GetProperty("action").GetString());
+        Assert.False(ContainsAction(elements, FeishuHelpCardAction.ExecuteSuperpowersPlanAction));
+        Assert.False(ContainsAction(elements, FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction));
+    }
+
+    [Fact]
+    public void BuildCategoryCommandsCardV2_AppendsSuperpowersQuickActionsFooter()
+    {
+        var category = CreateCategories()[0];
+        var card = _builder.BuildCategoryCommandsCardV2(category);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, SuperpowersQuickActionDefaults.InstructionText));
+        Assert.Equal(
+            SuperpowersQuickActionDefaults.QuickInputFieldName,
+            GetInputByName(bodyDoc.RootElement, SuperpowersQuickActionDefaults.QuickInputFieldName)
+                .GetProperty("name")
+                .GetString());
+
+        Assert.False(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ExecuteSuperpowersPlanAction));
+        Assert.False(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction));
+    }
+
     private static JsonElement GetActionValue(JsonElement elements, string action)
     {
         if (TryGetActionValue(elements, action, out var actionValue))
@@ -81,26 +143,18 @@ public class FeishuHelpCardBuilderTests
         throw new Xunit.Sdk.XunitException($"No button callback found for action '{action}' in card payload.");
     }
 
+    private static bool ContainsAction(JsonElement elements, string action)
+    {
+        return TryGetActionValue(elements, action, out _);
+    }
+
     private static bool TryGetActionValue(JsonElement element, string action, out JsonElement actionValue)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
-            if (element.TryGetProperty("tag", out var tag) &&
-                tag.GetString() == "button" &&
-                element.TryGetProperty("behaviors", out var behaviors))
+            if (TryGetButtonActionValue(element, action, out actionValue))
             {
-                foreach (var behavior in behaviors.EnumerateArray())
-                {
-                    if (!behavior.TryGetProperty("value", out var value))
-                    {
-                        continue;
-                    }
-
-                    if (TryMatchActionValue(value, action, out actionValue))
-                    {
-                        return true;
-                    }
-                }
+                return true;
             }
 
             foreach (var property in element.EnumerateObject())
@@ -120,6 +174,37 @@ public class FeishuHelpCardBuilderTests
                 {
                     return true;
                 }
+            }
+        }
+
+        actionValue = default;
+        return false;
+    }
+
+    private static bool TryGetButtonActionValue(JsonElement element, string action, out JsonElement actionValue)
+    {
+        if (element.TryGetProperty("tag", out var tag) && tag.GetString() == "button")
+        {
+            if (element.TryGetProperty("behaviors", out var behaviors))
+            {
+                foreach (var behavior in behaviors.EnumerateArray())
+                {
+                    if (!behavior.TryGetProperty("value", out var value))
+                    {
+                        continue;
+                    }
+
+                    if (TryMatchActionValue(value, action, out actionValue))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (element.TryGetProperty("value", out var directValue)
+                && TryMatchActionValue(directValue, action, out actionValue))
+            {
+                return true;
             }
         }
 
@@ -184,6 +269,98 @@ public class FeishuHelpCardBuilderTests
         }
 
         return false;
+    }
+
+    private static bool ContainsStringValue(JsonElement element, string expected)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => string.Equals(element.GetString(), expected, StringComparison.Ordinal),
+            JsonValueKind.Object => element.EnumerateObject().Any(property => ContainsStringValue(property.Value, expected)),
+            JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsStringValue(item, expected)),
+            _ => false
+        };
+    }
+
+    private static JsonElement GetInputByName(JsonElement element, string inputName)
+    {
+        if (TryGetInputByName(element, inputName, out var input))
+        {
+            return input;
+        }
+
+        throw new Xunit.Sdk.XunitException($"No input found for name '{inputName}' in card payload.");
+    }
+
+    private static bool TryGetInputByName(JsonElement element, string inputName, out JsonElement input)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("tag", out var tag)
+                && tag.GetString() == "input"
+                && element.TryGetProperty("name", out var name)
+                && string.Equals(name.GetString(), inputName, StringComparison.Ordinal))
+            {
+                input = element;
+                return true;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (TryGetInputByName(property.Value, inputName, out input))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (TryGetInputByName(item, inputName, out input))
+                {
+                    return true;
+                }
+            }
+        }
+
+        input = default;
+        return false;
+    }
+
+    private static int CountInputsByName(JsonElement element, string inputName)
+    {
+        var count = 0;
+        CountInputsByName(element, inputName, ref count);
+        return count;
+    }
+
+    private static void CountInputsByName(JsonElement element, string inputName, ref int count)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("tag", out var tag)
+                && tag.GetString() == "input"
+                && element.TryGetProperty("name", out var name)
+                && string.Equals(name.GetString(), inputName, StringComparison.Ordinal))
+            {
+                count++;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                CountInputsByName(property.Value, inputName, ref count);
+            }
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                CountInputsByName(item, inputName, ref count);
+            }
+        }
     }
 
     private static List<FeishuCommandCategory> CreateCategories()

@@ -235,6 +235,7 @@ public static class DatabaseInitializer
             EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchLiveConfigPath", "varchar(1024) NULL", logger);
             EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotRelativePath", "varchar(512) NULL", logger);
             EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotSyncedAt", "datetime NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "ToolLaunchOverridesJson", "TEXT NULL", logger);
             BackfillCliThreadIdsFromImportedTitles(db, logger);
         }
         catch (Exception ex)

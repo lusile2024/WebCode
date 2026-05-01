@@ -1,0 +1,182 @@
+@using WebCodeCli.Domain.Domain.Service
+
+@if (Show)
+{
+    <div class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" @onclick="OnClose">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 transform transition-all" @onclick:stopPropagation="true">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+                        <svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        @TitleText
+                    </h3>
+                    @if (!string.IsNullOrWhiteSpace(DescriptionText))
+                    {
+                        <p class="text-sm text-gray-500 mt-2">@DescriptionText</p>
+                    }
+                </div>
+                <button @onclick="OnClose" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+
+            @if (!string.IsNullOrEmpty(ErrorMessage))
+            {
+                <div class="mb-4 bg-red-50 border-l-4 border-red-500 text-red-700 px-4 py-3 rounded-lg" role="alert">
+                    <div class="flex items-start gap-2">
+                        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <span class="block text-sm">@ErrorMessage</span>
+                    </div>
+                </div>
+            }
+
+            <div class="mb-5 p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
+                <div class="text-sm">
+                    <span class="font-semibold text-gray-700">@SessionLabelText</span>
+                    <span class="text-gray-600 ml-2 break-all">@SessionTitleText</span>
+                </div>
+                <div class="text-sm">
+                    <span class="font-semibold text-gray-700">@ToolLabelText</span>
+                    <span class="text-gray-600 ml-2">@ToolNameText</span>
+                </div>
+            </div>
+
+            <div class="space-y-5">
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">@ModelLabelText</label>
+                    @if (HasModelOptions)
+                    {
+                        <select value="@Model"
+                                @onchange="HandleModelChanged"
+                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-gray-600 focus:ring-2 focus:ring-gray-300 transition-all outline-none text-sm bg-white"
+                                disabled="@IsSaving">
+                            <option value="">@FollowDefaultText</option>
+                            @foreach (var option in ModelOptions)
+                            {
+                                <option value="@option.Id">@option.DisplayName</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input type="text"
+                               value="@Model"
+                               @oninput="HandleModelChanged"
+                               placeholder="@ModelPlaceholderText"
+                               class="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-gray-600 focus:ring-2 focus:ring-gray-300 transition-all outline-none text-sm"
+                               disabled="@IsSaving" />
+                    }
+                </div>
+
+                @if (ShowReasoningEffort)
+                {
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">@ReasoningLabelText</label>
+                        <select value="@ReasoningEffort"
+                                @onchange="HandleReasoningEffortChanged"
+                                class="w-full px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-gray-600 focus:ring-2 focus:ring-gray-300 transition-all outline-none text-sm bg-white"
+                                disabled="@IsSaving">
+                            <option value="">@FollowDefaultText</option>
+                            <option value="low">low</option>
+                            <option value="medium">medium</option>
+                            <option value="high">high</option>
+                            <option value="xhigh">xhigh</option>
+                        </select>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(ProviderNoteText) || !string.IsNullOrWhiteSpace(ResetNoteText))
+                {
+                    <div class="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 space-y-1">
+                        @if (!string.IsNullOrWhiteSpace(ProviderNoteText))
+                        {
+                            <p>@ProviderNoteText</p>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(ResetNoteText))
+                        {
+                            <p>@ResetNoteText</p>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="flex gap-3 mt-6">
+                <button @onclick="OnClear"
+                        disabled="@IsSaving"
+                        class="px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm">
+                    @ClearText
+                </button>
+                <button @onclick="OnClose"
+                        disabled="@IsSaving"
+                        class="flex-1 px-4 py-3 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm">
+                    @CancelText
+                </button>
+                <button @onclick="OnSave"
+                        disabled="@IsSaving"
+                        class="flex-1 px-4 py-3 bg-gray-800 hover:bg-black text-white rounded-xl font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2">
+                    @if (IsSaving)
+                    {
+                        <div class="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent"></div>
+                        <span>@SavingText</span>
+                    }
+                    else
+                    {
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                        <span>@SaveText</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Show { get; set; }
+    [Parameter] public string TitleText { get; set; } = string.Empty;
+    [Parameter] public string DescriptionText { get; set; } = string.Empty;
+    [Parameter] public string SessionLabelText { get; set; } = string.Empty;
+    [Parameter] public string SessionTitleText { get; set; } = string.Empty;
+    [Parameter] public string ToolLabelText { get; set; } = string.Empty;
+    [Parameter] public string ToolNameText { get; set; } = string.Empty;
+    [Parameter] public string ModelLabelText { get; set; } = string.Empty;
+    [Parameter] public string ModelPlaceholderText { get; set; } = string.Empty;
+    [Parameter] public string ReasoningLabelText { get; set; } = string.Empty;
+    [Parameter] public string FollowDefaultText { get; set; } = string.Empty;
+    [Parameter] public string ProviderNoteText { get; set; } = string.Empty;
+    [Parameter] public string ResetNoteText { get; set; } = string.Empty;
+    [Parameter] public string ClearText { get; set; } = string.Empty;
+    [Parameter] public string CancelText { get; set; } = string.Empty;
+    [Parameter] public string SaveText { get; set; } = string.Empty;
+    [Parameter] public string SavingText { get; set; } = string.Empty;
+    [Parameter] public string ErrorMessage { get; set; } = string.Empty;
+    [Parameter] public string Model { get; set; } = string.Empty;
+    [Parameter] public string ReasoningEffort { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<CcSwitchModelOption> ModelOptions { get; set; } = [];
+    [Parameter] public bool ShowReasoningEffort { get; set; }
+    [Parameter] public bool IsSaving { get; set; }
+    [Parameter] public EventCallback<string> ModelChanged { get; set; }
+    [Parameter] public EventCallback<string> ReasoningEffortChanged { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnSave { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+
+    private bool HasModelOptions => ModelOptions.Count > 0;
+
+    private Task HandleModelChanged(ChangeEventArgs args)
+    {
+        return ModelChanged.InvokeAsync(args.Value?.ToString() ?? string.Empty);
+    }
+
+    private Task HandleReasoningEffortChanged(ChangeEventArgs args)
+    {
+        return ReasoningEffortChanged.InvokeAsync(args.Value?.ToString() ?? string.Empty);
+    }
+}

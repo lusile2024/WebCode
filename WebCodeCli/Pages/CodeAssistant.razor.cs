@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Components;
+﻿using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
@@ -48,6 +48,8 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     [Inject] private IPromptTemplateService PromptTemplateService { get; set; } = default!;
     [Inject] private IInputHistoryService InputHistoryService { get; set; } = default!;
     [Inject] private IUserContextService UserContextService { get; set; } = default!;
+    [Inject] private ICcSwitchService CcSwitchService { get; set; } = default!;
+    [Inject] private ISuperpowersCapabilityService SuperpowersCapabilityService { get; set; } = default!;
     [Inject] private HttpClient Http { get; set; } = default!;
     [Inject] private IVersionService VersionService { get; set; } = default!;
     
@@ -237,6 +239,15 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private string _newSessionTitle = string.Empty;
     private bool _isRenamingSession = false;
     private string _renameError = string.Empty;
+
+    // 会话启动设置对话框
+    private bool _showSessionLaunchOverrideDialog = false;
+    private SessionHistory? _sessionToConfigureLaunch = null;
+    private string _sessionLaunchOverrideModel = string.Empty;
+    private string _sessionLaunchReasoningEffort = string.Empty;
+    private List<CcSwitchModelOption> _sessionLaunchModelOptions = [];
+    private bool _isSavingSessionLaunchOverride = false;
+    private string _sessionLaunchOverrideError = string.Empty;
 
     // 授权对话框（会话）
     private bool _showAuthorizeDialog = false;
@@ -1885,15 +1896,80 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         };
     }
 
-    private async Task SendMessage()
+    private string _superpowersQuickInput = string.Empty;
+    private SuperpowersCapabilityPresentationState _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Unknown;
+    private string _superpowersCapabilityPresentationContextKey = string.Empty;
+
+    private const string SuperpowersCapabilityCheckingText = "正在检测 superpowers 能力...";
+    private const string SuperpowersCapabilityUnavailableText = "当前 Provider 缺少 superpowers 能力";
+    private const string SuperpowersCapabilityProbeFailedText = "检测 superpowers 能力失败，请重试";
+    private const string SuperpowersCapabilityRetryText = "重新检测";
+
+    private SuperpowersQuickActionEligibility CurrentSuperpowersQuickActionEligibility =>
+        SuperpowersQuickActionHelper.Evaluate(
+            _messages,
+            hasSuperpowersPlanFiles: HasSuperpowersPlanFiles(),
+            isProcessRunning: _isLoading);
+
+    private SuperpowersQuickActionViewState CurrentSuperpowersQuickActionViewState
     {
-        if (string.IsNullOrWhiteSpace(_inputMessage) || _isLoading)
+        get
+        {
+            var eligibility = CurrentSuperpowersQuickActionEligibility;
+            return new SuperpowersQuickActionViewState(
+                MessageId: eligibility.MessageId,
+                ShowQuickInput: eligibility.ShowQuickInput,
+                ShowPlanActions: eligibility.ShowPlanActions,
+                IsDisabled: eligibility.IsDisabled
+                            || _superpowersCapabilityPresentation.IsChecking
+                            || _superpowersCapabilityPresentation.State == SuperpowersCapabilityState.Unavailable,
+                StatusMessage: _superpowersCapabilityPresentation.StatusMessage,
+                ShowRetryAction: _superpowersCapabilityPresentation.ShowRetryAction,
+                RetryActionDisabled: eligibility.IsDisabled || _superpowersCapabilityPresentation.IsChecking,
+                RetryActionText: SuperpowersCapabilityRetryText);
+        }
+    }
+
+    private bool HasSuperpowersPlanFiles()
+    {
+        try
+        {
+            var workspacePath = CliExecutorService.GetSessionWorkspacePath(_sessionId)
+                               ?? _currentSession?.WorkspacePath;
+
+            if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
+            {
+                return false;
+            }
+
+            var superpowersPlanPath = Path.Combine(workspacePath, "docs", "superpowers", "plans");
+            return Directory.Exists(superpowersPlanPath)
+                && Directory.EnumerateFiles(superpowersPlanPath, "*.md").Any();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private Task SendMessage()
+    {
+        return SendMessageCoreAsync(_inputMessage, clearComposerInput: true);
+    }
+
+    private async Task SendMessageCoreAsync(string? rawMessage, bool clearComposerInput)
+    {
+        if (string.IsNullOrWhiteSpace(rawMessage) || _isLoading)
         {
             return;
         }
 
-        var message = _inputMessage.Trim();
-        _inputMessage = string.Empty;
+        var message = rawMessage.Trim();
+        if (clearComposerInput)
+        {
+            _inputMessage = string.Empty;
+        }
+
         _isLoading = true;
         _currentAssistantMessage = string.Empty;
 
@@ -2066,6 +2142,399 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         }
     }
 
+    #if false
+    private async Task StartLowInterruptionContinueAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentLowInterruptionContinueEligibility;
+        if (_isLoading
+            || eligibility.IsDisabled
+            || !LowInterruptionContinueHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        var selectedTool = _availableTools.FirstOrDefault(t => t.Id == _selectedToolId);
+        CaptureLatestCompletedAssistantStructuredTodoList();
+        InitializeJsonlState(IsJsonlTool(selectedTool));
+
+        if (_isJsonlOutputActive && _progressTracker != null)
+        {
+            _progressTracker.Start();
+        }
+
+        _isLoading = true;
+        _currentAssistantMessage = string.Empty;
+        StateHasChanged();
+        await ScrollToBottom();
+
+        var assistantMessage = new ChatMessage
+        {
+            Role = "assistant",
+            Content = string.Empty,
+            CliToolId = _selectedToolId,
+            IsCompleted = false
+        };
+
+        var contentBuilder = new StringBuilder();
+
+        try
+        {
+            await foreach (var chunk in CliExecutorService.ExecuteLowInterruptionContinueStreamAsync(
+                _sessionId,
+                _selectedToolId,
+                _lowInterruptionContinuePrompt,
+                default))
+            {
+                if (chunk.IsError)
+                {
+                    assistantMessage.HasError = true;
+                    assistantMessage.ErrorMessage = chunk.ErrorMessage;
+                    assistantMessage.Content = chunk.ErrorMessage ?? "鍙戠敓閿欒";
+                    assistantMessage.IsCompleted = true;
+
+                    _messages.Add(assistantMessage);
+                    ChatSessionService.AddMessage(_sessionId, assistantMessage);
+
+                    await UpdatePreview(assistantMessage.Content);
+                    StateHasChanged();
+                    break;
+                }
+                else if (chunk.IsCompleted)
+                {
+                    if (_isJsonlOutputActive)
+                    {
+                        ProcessJsonlChunk(string.Empty, flush: true);
+                        var finalContent = GetJsonlAssistantMessage();
+                        assistantMessage.Content = finalContent;
+                        _currentAssistantMessage = finalContent;
+                        contentBuilder.Clear();
+                        contentBuilder.Append(finalContent);
+                    }
+
+                    assistantMessage.IsCompleted = true;
+                    if (!_isJsonlOutputActive)
+                    {
+                        assistantMessage.Content = contentBuilder.ToString();
+                    }
+
+                    _messages.Add(assistantMessage);
+                    ChatSessionService.AddMessage(_sessionId, assistantMessage);
+
+                    await UpdatePreview(assistantMessage.Content);
+                    StateHasChanged();
+                    break;
+                }
+                else
+                {
+                    var chunkContent = chunk.Content ?? string.Empty;
+                    if (_isJsonlOutputActive)
+                    {
+                        ProcessJsonlChunk(chunkContent, flush: false);
+                        var liveContent = GetJsonlAssistantMessage();
+                        _currentAssistantMessage = liveContent;
+                        assistantMessage.Content = liveContent;
+                    }
+                    else
+                    {
+                        contentBuilder.Append(chunkContent);
+                        _currentAssistantMessage = contentBuilder.ToString();
+                        assistantMessage.Content = _currentAssistantMessage;
+                    }
+
+                    await UpdatePreview(_currentAssistantMessage);
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"灏戞墦鏂墽琛屽け璐? {ex.Message}");
+
+            assistantMessage.HasError = true;
+            assistantMessage.ErrorMessage = ex.Message;
+            assistantMessage.Content = $"鎵ц澶辫触: {ex.Message}";
+            assistantMessage.IsCompleted = true;
+
+            _messages.Add(assistantMessage);
+            ChatSessionService.AddMessage(_sessionId, assistantMessage);
+
+            StateHasChanged();
+        }
+        finally
+        {
+            if (_isJsonlOutputActive)
+            {
+                ProcessJsonlChunk(string.Empty, flush: true);
+                _currentAssistantMessage = GetJsonlAssistantMessage();
+                CaptureLatestCompletedAssistantStructuredTodoList();
+
+                if (_progressTracker != null)
+                {
+                    if (assistantMessage.HasError)
+                    {
+                        _progressTracker.Fail(assistantMessage.ErrorMessage ?? "鎵ц澶辫触");
+                    }
+                    else
+                    {
+                        _progressTracker.Complete();
+                    }
+                }
+            }
+
+            _isLoading = false;
+            _currentAssistantMessage = string.Empty;
+            StateHasChanged();
+            await ScrollToBottom();
+            await SaveCurrentSessionAsync();
+        }
+    }
+
+    #endif
+
+    private async Task OnSubmitSuperpowersQuickInputAsync(ChatMessage sourceMessage)
+    {
+        await SubmitSuperpowersQuickActionAsync(sourceMessage, SuperpowersQuickActionRequestType.QuickInput);
+    }
+
+    private async Task OnExecuteSuperpowersPlanAsync(ChatMessage sourceMessage)
+    {
+        await SubmitSuperpowersQuickActionAsync(sourceMessage, SuperpowersQuickActionRequestType.ExecutePlan);
+    }
+
+    private async Task OnExecuteSuperpowersSubagentPlanAsync(ChatMessage sourceMessage)
+    {
+        await SubmitSuperpowersQuickActionAsync(sourceMessage, SuperpowersQuickActionRequestType.ExecuteSubagentPlan);
+    }
+
+    private async Task SubmitSuperpowersQuickActionAsync(
+        ChatMessage sourceMessage,
+        SuperpowersQuickActionRequestType requestType)
+    {
+        var eligibility = CurrentSuperpowersQuickActionEligibility;
+        var viewState = CurrentSuperpowersQuickActionViewState;
+        if (_isLoading
+            || viewState.IsDisabled
+            || !SuperpowersQuickActionHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        var message = SuperpowersQuickActionSubmissionHelper.BuildMessage(requestType, _superpowersQuickInput);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var capabilityAvailable = await EnsureSuperpowersCapabilityAvailableAsync(forceRefresh: false);
+        if (!capabilityAvailable)
+        {
+            return;
+        }
+
+        if (requestType == SuperpowersQuickActionRequestType.QuickInput)
+        {
+            _superpowersQuickInput = string.Empty;
+        }
+
+        await SendMessageCoreAsync(message, clearComposerInput: false);
+    }
+
+    private async Task RetrySuperpowersCapabilityAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentSuperpowersQuickActionEligibility;
+        if (_isLoading || !SuperpowersQuickActionHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        await EnsureSuperpowersCapabilityAvailableAsync(forceRefresh: true);
+    }
+
+    private async Task<bool> EnsureSuperpowersCapabilityAvailableAsync(bool forceRefresh)
+    {
+        await RefreshSuperpowersCapabilityPresentationContextAsync();
+
+        if (_superpowersCapabilityPresentation.IsChecking)
+        {
+            return false;
+        }
+
+        if (!forceRefresh && _superpowersCapabilityPresentation.State == SuperpowersCapabilityState.Available)
+        {
+            return true;
+        }
+
+        _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Checking(SuperpowersCapabilityCheckingText);
+        await InvokeAsync(StateHasChanged);
+
+        var probeResult = await SuperpowersCapabilityService.ProbeAsync(
+            BuildSuperpowersCapabilityContext(),
+            forceRefresh: forceRefresh);
+
+        _superpowersCapabilityPresentation = probeResult.Outcome switch
+        {
+            SuperpowersCapabilityProbeOutcome.Available => SuperpowersCapabilityPresentationState.Available,
+            SuperpowersCapabilityProbeOutcome.MissingCapability => SuperpowersCapabilityPresentationState.Unavailable(
+                string.IsNullOrWhiteSpace(probeResult.Message)
+                    ? SuperpowersCapabilityUnavailableText
+                    : probeResult.Message),
+            _ => SuperpowersCapabilityPresentationState.ProbeFailed(
+                string.IsNullOrWhiteSpace(probeResult.Message)
+                    ? SuperpowersCapabilityProbeFailedText
+                    : probeResult.Message)
+        };
+
+        await InvokeAsync(StateHasChanged);
+        return _superpowersCapabilityPresentation.State == SuperpowersCapabilityState.Available;
+    }
+
+    private SuperpowersCapabilityContext BuildSuperpowersCapabilityContext()
+    {
+        return new SuperpowersCapabilityContext
+        {
+            ToolId = _selectedToolId,
+            ProviderId = GetCurrentPinnedProviderIdForSuperpowers(),
+            WorkspacePath = GetCurrentSuperpowersWorkspacePath()
+        };
+    }
+
+    private string? GetCurrentPinnedProviderIdForSuperpowers()
+    {
+        if (_currentSession == null || string.IsNullOrWhiteSpace(_currentSession.CcSwitchProviderId))
+        {
+            return null;
+        }
+
+        var selectedToolId = NormalizeSuperpowersCapabilityToolId(_selectedToolId);
+        var sessionToolId = NormalizeSuperpowersCapabilityToolId(_currentSession.CcSwitchSnapshotToolId ?? _currentSession.ToolId);
+        if (!string.Equals(selectedToolId, sessionToolId, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return _currentSession.CcSwitchProviderId;
+    }
+
+    private string? GetCurrentSuperpowersWorkspacePath()
+    {
+        try
+        {
+            return CliExecutorService.GetSessionWorkspacePath(_sessionId)
+                   ?? _currentSession?.WorkspacePath;
+        }
+        catch
+        {
+            return _currentSession?.WorkspacePath;
+        }
+    }
+
+    private async Task RefreshSuperpowersCapabilityPresentationContextAsync()
+    {
+        var nextContextKey = await ResolveSuperpowersCapabilityPresentationContextKeyAsync();
+        if (string.Equals(_superpowersCapabilityPresentationContextKey, nextContextKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _superpowersCapabilityPresentationContextKey = nextContextKey;
+        _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Unknown;
+    }
+
+    private async Task<string> ResolveSuperpowersCapabilityPresentationContextKeyAsync()
+    {
+        try
+        {
+            var snapshot = await SuperpowersCapabilityService.GetStateAsync(BuildSuperpowersCapabilityContext());
+            if (!string.IsNullOrWhiteSpace(snapshot.CacheKey))
+            {
+                return snapshot.CacheKey;
+            }
+        }
+        catch
+        {
+        }
+
+        return BuildFallbackSuperpowersCapabilityPresentationContextKey();
+    }
+
+    private void InvalidateSuperpowersCapabilityPresentation()
+    {
+        _superpowersCapabilityPresentationContextKey = string.Empty;
+        _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Unknown;
+    }
+
+    private string BuildFallbackSuperpowersCapabilityPresentationContextKey()
+    {
+        return $"{NormalizeSuperpowersCapabilityToolId(_selectedToolId) ?? string.Empty}::{GetCurrentPinnedProviderIdForSuperpowers() ?? string.Empty}";
+    }
+
+    private static string? NormalizeSuperpowersCapabilityToolId(string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return null;
+        }
+
+        if (toolId.Equals("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-code";
+        }
+
+        if (toolId.Equals("opencode-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return "opencode";
+        }
+
+        return toolId;
+    }
+
+    private readonly record struct SuperpowersQuickActionViewState(
+        string? MessageId,
+        bool ShowQuickInput,
+        bool ShowPlanActions,
+        bool IsDisabled,
+        string? StatusMessage,
+        bool ShowRetryAction,
+        bool RetryActionDisabled,
+        string RetryActionText);
+
+    private readonly record struct SuperpowersCapabilityPresentationState(
+        SuperpowersCapabilityState State,
+        bool IsChecking,
+        string? StatusMessage,
+        bool ShowRetryAction)
+    {
+        public static SuperpowersCapabilityPresentationState Unknown => new(
+            SuperpowersCapabilityState.Unknown,
+            IsChecking: false,
+            StatusMessage: null,
+            ShowRetryAction: false);
+
+        public static SuperpowersCapabilityPresentationState Available => new(
+            SuperpowersCapabilityState.Available,
+            IsChecking: false,
+            StatusMessage: null,
+            ShowRetryAction: false);
+
+        public static SuperpowersCapabilityPresentationState Checking(string statusMessage) => new(
+            SuperpowersCapabilityState.Unknown,
+            IsChecking: true,
+            StatusMessage: statusMessage,
+            ShowRetryAction: false);
+
+        public static SuperpowersCapabilityPresentationState Unavailable(string statusMessage) => new(
+            SuperpowersCapabilityState.Unavailable,
+            IsChecking: false,
+            StatusMessage: statusMessage,
+            ShowRetryAction: true);
+
+        public static SuperpowersCapabilityPresentationState ProbeFailed(string statusMessage) => new(
+            SuperpowersCapabilityState.Unknown,
+            IsChecking: false,
+            StatusMessage: statusMessage,
+            ShowRetryAction: true);
+    }
+
     private Task UpdatePreview(string content)
     {
         if (_disposed) return Task.CompletedTask;
@@ -2131,6 +2600,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             var toolId = string.IsNullOrWhiteSpace(_selectedToolId) ? session?.ToolId : _selectedToolId;
             var workspacePath = session?.WorkspacePath ?? GetSafeWorkspacePath();
             var toolLabel = _availableTools.FirstOrDefault(tool => tool.Id == toolId)?.Name ?? toolId ?? "CLI";
+            var historyLimit = ResolveHistoryCommandLimit(message);
 
             if (string.IsNullOrWhiteSpace(toolId) || string.IsNullOrWhiteSpace(cliThreadId))
             {
@@ -2138,7 +2608,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             }
             else
             {
-                var historyMessages = await ExternalCliSessionHistoryService.GetRecentMessagesAsync(toolId, cliThreadId, maxCount: 10);
+                var historyMessages = await ExternalCliSessionHistoryService.GetRecentMessagesAsync(
+                    toolId,
+                    cliThreadId,
+                    maxCount: historyLimit,
+                    workspacePath: workspacePath);
                 assistantMessage.Content = BuildExternalCliHistoryText(historyMessages, toolLabel, workspacePath);
             }
         }
@@ -2180,6 +2654,35 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                || trimmed.StartsWith("/history ", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static int ResolveHistoryCommandLimit(string? message)
+    {
+        const int defaultLimit = 50;
+        const int maxLimit = 200;
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return defaultLimit;
+        }
+
+        var segments = message
+            .Trim()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length < 2)
+        {
+            return defaultLimit;
+        }
+
+        var requestedLimit = segments[1];
+        if (string.Equals(requestedLimit, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return maxLimit;
+        }
+
+        return int.TryParse(requestedLimit, out var parsedLimit)
+            ? Math.Clamp(parsedLimit, 1, maxLimit)
+            : defaultLimit;
+    }
+
     private static string BuildExternalCliHistoryText(
         IReadOnlyList<ExternalCliHistoryMessage> messages,
         string toolLabel,
@@ -2197,7 +2700,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             return builder.ToString().TrimEnd();
         }
 
-        foreach (var message in messages.TakeLast(10))
+        builder.AppendLine($"显示条数: 最近 {messages.Count} 条");
+        builder.AppendLine();
+
+        foreach (var message in messages)
         {
             var roleLabel = string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase) ? "用户" : "助手";
             if (message.CreatedAt.HasValue)
@@ -4054,14 +4560,20 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 ? session.ToolId
                 : session.CcSwitchSnapshotToolId;
 
-            await CliExecutorService.SyncSessionCcSwitchSnapshotAsync(session.SessionId, effectiveToolId);
+            var syncResult = await CliExecutorService.SyncCodexThreadProviderAsync(session.SessionId, effectiveToolId);
             await LoadSessionsAsync();
 
             var refreshedSession = _sessions.FirstOrDefault(x => x.SessionId == session.SessionId);
             if (refreshedSession != null && _currentSession?.SessionId == refreshedSession.SessionId)
             {
                 MergeCcSwitchSnapshotState(_currentSession, refreshedSession);
+                InvalidateSuperpowersCapabilityPresentation();
             }
+
+            var syncMessage = string.IsNullOrWhiteSpace(syncResult.Message)
+                ? "Codex thread 同步完成"
+                : syncResult.Message;
+            await JSRuntime.InvokeVoidAsync("alert", syncResult.HasWarnings ? $"⚠️ {syncMessage}" : $"✅ {syncMessage}");
         }
         catch (Exception ex)
         {
@@ -4073,6 +4585,198 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             _syncingSessionId = string.Empty;
             StateHasChanged();
         }
+    }
+
+    private bool CurrentSessionLaunchOverrideSupportsReasoning
+        => string.Equals(
+            GetSessionLaunchOverrideToolId(_sessionToConfigureLaunch),
+            "codex",
+            StringComparison.OrdinalIgnoreCase);
+
+    private async Task ShowSessionLaunchOverrideDialog(SessionHistory session)
+    {
+        if (session == null)
+        {
+            return;
+        }
+
+        var toolId = GetSessionLaunchOverrideToolId(session);
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            await JSRuntime.InvokeVoidAsync("alert", T("codeAssistant.sessionLaunchSettingsUnsupportedTool"));
+            return;
+        }
+
+        var launchOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(session, toolId);
+        _sessionToConfigureLaunch = session;
+        _sessionLaunchOverrideModel = launchOverride?.Model ?? string.Empty;
+        _sessionLaunchReasoningEffort = string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase)
+            ? launchOverride?.ReasoningEffort ?? string.Empty
+            : string.Empty;
+        _sessionLaunchModelOptions = await LoadSessionLaunchModelOptionsAsync(session, toolId, _sessionLaunchOverrideModel);
+        _sessionLaunchOverrideError = string.Empty;
+        _showSessionLaunchOverrideDialog = true;
+        StateHasChanged();
+    }
+
+    private void CloseSessionLaunchOverrideDialog()
+    {
+        _showSessionLaunchOverrideDialog = false;
+        _sessionToConfigureLaunch = null;
+        _sessionLaunchOverrideModel = string.Empty;
+        _sessionLaunchReasoningEffort = string.Empty;
+        _sessionLaunchModelOptions = [];
+        _sessionLaunchOverrideError = string.Empty;
+        _isSavingSessionLaunchOverride = false;
+        StateHasChanged();
+    }
+
+    private Task SaveSessionLaunchOverrideAsync()
+    {
+        return PersistSessionLaunchOverrideAsync(clearOverride: false);
+    }
+
+    private Task ClearSessionLaunchOverrideAsync()
+    {
+        return PersistSessionLaunchOverrideAsync(clearOverride: true);
+    }
+
+    private async Task PersistSessionLaunchOverrideAsync(bool clearOverride)
+    {
+        if (_sessionToConfigureLaunch == null || _isSavingSessionLaunchOverride)
+        {
+            return;
+        }
+
+        var toolId = GetSessionLaunchOverrideToolId(_sessionToConfigureLaunch);
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            _sessionLaunchOverrideError = T("codeAssistant.sessionLaunchSettingsUnsupportedTool");
+            StateHasChanged();
+            return;
+        }
+
+        try
+        {
+            _isSavingSessionLaunchOverride = true;
+            _sessionLaunchOverrideError = string.Empty;
+            StateHasChanged();
+
+            var session = await SessionHistoryManager.GetSessionAsync(_sessionToConfigureLaunch.SessionId) ?? _sessionToConfigureLaunch;
+            session.ToolLaunchOverrides = SessionLaunchOverrideHelper.ApplyOverride(
+                session.ToolLaunchOverrides,
+                toolId,
+                clearOverride ? null : _sessionLaunchOverrideModel,
+                clearOverride ? null : _sessionLaunchReasoningEffort);
+
+            await SessionHistoryManager.SaveSessionImmediateAsync(session);
+            await CliExecutorService.ResetSessionRuntimeAsync(session.SessionId, clearCliThreadId: false);
+
+            if (_currentSession?.SessionId == session.SessionId)
+            {
+                QueueSaveOutputState(forceImmediate: true);
+            }
+
+            await LoadSessionsAsync();
+
+            var refreshedSession = _sessions.FirstOrDefault(x => x.SessionId == session.SessionId) ?? session;
+            if (_currentSession?.SessionId == refreshedSession.SessionId)
+            {
+                MergeCcSwitchSnapshotState(_currentSession, refreshedSession);
+                _currentSession.ToolLaunchOverrides = new Dictionary<string, SessionToolLaunchOverride>(
+                    refreshedSession.ToolLaunchOverrides,
+                    StringComparer.OrdinalIgnoreCase);
+            }
+
+            CloseSessionLaunchOverrideDialog();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[会话启动设置] 保存失败: {ex.Message}");
+            _sessionLaunchOverrideError = ex.Message;
+            StateHasChanged();
+        }
+        finally
+        {
+            _isSavingSessionLaunchOverride = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string? GetSessionLaunchOverrideToolId(SessionHistory? session)
+    {
+        return session == null
+            ? null
+            : SessionLaunchOverrideHelper.ResolveEffectiveToolId(session.ToolId, session.CcSwitchSnapshotToolId);
+    }
+
+    private string GetSessionLaunchOverrideToolDisplayName(SessionHistory? session)
+    {
+        var toolId = GetSessionLaunchOverrideToolId(session);
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return T("codeAssistant.selectTool");
+        }
+
+        return _availableTools.FirstOrDefault(tool => string.Equals(tool.Id, toolId, StringComparison.OrdinalIgnoreCase))?.Name
+               ?? toolId switch
+               {
+                   "claude-code" => "Claude Code",
+                   "codex" => "Codex",
+                   "opencode" => "OpenCode",
+                   _ => toolId
+               };
+    }
+
+    private async Task<List<CcSwitchModelOption>> LoadSessionLaunchModelOptionsAsync(SessionHistory session, string toolId, string? currentModel)
+    {
+        try
+        {
+            var catalog = await CcSwitchService.GetModelCatalogAsync(toolId, session.CcSwitchProviderId);
+            return MergeSessionLaunchModelOptions(catalog.Models, currentModel);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[会话启动设置] 读取模型列表失败: {ex.Message}");
+            return MergeSessionLaunchModelOptions([], currentModel);
+        }
+    }
+
+    private static List<CcSwitchModelOption> MergeSessionLaunchModelOptions(IEnumerable<CcSwitchModelOption> options, string? currentModel)
+    {
+        var merged = new List<CcSwitchModelOption>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var option in options)
+        {
+            if (option == null || string.IsNullOrWhiteSpace(option.Id))
+            {
+                continue;
+            }
+
+            var id = option.Id.Trim();
+            if (!seen.Add(id))
+            {
+                continue;
+            }
+
+            merged.Add(new CcSwitchModelOption
+            {
+                Id = id,
+                DisplayName = string.IsNullOrWhiteSpace(option.DisplayName) ? id : option.DisplayName.Trim()
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentModel) && seen.Add(currentModel.Trim()))
+        {
+            merged.Insert(0, new CcSwitchModelOption
+            {
+                Id = currentModel.Trim(),
+                DisplayName = currentModel.Trim()
+            });
+        }
+
+        return merged;
     }
 
     private static void MergeCcSwitchSnapshotState(SessionHistory target, SessionHistory source)
@@ -4540,6 +5244,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 ProjectId = projectId,
                 ProjectName = projectName
             };
+            InvalidateSuperpowersCapabilityPresentation();
             
             // 自动保存新会话到数据库
             await SessionHistoryManager.SaveSessionImmediateAsync(_currentSession);
@@ -4649,6 +5354,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             _isJsonlOutputActive = false;
             _jsonlAssistantMessageBuilder = null;
             _currentAssistantMessage = string.Empty;
+            InvalidateSuperpowersCapabilityPresentation();
 
             // 从数据库恢复输出结果区域（如果存在）
             await LoadOutputStateAsync(_sessionId);
@@ -6315,6 +7021,8 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     /// </summary>
     private void OnToolChanged()
     {
+        InvalidateSuperpowersCapabilityPresentation();
+
         // 关闭技能选择器并重新过滤
         if (_showSkillPicker)
         {

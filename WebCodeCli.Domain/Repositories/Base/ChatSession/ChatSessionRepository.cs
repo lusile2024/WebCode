@@ -87,9 +87,9 @@ public class ChatSessionRepository : Repository<ChatSessionEntity>, IChatSession
     /// <summary>
     /// 更新会话的 CLI ThreadId（用于恢复）
     /// </summary>
-    public async Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId)
+    public async Task<bool> UpdateCliThreadIdAsync(string sessionId, string? cliThreadId)
     {
-        if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(cliThreadId))
+        if (string.IsNullOrWhiteSpace(sessionId))
         {
             return false;
         }

@@ -4,6 +4,7 @@ using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Options;
+using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -154,6 +155,261 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateStreamingHandleAsync_FallsBackToReadableChineseStatusHeader()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome();
+        chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+        {
+            Text = "Backend API",
+            Value = new { action = "switch_session", session_id = "session-2", chat_key = "oc_stream_chat" }
+        });
+        chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+        {
+            Text = "模型/会话管理...",
+            Value = new { action = "open_session_manager" }
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        Assert.False(cardDoc.RootElement.GetProperty("config").TryGetProperty("streaming_mode", out _));
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+        var statusModule = elements[0];
+        var overflow = statusModule.GetProperty("extra");
+
+        Assert.Equal("当前会话", statusModule.GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("overflow", overflow.GetProperty("tag").GetString());
+        Assert.Equal("Backend API", overflow.GetProperty("options")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("{\"action\":\"switch_session\",\"session_id\":\"session-2\",\"chat_key\":\"oc_stream_chat\"}", overflow.GetProperty("options")[0].GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_RendersBottomPromptForm()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+        chrome.BottomPrompt = new FeishuStreamingCardBottomPrompt
+        {
+            InputName = LowInterruptionContinueDefaults.PromptFieldName,
+            InputLabel = "少打断提示词",
+            Placeholder = LowInterruptionContinueDefaults.PromptPlaceholder,
+            DefaultValue = LowInterruptionContinueDefaults.DefaultPrompt,
+            ButtonText = "少打断执行",
+            ButtonType = "primary",
+            Value = new
+            {
+                action = "low_interruption_continue",
+                session_id = "session-1",
+                chat_key = "oc_stream_chat",
+                tool_id = "codex"
+            }
+        };
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+        var bottomActionModule = elements.EnumerateArray().Last();
+
+        Assert.Equal("form", bottomActionModule.GetProperty("tag").GetString());
+
+        var buttonRow = bottomActionModule.GetProperty("elements")[0];
+        Assert.Equal("column_set", buttonRow.GetProperty("tag").GetString());
+
+        var input = buttonRow.GetProperty("columns")[0].GetProperty("elements")[0];
+        Assert.Equal("input", input.GetProperty("tag").GetString());
+        Assert.Equal(LowInterruptionContinueDefaults.PromptFieldName, input.GetProperty("name").GetString());
+        Assert.Equal(LowInterruptionContinueDefaults.DefaultPrompt, input.GetProperty("default_value").GetString());
+
+        var button = buttonRow.GetProperty("columns")[1].GetProperty("elements")[0];
+        Assert.Equal("button", button.GetProperty("tag").GetString());
+        Assert.Equal("primary", button.GetProperty("type").GetString());
+        Assert.Equal("少打断执行", button.GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("form_submit", button.GetProperty("action_type").GetString());
+        Assert.Equal("low_interruption_continue", button.GetProperty("value").GetProperty("action").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_RendersTopChipGroupsBetweenStatusAndBody()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "褰撳墠浼氳瘽"
+        };
+        chrome.TopChipGroups.Add(new FeishuStreamingCardTopChipGroup
+        {
+            Kind = "model",
+            IsEnabled = true,
+            SummaryMarkdown = "🤖 模型：`gpt-5.3-codex-spark`",
+            OverflowOptions =
+            [
+                new FeishuStreamingCardOverflowOption
+                {
+                    Text = "gpt-5.3-codex-spark",
+                    Value = new { action = "switch_streaming_card_model", session_id = "session-1", chat_key = "oc_stream_chat", model = "gpt-5.3-codex-spark" }
+                },
+                new FeishuStreamingCardOverflowOption
+                {
+                    Text = "gpt-5.2",
+                    Value = new { action = "switch_streaming_card_model", session_id = "session-1", chat_key = "oc_stream_chat", model = "gpt-5.2" }
+                }
+            ]
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 鍔╂墜",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("div", elements[0].GetProperty("tag").GetString());
+        Assert.Equal("div", elements[2].GetProperty("tag").GetString());
+        Assert.Equal("markdown", elements[4].GetProperty("tag").GetString());
+        Assert.Equal("🤖 模型：`gpt-5.3-codex-spark`", elements[2].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("overflow", elements[2].GetProperty("extra").GetProperty("tag").GetString());
+        var options = elements[2].GetProperty("extra").GetProperty("options");
+        Assert.Equal(2, options.GetArrayLength());
+        Assert.Equal("gpt-5.3-codex-spark", options[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("gpt-5.2", options[1].GetProperty("text").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_SplitsTopChipGroupIntoMultipleRowsWhenMoreThanSixItems()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+
+        var items = Enumerable.Range(1, 7)
+            .Select(index => new FeishuStreamingCardTopChipItem
+            {
+                Text = $"gpt-5.{index}",
+                IsActive = index == 1,
+                IsEnabled = true,
+                Value = new
+                {
+                    action = "switch_streaming_card_model",
+                    session_id = "session-1",
+                    chat_key = "oc_stream_chat",
+                    model = $"gpt-5.{index}"
+                }
+            })
+            .ToList();
+
+        chrome.TopChipGroups.Add(new FeishuStreamingCardTopChipGroup
+        {
+            Kind = "model",
+            Items = items
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("column_set", elements[2].GetProperty("tag").GetString());
+        Assert.Equal("column_set", elements[3].GetProperty("tag").GetString());
+        Assert.Equal(6, elements[2].GetProperty("columns").GetArrayLength());
+        Assert.Equal(1, elements[3].GetProperty("columns").GetArrayLength());
+        Assert.Equal("gpt-5.1", elements[2].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("gpt-5.7", elements[3].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("hr", elements[4].GetProperty("tag").GetString());
+        Assert.Equal("markdown", elements[5].GetProperty("tag").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_KeepsClientStreamingMode_WhenNoOverflowActionsExist()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+
+        Assert.True(cardDoc.RootElement.GetProperty("config").GetProperty("streaming_mode").GetBoolean());
+    }
+
+    [Fact]
     public async Task FeishuStreamingHandle_FinishAsync_WaitsForInflightUpdate_AndBlocksLaterUpdates()
     {
         var updateEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -192,6 +448,35 @@ public class FeishuCardKitClientTests
             [
                 "update:1:streaming",
                 "finish:2:final"
+            ],
+            operations);
+    }
+
+    [Fact]
+    public async Task FeishuStreamingHandle_UpdateAsync_HonorsQuietWindowAfterUpdate()
+    {
+        var operations = new List<string>();
+        var handle = new FeishuStreamingHandle(
+            "card-1",
+            "message-1",
+            (content, sequence) =>
+            {
+                operations.Add($"update:{sequence}:{content}");
+                return Task.CompletedTask;
+            },
+            (content, sequence) => Task.CompletedTask,
+            throttleMs: 0,
+            quietWindowAfterUpdateMs: 120);
+
+        await handle.UpdateAsync("first");
+        await handle.UpdateAsync("second");
+        await Task.Delay(160, TestContext.Current.CancellationToken);
+        await handle.UpdateAsync("third");
+
+        Assert.Equal(
+            [
+                "update:1:first",
+                "update:2:third"
             ],
             operations);
     }

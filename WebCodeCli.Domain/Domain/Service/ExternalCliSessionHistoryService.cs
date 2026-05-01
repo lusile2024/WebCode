@@ -17,6 +17,7 @@ public interface IExternalCliSessionHistoryService
         string toolId,
         string cliThreadId,
         int maxCount = 20,
+        string? workspacePath = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -34,6 +35,7 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
         string toolId,
         string cliThreadId,
         int maxCount = 20,
+        string? workspacePath = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(toolId) || string.IsNullOrWhiteSpace(cliThreadId))
@@ -49,7 +51,7 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
         {
             var messages = normalizedToolId switch
             {
-                "codex" => await GetCodexMessagesAsync(normalizedThreadId, effectiveMaxCount, cancellationToken),
+                "codex" => await GetCodexMessagesAsync(normalizedThreadId, effectiveMaxCount, workspacePath, cancellationToken),
                 "claude-code" => await GetClaudeCodeMessagesAsync(normalizedThreadId, effectiveMaxCount, cancellationToken),
                 "opencode" => await GetOpenCodeMessagesAsync(normalizedThreadId, effectiveMaxCount, cancellationToken),
                 _ => []
@@ -72,12 +74,12 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
         }
     }
 
-    protected virtual string? GetCodexSessionsRootPath()
+    protected virtual string? GetCodexConfigRootPath()
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return string.IsNullOrWhiteSpace(userProfile)
             ? null
-            : Path.Combine(userProfile, ".codex", "sessions");
+            : Path.Combine(userProfile, ".codex");
     }
 
     protected virtual string? GetClaudeProjectsRootPath()
@@ -134,9 +136,10 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
     private async Task<List<ExternalCliHistoryMessage>> GetCodexMessagesAsync(
         string cliThreadId,
         int maxCount,
+        string? workspacePath,
         CancellationToken cancellationToken)
     {
-        var filePath = FindCodexRolloutFile(cliThreadId, cancellationToken);
+        var filePath = FindCodexRolloutFile(cliThreadId, workspacePath, cancellationToken);
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
             return [];
@@ -184,54 +187,51 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
         return ParseOpenCodeExport(stdout, maxCount);
     }
 
-    private string? FindCodexRolloutFile(string cliThreadId, CancellationToken cancellationToken)
+    private string? FindCodexRolloutFile(string cliThreadId, string? workspacePath, CancellationToken cancellationToken)
     {
-        var sessionsRoot = GetCodexSessionsRootPath();
-        if (string.IsNullOrWhiteSpace(sessionsRoot) || !Directory.Exists(sessionsRoot))
-        {
-            return null;
-        }
-
         try
         {
-            var directCandidates = Directory
-                .EnumerateFiles(sessionsRoot, $"*{cliThreadId}*.jsonl", SearchOption.AllDirectories)
-                .OrderByDescending(File.GetLastWriteTimeUtc)
-                .ToList();
-
-            if (directCandidates.Count > 0)
+            foreach (var sessionsRoot in GetCodexSessionsRootPaths(workspacePath))
             {
-                return directCandidates[0];
-            }
+                var directCandidates = Directory
+                    .EnumerateFiles(sessionsRoot, $"*{cliThreadId}*.jsonl", SearchOption.AllDirectories)
+                    .OrderByDescending(File.GetLastWriteTimeUtc)
+                    .ToList();
 
-            foreach (var file in Directory.EnumerateFiles(sessionsRoot, "rollout-*.jsonl", SearchOption.AllDirectories))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var firstLine = ReadFirstNonEmptyLine(file, maxLines: 3);
-                if (string.IsNullOrWhiteSpace(firstLine))
+                if (directCandidates.Count > 0)
                 {
-                    continue;
+                    return directCandidates[0];
                 }
 
-                try
+                foreach (var file in Directory.EnumerateFiles(sessionsRoot, "rollout-*.jsonl", SearchOption.AllDirectories))
                 {
-                    using var document = JsonDocument.Parse(firstLine);
-                    var root = document.RootElement;
-                    if (!TryGetProperty(root, "payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var firstLine = ReadFirstNonEmptyLine(file, maxLines: 3);
+                    if (string.IsNullOrWhiteSpace(firstLine))
                     {
                         continue;
                     }
 
-                    var sessionId = GetString(payload, "id");
-                    if (string.Equals(sessionId, cliThreadId, StringComparison.OrdinalIgnoreCase))
+                    try
                     {
-                        return file;
+                        using var document = JsonDocument.Parse(firstLine);
+                        var root = document.RootElement;
+                        if (!TryGetProperty(root, "payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        var sessionId = GetString(payload, "id");
+                        if (string.Equals(sessionId, cliThreadId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return file;
+                        }
                     }
-                }
-                catch
-                {
-                    // ignore broken lines
+                    catch
+                    {
+                        // ignore broken lines
+                    }
                 }
             }
         }
@@ -619,6 +619,88 @@ public class ExternalCliSessionHistoryService : IExternalCliSessionHistoryServic
         }
 
         return null;
+    }
+
+    private IEnumerable<string> GetCodexSessionsRootPaths(string? workspacePath)
+    {
+        var yielded = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+        foreach (var workspaceSessionsRoot in GetWorkspaceCodexSessionsRootPaths(workspacePath))
+        {
+            if (!Directory.Exists(workspaceSessionsRoot))
+            {
+                continue;
+            }
+
+            var normalized = Path.GetFullPath(workspaceSessionsRoot);
+            if (yielded.Add(normalized))
+            {
+                yield return normalized;
+            }
+        }
+
+        foreach (var globalSessionsRoot in GetGlobalCodexSessionsRootPaths())
+        {
+            if (!Directory.Exists(globalSessionsRoot))
+            {
+                continue;
+            }
+
+            var normalized = Path.GetFullPath(globalSessionsRoot);
+            if (yielded.Add(normalized))
+            {
+                yield return normalized;
+            }
+        }
+    }
+
+    private static IEnumerable<string> GetWorkspaceCodexSessionsRootPaths(string? workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            yield break;
+        }
+
+        var codexRoot = Path.Combine(workspacePath, ".codex");
+        yield return Path.Combine(codexRoot, "sessions");
+        yield return Path.Combine(codexRoot, "archived_sessions");
+    }
+
+    private IEnumerable<string> GetGlobalCodexSessionsRootPaths()
+    {
+        var configuredRoot = GetCodexConfigRootPath();
+        if (string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            yield break;
+        }
+
+        var normalizedRoot = configuredRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var leafName = Path.GetFileName(normalizedRoot);
+
+        if (string.Equals(leafName, "sessions", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(leafName, "archived_sessions", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return normalizedRoot;
+
+            var siblingRoot = Path.Combine(Path.GetDirectoryName(normalizedRoot)!, "archived_sessions");
+            if (!string.Equals(normalizedRoot, siblingRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                yield return siblingRoot;
+            }
+
+            yield break;
+        }
+
+        var directRolloutExists = Directory.Exists(normalizedRoot)
+                                 && Directory.EnumerateFiles(normalizedRoot, "rollout-*.jsonl", SearchOption.TopDirectoryOnly).Any();
+        if (directRolloutExists)
+        {
+            yield return normalizedRoot;
+            yield break;
+        }
+
+        yield return Path.Combine(normalizedRoot, "sessions");
+        yield return Path.Combine(normalizedRoot, "archived_sessions");
     }
 
     private static string ReadAllTextShared(string filePath)

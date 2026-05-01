@@ -367,6 +367,7 @@ FodyWeavers.xsd
 /Temp
 /docs-local
 /codex
+/.codex/
 /claude-code
 /.claude
 **/nul

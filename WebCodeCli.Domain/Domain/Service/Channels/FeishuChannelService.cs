@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,9 +15,9 @@ using WebCodeCli.Domain.Repositories.Base.ChatSession;
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
 /// <summary>
-/// 飞书渠道服务实现
-/// 负责处理飞书消息发送、接收和流式回复
-/// 与 CliExecutorService 集成实现 AI 助手功能
+/// 椋炰功娓犻亾鏈嶅姟瀹炵幇
+/// 璐熻矗澶勭悊椋炰功娑堟伅鍙戦€併€佹帴鏀跺拰娴佸紡鍥炲
+/// 涓?CliExecutorService 闆嗘垚瀹炵幇 AI 鍔╂墜鍔熻兘
 /// </summary>
 [ServiceDescription(typeof(IFeishuChannelService), ServiceLifetime.Singleton)]
 public class FeishuChannelService : BackgroundService, IFeishuChannelService
@@ -32,28 +32,29 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
     private bool _isRunning = false;
 
-    // 飞书渠道默认回退工具 ID（最终还会检查配置和实际可用工具）
+    // 椋炰功娓犻亾榛樿鍥為€€宸ュ叿 ID锛堟渶缁堣繕浼氭鏌ラ厤缃拰瀹為檯鍙敤宸ュ叿锛?
     private const string FallbackToolId = "claude-code";
 
-    // 事件去重缓存，避免重复处理相同event_id的消息
+    // Event de-duplication cache keyed by Feishu event id.
     private readonly ConcurrentDictionary<string, DateTime> _processedEventIds = new();
-    // 事件缓存过期时间（10分钟，超过这个时间的event_id会被清理）
+    // Event ids older than this window are evicted from the cache.
     private const int EventCacheExpirationMinutes = 10;
     private readonly Dictionary<string, ActiveSessionExecution> _activeExecutions = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _activeExecutionsLock = new();
     private const string SupersededExecutionMessage = "当前回复已停止：同一会话收到了新的补充消息，请查看新卡片继续结果。";
     private const int StreamingStatusPulseIntervalMs = 900;
+    private static readonly TimeSpan StreamingStatusPulseQuietWindow = TimeSpan.FromSeconds(3);
 
     /// <summary>
-    /// 服务是否运行中
+    /// 鏈嶅姟鏄惁杩愯涓?
     /// </summary>
     public bool IsRunning => _isRunning;
 
     /// <summary>
-    /// 获取聊天的当前活跃会话ID
+    /// 鑾峰彇鑱婂ぉ鐨勫綋鍓嶆椿璺冧細璇滻D
     /// </summary>
-    /// <param name="chatKey">聊天键（格式：feishu:{AppId}:{ChatId}）</param>
-    /// <returns>当前会话ID，如果不存在则返回null</returns>
+    /// <param name="chatKey">鑱婂ぉ閿紙鏍煎紡锛歠eishu:{AppId}:{ChatId}锛?/param>
+    /// <returns>褰撳墠浼氳瘽ID锛屽鏋滀笉瀛樺湪鍒欒繑鍥瀗ull</returns>
     public string? GetCurrentSession(string chatKey, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -78,10 +79,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 获取会话的最后活跃时间
+    /// 鑾峰彇浼氳瘽鐨勬渶鍚庢椿璺冩椂闂?
     /// </summary>
-    /// <param name="sessionId">会话ID</param>
-    /// <returns>最后活跃时间，如果会话不存在则返回null</returns>
+    /// <param name="sessionId">浼氳瘽ID</param>
+    /// <returns>鏈€鍚庢椿璺冩椂闂达紝濡傛灉浼氳瘽涓嶅瓨鍦ㄥ垯杩斿洖null</returns>
     public DateTime? GetSessionLastActiveTime(string sessionId)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -91,10 +92,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 获取聊天的所有会话ID列表
+    /// 鑾峰彇鑱婂ぉ鐨勬墍鏈変細璇滻D鍒楄〃
     /// </summary>
-    /// <param name="chatKey">聊天键</param>
-    /// <returns>会话ID列表</returns>
+    /// <param name="chatKey">鑱婂ぉ閿?/param>
+    /// <returns>浼氳瘽ID鍒楄〃</returns>
     public List<string> GetChatSessions(string chatKey, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -105,11 +106,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 切换聊天的当前活跃会话
+    /// 鍒囨崲鑱婂ぉ鐨勫綋鍓嶆椿璺冧細璇?
     /// </summary>
-    /// <param name="chatKey">聊天键</param>
-    /// <param name="sessionId">要切换到的会话ID</param>
-    /// <returns>是否切换成功</returns>
+    /// <param name="chatKey">鑱婂ぉ閿?/param>
+    /// <param name="sessionId">瑕佸垏鎹㈠埌鐨勪細璇滻D</param>
+    /// <returns>鏄惁鍒囨崲鎴愬姛</returns>
     public bool SwitchCurrentSession(string chatKey, string sessionId, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -143,11 +144,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 关闭指定会话
+    /// 鍏抽棴鎸囧畾浼氳瘽
     /// </summary>
-    /// <param name="chatKey">聊天键</param>
-    /// <param name="sessionId">要关闭的会话ID</param>
-    /// <returns>是否关闭成功</returns>
+    /// <param name="chatKey">鑱婂ぉ閿?/param>
+    /// <param name="sessionId">瑕佸叧闂殑浼氳瘽ID</param>
+    /// <returns>鏄惁鍏抽棴鎴愬姛</returns>
     public bool CloseSession(string chatKey, string sessionId, string? username = null)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -186,6 +187,30 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         return success;
     }
 
+    public bool IsSessionExecutionActive(string sessionId)
+    {
+        lock (_activeExecutionsLock)
+        {
+            return _activeExecutions.ContainsKey(sessionId);
+        }
+    }
+
+    public void PauseSessionStatusPulse(string sessionId, TimeSpan duration)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || duration <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        lock (_activeExecutionsLock)
+        {
+            if (_activeExecutions.TryGetValue(sessionId, out var execution))
+            {
+                execution.PausePulse(duration);
+            }
+        }
+    }
+
     public FeishuChannelService(
         IOptions<FeishuOptions> options,
         ILogger<FeishuChannelService> logger,
@@ -203,7 +228,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 后台服务主执行方法
+    /// 鍚庡彴鏈嶅姟涓绘墽琛屾柟娉?
     /// </summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -215,14 +240,14 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         _logger.LogInformation("Starting Feishu channel service...");
 
-        // 不再订阅静态事件，通过 HandleIncomingMessageAsync 方法处理消息（避免重复处理）
+        // 涓嶅啀璁㈤槄闈欐€佷簨浠讹紝閫氳繃 HandleIncomingMessageAsync 鏂规硶澶勭悊娑堟伅锛堥伩鍏嶉噸澶嶅鐞嗭級
 
         _isRunning = true;
 
         _logger.LogInformation("Feishu channel service started (AppId: {AppId})", _options.AppId);
 
-        // 保持运行，等待取消信号
-        // WebSocket 连接由外部的 FeishuNetSdk.WebSocket 服务管理
+        // 淇濇寔杩愯锛岀瓑寰呭彇娑堜俊鍙?
+        // WebSocket 杩炴帴鐢卞閮ㄧ殑 FeishuNetSdk.WebSocket 鏈嶅姟绠＄悊
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -238,7 +263,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
 
     /// <summary>
-    /// 停止服务
+    /// 鍋滄鏈嶅姟
     /// </summary>
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
@@ -249,14 +274,14 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 处理收到的消息
+    /// 澶勭悊鏀跺埌鐨勬秷鎭?
     /// </summary>
     private async Task OnMessageReceivedAsync(FeishuIncomingMessage message)
     {
         try
         {
             _logger.LogInformation(
-                "🔥 [FeishuChannel] 收到消息事件: MessageId={MessageId}, ChatId={ChatId}, Content={Content}",
+                "馃敟 [FeishuChannel] 鏀跺埌娑堟伅浜嬩欢: MessageId={MessageId}, ChatId={ChatId}, Content={Content}",
                 message.MessageId,
                 message.ChatId,
                 message.Content);
@@ -264,30 +289,31 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             string sessionId;
             try
             {
-                // 获取当前会话（无会话时抛出异常）
+                // 鑾峰彇褰撳墠浼氳瘽锛堟棤浼氳瘽鏃舵姏鍑哄紓甯革級
                 sessionId = GetCurrentSession(message);
             }
             catch (InvalidOperationException ex)
             {
-                // 没有会话时提示用户
-                await ReplyMessageAsync(message.MessageId, $"⚠️ {ex.Message}", message.SenderName, message.AppId);
+                // 娌℃湁浼氳瘽鏃舵彁绀虹敤鎴?
+                await ReplyMessageAsync(message.MessageId, $"鈿狅笍 {ex.Message}", message.SenderName, message.AppId);
                 return;
             }
 
             var toolId = ResolveToolId(message.ChatId, message.SenderName);
+            var normalizedPrompt = FeishuPromptNormalizer.Normalize(message.Content);
 
-            // 添加用户消息到会话
+            // 娣诲姞鐢ㄦ埛娑堟伅鍒颁細璇?
             _chatSessionService.AddMessage(sessionId, new ChatMessage
             {
                 Role = "user",
-                Content = message.Content,
+                Content = normalizedPrompt,
                 CliToolId = toolId,
                 CreatedAt = DateTime.UtcNow
             });
 
-            var (streamingChrome, baseStatusMarkdown) = BuildStreamingCardChrome(message.ChatId, sessionId, message.SenderName);
+            var (streamingChrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(message.ChatId, sessionId, message.SenderName);
 
-            // 创建流式回复，立即显示"思考中"状态
+            // Create the streaming reply and show the thinking state immediately.
             var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
             var handle = await _cardKit.CreateStreamingHandleAsync(
                 message.ChatId,
@@ -298,7 +324,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 chrome: streamingChrome);
 
             _logger.LogInformation(
-                "🔥 [FeishuChannel] 流式句柄已创建: CardId={CardId}",
+                "馃敟 [FeishuChannel] 娴佸紡鍙ユ焺宸插垱寤? CardId={CardId}",
                 handle.CardId);
 
             var activeExecution = new ActiveSessionExecution(
@@ -308,6 +334,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 streamingChrome,
                 baseStatusMarkdown,
                 effectiveOptions.ThinkingMessage);
+            activeExecution.PausePulseForOverflowCard(StreamingStatusPulseQuietWindow);
             var statusPulseTask = RunStreamingStatusPulseAsync(activeExecution);
             var previousExecution = RegisterActiveExecution(sessionId, activeExecution);
             if (previousExecution != null)
@@ -315,11 +342,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 await SupersedeExecutionAsync(previousExecution, message.MessageId);
             }
 
-            var cliPrompt = message.Content;
+            var cliPrompt = normalizedPrompt;
 
             try
             {
-                // 执行 CLI 工具并流式更新卡片
+                // Execute the CLI tool and stream updates into the card.
                 await ExecuteCliAndStreamAsync(
                     handle,
                     sessionId,
@@ -344,40 +371,40 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         {
             _logger.LogError(
                 ex,
-                "🔥 [FeishuChannel] 处理消息失败: {MessageId}",
+                "馃敟 [FeishuChannel] 澶勭悊娑堟伅澶辫触: {MessageId}",
                 message.MessageId);
         }
     }
 
     /// <summary>
-    /// 处理收到的消息（由 FeishuMessageHandler 调用）
+    /// 澶勭悊鏀跺埌鐨勬秷鎭紙鐢?FeishuMessageHandler 璋冪敤锛?
     /// </summary>
-    /// <param name="message">收到的消息</param>
+    /// <param name="message">鏀跺埌鐨勬秷鎭?/param>
     public async Task HandleIncomingMessageAsync(FeishuIncomingMessage message)
     {
-        // 事件去重检查
+        // 浜嬩欢鍘婚噸妫€鏌?
         if (!string.IsNullOrEmpty(message.EventId))
         {
-            // 清理过期的event_id
+            // 娓呯悊杩囨湡鐨別vent_id
             CleanupExpiredEventIds();
 
             if (_processedEventIds.TryAdd(message.EventId, DateTime.UtcNow))
             {
-                _logger.LogDebug("处理新事件: EventId={EventId}", message.EventId);
+                _logger.LogDebug("澶勭悊鏂颁簨浠? EventId={EventId}", message.EventId);
             }
             else
             {
-                _logger.LogInformation("跳过重复事件: EventId={EventId}", message.EventId);
+                _logger.LogInformation("璺宠繃閲嶅浜嬩欢: EventId={EventId}", message.EventId);
                 return;
             }
         }
 
-        _logger.LogInformation("🔥 [FeishuChannel] HandleIncomingMessageAsync 被调用");
+        _logger.LogInformation("馃敟 [FeishuChannel] HandleIncomingMessageAsync 琚皟鐢?");
         await OnMessageReceivedAsync(message);
     }
 
     /// <summary>
-    /// 清理过期的事件ID缓存
+    /// 娓呯悊杩囨湡鐨勪簨浠禝D缂撳瓨
     /// </summary>
     private void CleanupExpiredEventIds()
     {
@@ -394,7 +421,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         if (expiredIds.Count > 0)
         {
-            _logger.LogDebug("清理了 {Count} 个过期的事件ID", expiredIds.Count);
+            _logger.LogDebug("娓呯悊浜?{Count} 涓繃鏈熺殑浜嬩欢ID", expiredIds.Count);
         }
     }
 
@@ -442,7 +469,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         catch (Exception ex)
         {
             _logger.LogDebug(ex,
-                "结束被新消息接管的旧卡片失败: Session={SessionId}, PreviousMessageId={PreviousMessageId}, NewMessageId={NewMessageId}",
+                "缁撴潫琚柊娑堟伅鎺ョ鐨勬棫鍗＄墖澶辫触: Session={SessionId}, PreviousMessageId={PreviousMessageId}, NewMessageId={NewMessageId}",
                 execution.SessionId,
                 execution.MessageId,
                 newMessageId);
@@ -450,17 +477,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 获取当前会话
-    /// 如果聊天没有活动会话，则抛出异常提示用户手动创建
+    /// 鑾峰彇褰撳墠浼氳瘽
+    /// 濡傛灉鑱婂ぉ娌℃湁娲诲姩浼氳瘽锛屽垯鎶涘嚭寮傚父鎻愮ず鐢ㄦ埛鎵嬪姩鍒涘缓
     /// </summary>
-    /// <param name="message">飞书 incoming 消息</param>
-    /// <returns>会话ID</returns>
-    /// <exception cref="InvalidOperationException">如果没有当前会话则抛出</exception>
+    /// <param name="message">椋炰功 incoming 娑堟伅</param>
+    /// <returns>浼氳瘽ID</returns>
+    /// <exception cref="InvalidOperationException">濡傛灉娌℃湁褰撳墠浼氳瘽鍒欐姏鍑?/exception>
     private string GetCurrentSession(FeishuIncomingMessage message)
     {
         var chatKey = message.ChatId.ToLowerInvariant();
         var username = message.SenderName;
-        _logger.LogInformation("🔍 [会话匹配] 消息ChatId={ChatId}, ChatKey={ChatKey}, User={User}",
+        _logger.LogInformation("馃攳 [浼氳瘽鍖归厤] 娑堟伅ChatId={ChatId}, ChatKey={ChatKey}, User={User}",
             message.ChatId, chatKey, username);
 
         var currentSessionId = GetCurrentSession(chatKey, username);
@@ -478,15 +505,15 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             return currentSessionId;
         }
 
-        throw new InvalidOperationException("当前没有可用会话，请先发送 /feishusessions 命令创建或选择会话。");
+        throw new InvalidOperationException("当前没有可用会话，请先发送 /feishusessions 创建或选择会话。");
     }
 
     /// <summary>
-    /// 创建新会话
+    /// 鍒涘缓鏂颁細璇?
     /// </summary>
-    /// <param name="message">飞书 incoming 消息</param>
-    /// <param name="customWorkspacePath">自定义工作区路径（可选）</param>
-    /// <returns>新会话ID</returns>
+    /// <param name="message">椋炰功 incoming 娑堟伅</param>
+    /// <param name="customWorkspacePath">鑷畾涔夊伐浣滃尯璺緞锛堝彲閫夛級</param>
+    /// <returns>鏂颁細璇滻D</returns>
     public string CreateNewSession(FeishuIncomingMessage message, string? customWorkspacePath = null, string? toolId = null)
     {
         var chatKey = message.ChatId.ToLowerInvariant();
@@ -504,7 +531,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         var session = repo.GetByIdAsync(newSessionId).GetAwaiter().GetResult();
         if (session == null)
         {
-            throw new InvalidOperationException($"创建飞书会话后未找到会话记录: {newSessionId}");
+            throw new InvalidOperationException($"鍒涘缓椋炰功浼氳瘽鍚庢湭鎵惧埌浼氳瘽璁板綍: {newSessionId}");
         }
 
         if (!string.IsNullOrWhiteSpace(customWorkspacePath))
@@ -515,7 +542,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             session = repo.GetByIdAsync(newSessionId).GetAwaiter().GetResult();
             if (session == null)
             {
-                throw new InvalidOperationException($"设置飞书会话工作区后未找到会话记录: {newSessionId}");
+                throw new InvalidOperationException($"璁剧疆椋炰功浼氳瘽宸ヤ綔鍖哄悗鏈壘鍒颁細璇濊褰? {newSessionId}");
             }
             session.ToolId = resolvedToolId;
             session.UpdatedAt = DateTime.Now;
@@ -611,12 +638,12 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         foreach (var invalidSession in invalidSessions)
         {
             repo.DeleteAsync(invalidSession).GetAwaiter().GetResult();
-            _logger.LogInformation("清理未绑定 Web 用户的飞书旧会话: {SessionId}, User={User}, ChatKey={ChatKey}", invalidSession.SessionId, invalidSession.Username, invalidSession.FeishuChatKey ?? string.Empty);
+            _logger.LogInformation("娓呯悊鏈粦瀹?Web 鐢ㄦ埛鐨勯涔︽棫浼氳瘽: {SessionId}, User={User}, ChatKey={ChatKey}", invalidSession.SessionId, invalidSession.Username, invalidSession.FeishuChatKey ?? string.Empty);
         }
     }
 
     /// <summary>
-    /// 执行 CLI 工具并流式更新卡片
+    /// 鎵ц CLI 宸ュ叿骞舵祦寮忔洿鏂板崱鐗?
     /// </summary>
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
@@ -632,7 +659,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     {
         var outputBuilder = new StringBuilder();
         var assistantMessageBuilder = new StringBuilder();
-        var jsonlBuffer = new StringBuilder(); // JSONL 缓冲区，处理不完整的行
+        var jsonlBuffer = new StringBuilder(); // JSONL 缂撳啿鍖猴紝澶勭悊涓嶅畬鏁寸殑琛?
+        var hasStructuredTodoList = false;
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
@@ -645,7 +673,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             return;
         }
 
-        // 获取适配器（用于解析 JSONL 输出）
+        // 鑾峰彇閫傞厤鍣紙鐢ㄤ簬瑙ｆ瀽 JSONL 杈撳嚭锛?
         var adapter = _cliExecutor.GetAdapter(tool);
         var useAdapter = adapter != null && _cliExecutor.SupportsStreamParsing(tool);
 
@@ -655,9 +683,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             sessionId,
             useAdapter);
 
+        TryAttachSuperpowersQuickActions(activeExecution.Chrome, sessionId, tool.Id);
         try
         {
-            // 执行 CLI 工具并流式处理输出
+            // 鎵ц CLI 宸ュ叿骞舵祦寮忓鐞嗚緭鍑?
             await foreach (var chunk in _cliExecutor.ExecuteStreamAsync(sessionId, tool.Id, userPrompt, cancellationToken))
             {
                 if (chunk.IsError)
@@ -680,18 +709,18 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                     return;
                 }
 
-                // 累积原始输出内容
+                // 绱Н鍘熷杈撳嚭鍐呭
                 outputBuilder.Append(chunk.Content);
 
-                // 如果使用适配器，解析 JSONL 并提取助手消息
+                // 濡傛灉浣跨敤閫傞厤鍣紝瑙ｆ瀽 JSONL 骞舵彁鍙栧姪鎵嬫秷鎭?
                 string displayContent;
                 if (useAdapter)
                 {
-                    // 解析 JSONL 行并提取助手消息（使用缓冲区处理不完整的行）
-                    ProcessJsonlChunk(chunk.Content, sessionId, adapter!, assistantMessageBuilder, jsonlBuffer);
+                    // 瑙ｆ瀽 JSONL 琛屽苟鎻愬彇鍔╂墜娑堟伅锛堜娇鐢ㄧ紦鍐插尯澶勭悊涓嶅畬鏁寸殑琛岋級
+                    hasStructuredTodoList |= ProcessJsonlChunk(chunk.Content, sessionId, adapter!, assistantMessageBuilder, jsonlBuffer);
                     displayContent = assistantMessageBuilder.ToString();
 
-                    // 如果没有助手消息，显示"思考中"
+                    // 濡傛灉娌℃湁鍔╂墜娑堟伅锛屾樉绀?鎬濊€冧腑"
                     if (string.IsNullOrWhiteSpace(displayContent))
                     {
                         displayContent = thinkingMessage;
@@ -699,19 +728,20 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 }
                 else
                 {
-                    // 不使用适配器时，过滤系统消息
+                    // 涓嶄娇鐢ㄩ€傞厤鍣ㄦ椂锛岃繃婊ょ郴缁熸秷鎭?
                     displayContent = FormatMarkdownOutput(outputBuilder.ToString());
                 }
 
-                // 流式更新卡片（节流在 handle 内部处理）
+                // 娴佸紡鏇存柊鍗＄墖锛堣妭娴佸湪 handle 鍐呴儴澶勭悊锛?
                 activeExecution.SetLatestRenderedContent(displayContent);
+                activeExecution.PausePulseForOverflowCard(StreamingStatusPulseQuietWindow);
                 await handle.UpdateAsync(displayContent);
 
                 _logger.LogDebug(
                     "Streamed chunk: {ContentPreview}...",
                     chunk.Content.Length > 50 ? chunk.Content[..50] : chunk.Content);
 
-                // 如果完成，跳出循环
+                // 濡傛灉瀹屾垚锛岃烦鍑哄惊鐜?
                 if (chunk.IsCompleted)
                 {
                     break;
@@ -720,7 +750,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
             if (useAdapter && jsonlBuffer.Length > 0)
             {
-                ProcessJsonlLine(jsonlBuffer.ToString(), sessionId, adapter!, assistantMessageBuilder);
+                hasStructuredTodoList |= ProcessJsonlLine(jsonlBuffer.ToString(), sessionId, adapter!, assistantMessageBuilder);
                 jsonlBuffer.Clear();
             }
 
@@ -729,11 +759,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 return;
             }
 
-            // 完成流式回复
+            // 瀹屾垚娴佸紡鍥炲
             string finalOutput;
             if (useAdapter)
             {
-                // 使用适配器时，使用提取的助手消息
+                // 浣跨敤閫傞厤鍣ㄦ椂锛屼娇鐢ㄦ彁鍙栫殑鍔╂墜娑堟伅
                 finalOutput = assistantMessageBuilder.ToString().Trim();
                 if (string.IsNullOrWhiteSpace(finalOutput))
                 {
@@ -742,17 +772,16 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             }
             else
             {
-                // 不使用适配器时，过滤系统消息
+                // 涓嶄娇鐢ㄩ€傞厤鍣ㄦ椂锛岃繃婊ょ郴缁熸秷鎭?
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
 
             activeExecution.SetLatestRenderedContent(finalOutput);
             activeExecution.CancelPulse();
             activeExecution.SetCompletedStatus();
-            // NOTE: 这条带会话标识的“已完成”普通文本回复不能删除。
-            // 飞书对流式卡片完成的提醒不够显眼，用户依赖这条文本通知及时感知 CLI 已结束，
-            // 同时还需要知道是哪一个会话完成了。
-            // 后续若重构流式卡片，也必须保留等价的显式完成通知能力。
+            SetTopChipGroupsEnabled(activeExecution.Chrome, true);
+            TryAttachSuperpowersQuickActions(activeExecution.Chrome, sessionId, tool.Id);
+            // NOTE: Keep the explicit completion text notification for Feishu users.
             try
             {
                 await ReplyMessageAsync(
@@ -763,11 +792,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             }
             catch (Exception notificationEx)
             {
-                _logger.LogWarning(notificationEx, "发送流式完成文本通知失败: MessageId={MessageId}", messageId);
+                _logger.LogWarning(notificationEx, "鍙戦€佹祦寮忓畬鎴愭枃鏈€氱煡澶辫触: MessageId={MessageId}", messageId);
             }
             await handle.FinishAsync(finalOutput);
 
-            // 添加助手回复到会话
+            // 娣诲姞鍔╂墜鍥炲鍒颁細璇?
             _chatSessionService.AddMessage(sessionId, new ChatMessage
             {
                 Role = "assistant",
@@ -777,7 +806,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 CreatedAt = DateTime.UtcNow
             });
 
-            // 更新会话最后活动时间
+            // 鏇存柊浼氳瘽鏈€鍚庢椿鍔ㄦ椂闂?
             using var scope = _serviceProvider.CreateScope();
             var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
             var session = await repo.GetByIdAsync(sessionId);
@@ -810,17 +839,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 格式化 Markdown 输出
-    /// 适用于飞书卡片显示
+    /// 鏍煎紡鍖?Markdown 杈撳嚭
+    /// 閫傜敤浜庨涔﹀崱鐗囨樉绀?
     /// </summary>
     private static string FormatMarkdownOutput(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
             return "无输出";
 
-        // 过滤系统钩子消息（Claude Code CLI 的内部调试信息）
-        // 这些 JSON 格式的消息包含 hook_started、hook_response、SessionStart 等
-        // 参考网页端的 JSONL 适配器过滤逻辑
+        // 杩囨护绯荤粺閽╁瓙娑堟伅锛圕laude Code CLI 鐨勫唴閮ㄨ皟璇曚俊鎭級
+        // 杩欎簺 JSON 鏍煎紡鐨勬秷鎭寘鍚?hook_started銆乭ook_response銆丼essionStart 绛?
+        // 鍙傝€冪綉椤电鐨?JSONL 閫傞厤鍣ㄨ繃婊ら€昏緫
         var lines = output.Split('\n');
         var filteredLines = new List<string>();
 
@@ -828,19 +857,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         {
             var trimmedLine = line.Trim();
 
-            // 跳过空行
+            // 璺宠繃绌鸿
             if (string.IsNullOrWhiteSpace(trimmedLine))
             {
                 filteredLines.Add(line);
                 continue;
             }
 
-            // 跳过所有系统消息（与网页端行为一致）
-            // 系统消息格式: {"type":"system",...}
-            // 包括: init、hook_started、hook_response、hook_event 等
+            // 璺宠繃鎵€鏈夌郴缁熸秷鎭紙涓庣綉椤电琛屼负涓€鑷达級
+            // 绯荤粺娑堟伅鏍煎紡: {"type":"system",...}
+            // 鍖呮嫭: init銆乭ook_started銆乭ook_response銆乭ook_event 绛?
             if (trimmedLine.StartsWith("{") && trimmedLine.Contains("\"type\":\"system\""))
             {
-                // 过滤所有 type 为 system 的 JSON 消息
+                // 杩囨护鎵€鏈?type 涓?system 鐨?JSON 娑堟伅
                 continue;
             }
 
@@ -849,17 +878,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         var formatted = string.Join('\n', filteredLines);
 
-        // 移除过多的空行（最多保留连续 2 个空行）
+        // 绉婚櫎杩囧鐨勭┖琛岋紙鏈€澶氫繚鐣欒繛缁?2 涓┖琛岋級
         formatted = System.Text.RegularExpressions.Regex.Replace(
             formatted,
             @"\n{3,}",
             "\n\n");
 
-        // 限制最大长度（飞书卡片有内容限制）
+        // 闄愬埗鏈€澶ч暱搴︼紙椋炰功鍗＄墖鏈夊唴瀹归檺鍒讹級
         const int maxLength = 10000;
         if (formatted.Length > maxLength)
         {
-            formatted = formatted[..maxLength] + "\n\n... (内容过长，已截断)";
+            formatted = formatted[..maxLength] + "\n\n... (鍐呭杩囬暱锛屽凡鎴柇)";
         }
 
         return formatted.Trim();
@@ -943,7 +972,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         return lastUsefulContent;
     }
 
-    private (FeishuStreamingCardChrome Chrome, string BaseStatusMarkdown) BuildStreamingCardChrome(string chatId, string sessionId, string? username)
+    private async Task<(FeishuStreamingCardChrome Chrome, string BaseStatusMarkdown)> BuildStreamingCardChromeAsync(string chatId, string sessionId, string? username)
     {
         var chatKey = chatId.ToLowerInvariant();
         var sessions = GetChatSessionEntities(chatKey, username);
@@ -953,13 +982,18 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
             ?? ExtractWorkspaceDirectoryName(currentSession?.WorkspacePath)
             ?? "当前会话";
+        var sessionLabel = GetSessionDisplayLabel(currentSession);
         var toolLabel = GetToolDisplayName(currentSession?.ToolId);
-        var baseStatusMarkdown = $"当前会话：**{workspaceName}** · `{ShortSessionId(sessionId)}` · {toolLabel}";
+        var baseStatusMarkdown = BuildSessionStatusMarkdown(
+            $"当前会话：**{workspaceName}** · {sessionLabel} · {toolLabel}",
+            currentSession);
 
         var chrome = new FeishuStreamingCardChrome
         {
             StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
         };
+        chrome.OverflowOptions.AddRange(await BuildStreamingStatusOverflowOptionsAsync(chatKey, sessionId, currentSession, currentSession?.ToolId));
+        chrome.TopChipGroups.AddRange(await BuildStreamingTopChipGroupsAsync(chatKey, sessionId, currentSession, currentSession?.ToolId, isEnabled: false));
 
         foreach (var session in sessions
                      .Where(session => !string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
@@ -979,7 +1013,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
         {
-            Text = "更多会话...",
+            Text = "模型/会话管理...",
             Value = new
             {
                 action = "open_session_manager",
@@ -989,6 +1023,339 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         });
 
         return (chrome, baseStatusMarkdown);
+    }
+
+    private async Task<List<FeishuStreamingCardTopChipGroup>> BuildStreamingTopChipGroupsAsync(
+        string chatKey,
+        string sessionId,
+        ChatSessionEntity? session,
+        string? toolId,
+        bool isEnabled)
+    {
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(toolId, session?.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return [];
+        }
+
+        var groups = new List<FeishuStreamingCardTopChipGroup>();
+        var launchState = await FeishuStreamingLaunchStateResolver.ResolveAsync(session, effectiveToolId);
+
+        if (string.Equals(effectiveToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            groups.Add(new FeishuStreamingCardTopChipGroup
+            {
+                Kind = "switch_hint",
+                IsEnabled = isEnabled,
+                SummaryMarkdown = "模型/思考等级在流式回复完成后可切换，会话随时可切换，但手机端飞书可能需点多次才能成功"
+            });
+
+            groups.Add(new FeishuStreamingCardTopChipGroup
+            {
+                Kind = "reasoning_effort",
+                IsEnabled = isEnabled,
+                Items =
+                [
+                    BuildReasoningChip("low", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("medium", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("high", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId),
+                    BuildReasoningChip("xhigh", launchState.ReasoningEffort, isEnabled, sessionId, chatKey, effectiveToolId)
+                ]
+            });
+        }
+
+        return groups;
+    }
+
+    private async Task<List<FeishuStreamingCardOverflowOption>> BuildStreamingStatusOverflowOptionsAsync(
+        string chatKey,
+        string sessionId,
+        ChatSessionEntity? session,
+        string? toolId)
+    {
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(toolId, session?.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return [];
+        }
+
+        var launchState = await FeishuStreamingLaunchStateResolver.ResolveAsync(session, effectiveToolId);
+        var modelOptions = await LoadStreamingModelOptionsAsync(
+            effectiveToolId,
+            session?.CcSwitchProviderId,
+            launchState.Model);
+
+        return modelOptions
+            .Where(option => !string.IsNullOrWhiteSpace(option.Id))
+            .Select(option => new FeishuStreamingCardOverflowOption
+            {
+                Text = $"模型：{option.DisplayName}",
+                Value = new
+                {
+                    action = "switch_streaming_card_model",
+                    session_id = sessionId,
+                    chat_key = chatKey,
+                    tool_id = effectiveToolId,
+                    model = option.Id
+                }
+            })
+            .ToList();
+    }
+
+    private async Task<List<CcSwitchModelOption>> LoadStreamingModelOptionsAsync(string toolId, string? providerId, string? currentModel)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var ccSwitchService = scope.ServiceProvider.GetService<ICcSwitchService>();
+            if (ccSwitchService == null)
+            {
+                return MergeStreamingModelOptions([], currentModel);
+            }
+
+            var catalog = await ccSwitchService.GetModelCatalogAsync(toolId, providerId);
+            return MergeStreamingModelOptions(catalog.Models, currentModel);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "飞书流式卡片读取模型列表失败: ToolId={ToolId}, ProviderId={ProviderId}", toolId, providerId);
+            return MergeStreamingModelOptions([], currentModel);
+        }
+    }
+
+    private static List<CcSwitchModelOption> MergeStreamingModelOptions(IEnumerable<CcSwitchModelOption> options, string? currentModel)
+    {
+        var merged = new List<CcSwitchModelOption>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var option in options)
+        {
+            if (option == null || string.IsNullOrWhiteSpace(option.Id))
+            {
+                continue;
+            }
+
+            var id = option.Id.Trim();
+            if (!seen.Add(id))
+            {
+                continue;
+            }
+
+            merged.Add(new CcSwitchModelOption
+            {
+                Id = id,
+                DisplayName = string.IsNullOrWhiteSpace(option.DisplayName) ? id : option.DisplayName.Trim()
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentModel) && seen.Add(currentModel.Trim()))
+        {
+            merged.Insert(0, new CcSwitchModelOption
+            {
+                Id = currentModel.Trim(),
+                DisplayName = currentModel.Trim()
+            });
+        }
+
+        return merged;
+    }
+
+    private static FeishuStreamingCardTopChipItem BuildReasoningChip(
+        string value,
+        string? currentValue,
+        bool isEnabled,
+        string sessionId,
+        string chatKey,
+        string toolId)
+    {
+        return new FeishuStreamingCardTopChipItem
+        {
+            Text = value,
+            IsActive = string.Equals(value, currentValue, StringComparison.OrdinalIgnoreCase),
+            IsEnabled = isEnabled,
+            PreferredWidthPx = CalculateReasoningChipWidthPx(value),
+            Value = new
+            {
+                action = "switch_streaming_card_reasoning_effort",
+                session_id = sessionId,
+                chat_key = chatKey,
+                tool_id = toolId,
+                reasoning_effort = value
+            }
+        };
+    }
+
+    private static int CalculateModelChipWidthPx(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return 180;
+        }
+
+        var trimmed = modelName.Trim();
+        var effectiveLength = trimmed.Length;
+        var uppercaseCount = trimmed.Count(char.IsUpper);
+        var punctuationCount = trimmed.Count(ch => ch is '-' or '_' or '.' or '/');
+        var digitCount = trimmed.Count(char.IsDigit);
+
+        var width = 72
+            + (effectiveLength * 7)
+            + (uppercaseCount * 2)
+            + punctuationCount
+            + digitCount;
+
+        var scaledWidth = (int)Math.Ceiling(width * 1.0);
+        return Math.Clamp(scaledWidth, 180, 720);
+    }
+
+    private static int CalculateReasoningChipWidthPx(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return 96;
+        }
+
+        var trimmed = label.Trim();
+        var uppercaseCount = trimmed.Count(char.IsUpper);
+        var punctuationCount = trimmed.Count(ch => ch is '-' or '_' or '.' or '/');
+        var digitCount = trimmed.Count(char.IsDigit);
+        var width = 24
+            + (trimmed.Length * 9)
+            + (uppercaseCount * 2)
+            + punctuationCount
+            + digitCount;
+        var scaledWidth = (int)Math.Ceiling(width * 1.0);
+        return Math.Clamp(scaledWidth, 96, 440);
+    }
+
+    private static void SetTopChipGroupsEnabled(FeishuStreamingCardChrome chrome, bool isEnabled)
+    {
+        foreach (var group in chrome.TopChipGroups)
+        {
+            group.IsEnabled = isEnabled;
+
+            foreach (var item in group.Items)
+            {
+                item.IsEnabled = isEnabled;
+            }
+        }
+    }
+
+    private void TryAttachSuperpowersQuickActions(
+        FeishuStreamingCardChrome chrome,
+        string sessionId,
+        string toolId)
+    {
+        string? chatKey = null;
+        using (var scope = _serviceProvider.CreateScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            var session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+            chatKey = session?.FeishuChatKey;
+        }
+
+        if (string.IsNullOrWhiteSpace(chatKey))
+        {
+            return;
+        }
+
+        var normalizedToolId = NormalizeToolId(toolId) ?? toolId;
+        var capabilityState = ResolveSuperpowersCapabilityState(sessionId, normalizedToolId);
+        chrome.BottomPrompt = SuperpowersQuickActionCardHelper.CreateBottomPrompt(
+            sessionId,
+            chatKey,
+            normalizedToolId,
+            capabilityState);
+        chrome.BottomActions.Clear();
+        chrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
+            sessionId,
+            chatKey,
+            normalizedToolId,
+            showPlanActions: ShouldShowSuperpowersPlanActions(sessionId),
+            capabilityState));
+        chrome.StatusMarkdown = SuperpowersQuickActionCardHelper.MergeCapabilityStatusMarkdown(
+            chrome.StatusMarkdown,
+            capabilityState);
+    }
+
+    private bool ShouldShowSuperpowersPlanActions(string sessionId)
+    {
+        return SuperpowersQuickActionCardHelper.ShouldShowPlanActions(
+            _chatSessionService.GetMessages(sessionId).Select(static message => message?.Content),
+            HasSuperpowersPlanFiles(sessionId));
+    }
+
+    private bool HasSuperpowersPlanFiles(string sessionId)
+    {
+        var workspacePath = TryGetSessionWorkspacePath(sessionId);
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return false;
+        }
+
+        var planDirectory = Path.Combine(workspacePath, "docs", "superpowers", "plans");
+        try
+        {
+            return Directory.Exists(planDirectory)
+                   && Directory.EnumerateFiles(planDirectory, "*.md", SearchOption.TopDirectoryOnly).Any();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "检查 Superpowers 计划文件失败: SessionId={SessionId}", sessionId);
+            return false;
+        }
+    }
+
+    private string? TryGetSessionWorkspacePath(string sessionId)
+    {
+        try
+        {
+            return _cliExecutor.GetSessionWorkspacePath(sessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "从 CLI 运行时读取工作区失败: SessionId={SessionId}", sessionId);
+        }
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            return repo.GetByIdAsync(sessionId).GetAwaiter().GetResult()?.WorkspacePath;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "从会话仓储读取工作区失败: SessionId={SessionId}", sessionId);
+            return null;
+        }
+    }
+
+    private SuperpowersCapabilitySnapshot? ResolveSuperpowersCapabilityState(string sessionId, string toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetService<ISuperpowersCapabilityService>();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (capabilityService == null)
+        {
+            return null;
+        }
+
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return capabilityService.GetStateAsync(new SuperpowersCapabilityContext
+        {
+            ToolId = normalizedToolId,
+            ProviderId = session?.CcSwitchProviderId,
+            WorkspacePath = session?.WorkspacePath
+        }).GetAwaiter().GetResult();
+    }
+
+    private static bool SessionContainsSuperpowers(IEnumerable<ChatMessage> messages)
+    {
+        return messages.Any(message =>
+            !string.IsNullOrWhiteSpace(message?.Content)
+            && message.Content.Contains("superpowers", StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task RunStreamingStatusPulseAsync(ActiveSessionExecution execution)
@@ -1002,6 +1369,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 if (execution.CancellationTokenSource.IsCancellationRequested || execution.IsSuperseded)
                 {
                     break;
+                }
+
+                if (execution.IsPulsePaused())
+                {
+                    continue;
                 }
 
                 execution.AdvanceRunningStatus();
@@ -1039,16 +1411,38 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private static string BuildSessionOptionText(ChatSessionEntity session)
     {
         var workspaceName = ExtractWorkspaceDirectoryName(session.WorkspacePath) ?? "未命名会话";
-        return $"{workspaceName} · {ShortSessionId(session.SessionId)} · {GetToolDisplayName(session.ToolId)}";
+        var sessionLabel = GetSessionDisplayLabel(session);
+        return $"{workspaceName} · {sessionLabel} · {GetToolDisplayName(session.ToolId)}";
     }
 
     private string BuildCompletionNotificationText(string sessionId, string? fallbackWorkspacePath = null)
     {
+        ChatSessionEntity? session;
+        using (var scope = _serviceProvider.CreateScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        }
+
         var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
+            ?? ExtractWorkspaceDirectoryName(session?.WorkspacePath)
             ?? ExtractWorkspaceDirectoryName(fallbackWorkspacePath)
             ?? "当前会话";
+        var sessionLabel = GetSessionDisplayLabel(session);
 
-        return $"当前会话：{workspaceName}  {ShortSessionId(sessionId)}\n已完成";
+        return BuildSessionStatusMarkdown(
+            $"当前会话：{workspaceName}  {sessionLabel}\n已完成",
+            session);
+    }
+
+    private static string GetSessionDisplayLabel(ChatSessionEntity? session)
+    {
+        if (!string.IsNullOrWhiteSpace(session?.Title))
+        {
+            return session.Title.Trim();
+        }
+
+        return ShortSessionId(session?.SessionId ?? string.Empty);
     }
 
     private static string ShortSessionId(string sessionId)
@@ -1071,6 +1465,54 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         };
     }
 
+    private static string BuildSessionStatusMarkdown(string baseMarkdown, ChatSessionEntity? session)
+    {
+        var launchOverrideSummary = BuildSessionLaunchOverrideSummary(session);
+        return string.IsNullOrWhiteSpace(launchOverrideSummary)
+            ? baseMarkdown
+            : $"{baseMarkdown}\n{launchOverrideSummary}";
+    }
+
+    private static string? BuildSessionLaunchOverrideSummary(ChatSessionEntity? session)
+    {
+        if (session == null)
+        {
+            return null;
+        }
+
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(
+            session.ToolId,
+            session.CcSwitchSnapshotToolId);
+        if (!SessionLaunchOverrideHelper.SupportsLaunchOverrides(effectiveToolId))
+        {
+            return null;
+        }
+
+        var launchOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(
+            SessionLaunchOverrideHelper.Deserialize(session.ToolLaunchOverridesJson),
+            effectiveToolId,
+            session.ToolId,
+            session.CcSwitchSnapshotToolId);
+        if (launchOverride == null)
+        {
+            return null;
+        }
+
+        var summaryLines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(launchOverride.Model))
+        {
+            summaryLines.Add($"🤖 模型: `{launchOverride.Model}`");
+        }
+
+        if (string.Equals(effectiveToolId, "codex", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(launchOverride.ReasoningEffort))
+        {
+            summaryLines.Add($"🧠 思考: `{launchOverride.ReasoningEffort}`");
+        }
+
+        return summaryLines.Count == 0 ? null : string.Join("\n", summaryLines);
+    }
+
     private string? TryGetSessionWorkspaceDirectoryName(string sessionId)
     {
         try
@@ -1079,7 +1521,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "从 CLI 缓存获取飞书会话目录名失败，尝试仓储回退: {SessionId}", sessionId);
+            _logger.LogDebug(ex, "浠?CLI 缂撳瓨鑾峰彇椋炰功浼氳瘽鐩綍鍚嶅け璐ワ紝灏濊瘯浠撳偍鍥為€€: {SessionId}", sessionId);
         }
 
         try
@@ -1091,7 +1533,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "从仓储回退飞书会话目录名失败: {SessionId}", sessionId);
+            _logger.LogDebug(ex, "浠庝粨鍌ㄥ洖閫€椋炰功浼氳瘽鐩綍鍚嶅け璐? {SessionId}", sessionId);
             return null;
         }
     }
@@ -1114,8 +1556,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 发送文本消息
-    /// </summary>
+    /// 鍙戦€佹枃鏈秷鎭?    /// </summary>
     public async Task<string> SendMessageAsync(string chatId, string content, string? username = null, string? appId = null)
     {
         _logger.LogDebug("Sending message to chat {ChatId}: {Content}", chatId, content);
@@ -1126,7 +1567,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 回复消息
+    /// 鍥炲娑堟伅
     /// </summary>
     public async Task<string> ReplyMessageAsync(string messageId, string content, string? username = null, string? appId = null)
     {
@@ -1138,8 +1579,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 发送流式消息（核心方法）
-    /// 立即创建卡片并发送，返回流式句柄用于后续更新
+    /// 鍙戦€佹祦寮忔秷鎭紙鏍稿績鏂规硶锛?
+    /// 绔嬪嵆鍒涘缓鍗＄墖骞跺彂閫侊紝杩斿洖娴佸紡鍙ユ焺鐢ㄤ簬鍚庣画鏇存柊
     /// </summary>
     public async Task<FeishuStreamingHandle> SendStreamingMessageAsync(
         string chatId,
@@ -1154,7 +1595,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             replyToMessageId ?? "none");
         var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId, appId);
 
-        // 通过 CardKit 客户端创建流式句柄
+        // 閫氳繃 CardKit 瀹㈡埛绔垱寤烘祦寮忓彞鏌?
         var handle = await _cardKit.CreateStreamingHandleAsync(
             chatId,
             replyToMessageId,
@@ -1204,58 +1645,61 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     }
 
     /// <summary>
-    /// 处理 JSONL 输出块，解析并提取助手消息
-    /// 使用缓冲区处理跨 chunk 的不完整 JSON 行
+    /// 澶勭悊 JSONL 杈撳嚭鍧楋紝瑙ｆ瀽骞舵彁鍙栧姪鎵嬫秷鎭?
+    /// 浣跨敤缂撳啿鍖哄鐞嗚法 chunk 鐨勪笉瀹屾暣 JSON 琛?
     /// </summary>
-    private void ProcessJsonlChunk(string content, string sessionId, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder, StringBuilder jsonlBuffer)
+    private bool ProcessJsonlChunk(string content, string sessionId, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder, StringBuilder jsonlBuffer)
     {
         if (string.IsNullOrEmpty(content))
         {
-            return;
+            return false;
         }
 
-        // 将新内容添加到缓冲区
+        // 灏嗘柊鍐呭娣诲姞鍒扮紦鍐插尯
         jsonlBuffer.Append(content);
+        var hasStructuredTodoList = false;
 
-        // 处理缓冲区中的完整行
+        // 澶勭悊缂撳啿鍖轰腑鐨勫畬鏁磋
         while (true)
         {
             var bufferContent = jsonlBuffer.ToString();
             var newlineIndex = bufferContent.IndexOf('\n');
 
-            // 如果没有完整的行，等待更多数据
+            // 濡傛灉娌℃湁瀹屾暣鐨勮锛岀瓑寰呮洿澶氭暟鎹?
             if (newlineIndex < 0)
             {
                 break;
             }
 
-            // 提取完整的行
+            // 鎻愬彇瀹屾暣鐨勮
             var line = bufferContent.Substring(0, newlineIndex).TrimEnd('\r');
             jsonlBuffer.Remove(0, newlineIndex + 1);
 
-            // 处理这一行
-            ProcessJsonlLine(line, sessionId, adapter, assistantMessageBuilder);
+            // 澶勭悊杩欎竴琛?
+            hasStructuredTodoList |= ProcessJsonlLine(line, sessionId, adapter, assistantMessageBuilder);
         }
+
+        return hasStructuredTodoList;
     }
 
     /// <summary>
-    /// 处理单行 JSONL
+    /// 澶勭悊鍗曡 JSONL
     /// </summary>
-    private void ProcessJsonlLine(string line, string sessionId, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder)
+    private bool ProcessJsonlLine(string line, string sessionId, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder)
     {
         var trimmedLine = line.Trim();
         if (string.IsNullOrWhiteSpace(trimmedLine))
         {
-            return;
+            return false;
         }
 
         try
         {
-            // 使用适配器解析输出行
+            // 浣跨敤閫傞厤鍣ㄨВ鏋愯緭鍑鸿
             var outputEvent = adapter.ParseOutputLine(trimmedLine);
             if (outputEvent == null)
             {
-                return;
+                return false;
             }
 
             var cliThreadId = adapter.ExtractSessionId(outputEvent);
@@ -1268,16 +1712,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 }
             }
 
-            // 提取助手消息
+            // 鎻愬彇鍔╂墜娑堟伅
             var assistantMessage = adapter.ExtractAssistantMessage(outputEvent);
             if (!string.IsNullOrEmpty(assistantMessage))
             {
                 assistantMessageBuilder.Append(assistantMessage);
             }
+
+            return LowInterruptionContinueHelper.HasStructuredTodoList(outputEvent);
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to parse JSONL line: {Line}", trimmedLine.Length > 100 ? trimmedLine[..100] : trimmedLine);
+            return false;
         }
     }
 
@@ -1304,6 +1751,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             _latestRenderedContent = initialContent;
             CancellationTokenSource = new CancellationTokenSource();
             OperationId = Guid.NewGuid();
+            PulseGate = new FeishuStreamingStatusPulseGate();
         }
 
         public Guid OperationId { get; }
@@ -1320,7 +1768,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         public CancellationTokenSource CancellationTokenSource { get; }
 
+        public FeishuStreamingStatusPulseGate PulseGate { get; }
+
         public bool IsSuperseded => Volatile.Read(ref _superseded) == 1;
+
+        public bool IsPulsePaused() => PulseGate.IsPaused();
 
         public void SetLatestRenderedContent(string content)
         {
@@ -1343,6 +1795,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             Chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(
                 BaseStatusMarkdown,
                 Interlocked.Increment(ref _runningFrame));
+        }
+
+        public void PausePulse(TimeSpan duration)
+        {
+            PulseGate.PauseFor(duration);
+        }
+
+        public void PausePulseForOverflowCard(TimeSpan duration)
+        {
+            if (Chrome.OverflowOptions.Count > 0)
+            {
+                PausePulse(duration);
+            }
         }
 
         public void SetCompletedStatus()
@@ -1382,3 +1847,4 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
     }
 }
+

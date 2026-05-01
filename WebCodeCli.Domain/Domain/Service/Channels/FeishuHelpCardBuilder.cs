@@ -2,6 +2,7 @@ using System.Text.Json;
 using FeishuNetSdk.CallbackEvents;
 using FeishuNetSdk.Extensions;
 using FeishuNetSdk.Im.Dtos;
+using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
@@ -91,6 +92,8 @@ public class FeishuHelpCardBuilder
 
             elements.Add(BuildCategoryActionRow(category));
         }
+
+        AppendSuperpowersQuickActionElements(elements);
 
         return new ElementsCardV2Dto
         {
@@ -186,6 +189,8 @@ public class FeishuHelpCardBuilder
             });
         }
 
+        AppendSuperpowersQuickActionElements(elements);
+
         return new ElementsCardV2Dto
         {
             Header = new ElementsCardV2Dto.HeaderSuffix
@@ -261,6 +266,8 @@ public class FeishuHelpCardBuilder
         {
             elements.Add(BuildCommandActionRow(command));
         }
+
+        AppendSuperpowersQuickActionElements(elements);
 
         return new ElementsCardV2Dto
         {
@@ -694,6 +701,8 @@ public class FeishuHelpCardBuilder
             elements.Add(BuildCategoryActionRow(category));
         }
 
+        AppendSuperpowersQuickActionElements(elements);
+
         var card = new
         {
             schema = "2.0",
@@ -887,6 +896,8 @@ public class FeishuHelpCardBuilder
             });
         }
 
+        AppendSuperpowersQuickActionElements(elements);
+
         var card = new
         {
             schema = "2.0",
@@ -909,6 +920,35 @@ public class FeishuHelpCardBuilder
     /// <param name="toastMessage">toast消息</param>
     /// <param name="toastType">toast类型</param>
     /// <returns>飞书响应对象</returns>
+    private static void AppendSuperpowersQuickActionElements(List<object> elements)
+    {
+        elements.Add(new { tag = "hr" });
+        elements.Add(BuildSuperpowersQuickInput());
+    }
+
+    private static object BuildSuperpowersQuickInput()
+    {
+        return new
+        {
+            tag = "input",
+            input_type = "text",
+            name = SuperpowersQuickActionDefaults.QuickInputFieldName,
+            label = new { tag = "plain_text", content = SuperpowersQuickActionDefaults.InstructionText },
+            placeholder = new { tag = "plain_text", content = SuperpowersQuickActionDefaults.QuickInputPlaceholder },
+            behaviors = new[]
+            {
+                new
+                {
+                    type = "callback",
+                    value = new
+                    {
+                        action = FeishuHelpCardAction.SubmitSuperpowersQuickInputAction
+                    }
+                }
+            }
+        };
+    }
+
     public object BuildToastResponse(string cardJson, string toastMessage, string toastType = "info")
     {
         return new

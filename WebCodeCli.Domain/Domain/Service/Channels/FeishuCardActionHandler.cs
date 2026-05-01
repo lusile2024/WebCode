@@ -73,6 +73,7 @@ public class FeishuCardActionHandler : ICallbackHandler<
     {
         try
         {
+            var receivedAt = DateTimeOffset.UtcNow;
             _logger.LogInformation("🔥 [FeishuCard] 卡片回调详情: Token={Token}, OperatorId={OperatorId}",
                 eventDto.Token, eventDto.Operator?.OpenId);
 
@@ -113,28 +114,56 @@ public class FeishuCardActionHandler : ICallbackHandler<
 
             // 解析 action.value 或 action.option
             string? actionValue = null;
-            if (eventDto.Action.Value != null)
+            string? rawActionOption = eventDto.Action.Option;
+            string? rawActionValueJson = null;
+            if (!string.IsNullOrWhiteSpace(eventDto.Action.Option))
+            {
+                actionValue = NormalizeActionPayload(eventDto.Action.Option);
+            }
+            else if (eventDto.Action.Value != null)
             {
                 try
                 {
                     // Value 是 Dictionary<string, object> 类型，直接序列化为 JSON
-                    actionValue = JsonSerializer.Serialize(eventDto.Action.Value);
+                    rawActionValueJson = JsonSerializer.Serialize(eventDto.Action.Value);
+                    actionValue = NormalizeActionPayload(rawActionValueJson);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "🔥 [FeishuCard] 解析 action.value 失败");
                     // 尝试直接使用原始值
-                    actionValue = eventDto.Action.Value?.ToString();
+                    rawActionValueJson = eventDto.Action.Value?.ToString();
+                    actionValue = NormalizeActionPayload(rawActionValueJson);
                 }
             }
-            else if (!string.IsNullOrEmpty(eventDto.Action.Option))
+
+            _logger.LogInformation(
+                "🔥 [FeishuCard] Trigger diagnostics: ReceivedAt={ReceivedAt:o}, Tag={Tag}, EventToken={Token}, OpenChatId={ChatId}, ActionName={ActionName}, RawOption={RawOption}, RawValueJson={RawValueJson}, NormalizedActionValue={NormalizedActionValue}",
+                receivedAt,
+                eventDto.Action.Tag ?? string.Empty,
+                eventDto.Token ?? string.Empty,
+                chatId ?? string.Empty,
+                eventDto.Action.Name ?? string.Empty,
+                TruncateForLog(rawActionOption),
+                TruncateForLog(rawActionValueJson),
+                TruncateForLog(actionValue));
+
+            if (!string.IsNullOrWhiteSpace(actionValue) &&
+                actionValue.Contains("\"action\":\"switch_session\"", StringComparison.Ordinal))
             {
-                actionValue = eventDto.Action.Option;
+                _logger.LogInformation(
+                    "📌 [FeishuSwitchTrace] Callback received: ReceivedAt={ReceivedAt:o}, EventToken={Token}, OpenChatId={ChatId}, RawOption={RawOption}, RawValueJson={RawValueJson}, NormalizedActionValue={NormalizedActionValue}",
+                    receivedAt,
+                    eventDto.Token ?? string.Empty,
+                    chatId ?? string.Empty,
+                    TruncateForLog(rawActionOption),
+                    TruncateForLog(rawActionValueJson),
+                    TruncateForLog(actionValue));
             }
 
             if (string.IsNullOrEmpty(actionValue) && eventDto.Action.Tag == "button" && !string.IsNullOrWhiteSpace(eventDto.Action.Name))
             {
-                actionValue = BuildFormSubmitActionValue(eventDto.Action.Name);
+                actionValue = BuildFormSubmitActionValue(eventDto.Action.Name, chatId);
                 if (!string.IsNullOrEmpty(actionValue))
                 {
                     _logger.LogInformation("🔥 [FeishuCard] 根据按钮名称回填 Action.Value: Name={ActionName}, ActionValue={ActionValue}",
@@ -164,13 +193,27 @@ public class FeishuCardActionHandler : ICallbackHandler<
             }
 
             // 调用服务处理并返回响应对象
-            return await _actionService.HandleCardActionAsync(
+            var response = await _actionService.HandleCardActionAsync(
                 actionValue,
                 eventDto.Action.FormValue,
                 chatId,
                 eventDto.Action.InputValue,
                 eventDto.Operator?.UnionId ?? eventDto.Operator?.OpenId ?? string.Empty,
                 appId);
+
+            if (ShouldSuppressOverflowSwitchSessionSuccessResponse(
+                    eventDto.Action.Tag,
+                    actionValue,
+                    response))
+            {
+                _logger.LogInformation(
+                    "📌 [FeishuSwitchTrace] OverflowSuccessResponseSuppressed: EventToken={Token}, OpenChatId={ChatId}",
+                    eventDto.Token ?? string.Empty,
+                    chatId ?? string.Empty);
+                return new CardActionTriggerResponseDto();
+            }
+
+            return response;
         }
         catch (Exception ex)
         {
@@ -179,7 +222,7 @@ public class FeishuCardActionHandler : ICallbackHandler<
         }
     }
 
-    private static string? BuildFormSubmitActionValue(string actionName)
+    private static string? BuildFormSubmitActionValue(string actionName, string? chatId)
     {
         if (string.Equals(actionName, "bind_web_user_submit", StringComparison.Ordinal))
         {
@@ -216,6 +259,88 @@ public class FeishuCardActionHandler : ICallbackHandler<
             });
         }
 
+        if (actionName.StartsWith("rename_session_submit__", StringComparison.Ordinal))
+        {
+            var sessionId = actionName["rename_session_submit__".Length..];
+            return JsonSerializer.Serialize(new
+            {
+                action = "rename_session",
+                session_id = sessionId,
+                chat_key = chatId
+            });
+        }
+
+        if (actionName.StartsWith("save_session_launch_settings__", StringComparison.Ordinal))
+        {
+            var sessionId = actionName["save_session_launch_settings__".Length..];
+            return JsonSerializer.Serialize(new
+            {
+                action = "save_session_launch_settings",
+                session_id = sessionId,
+                chat_key = chatId
+            });
+        }
+
         return null;
+    }
+
+    private static bool ShouldSuppressOverflowSwitchSessionSuccessResponse(
+        string? actionTag,
+        string? actionValue,
+        CardActionTriggerResponseDto response)
+    {
+        return string.Equals(actionTag, "overflow", StringComparison.OrdinalIgnoreCase)
+               && !string.IsNullOrWhiteSpace(actionValue)
+               && actionValue.Contains("\"action\":\"switch_session\"", StringComparison.Ordinal)
+               && response.Toast?.Type == CardActionTriggerResponseDto.ToastSuffix.ToastType.Success;
+    }
+
+    private static string? NormalizeActionPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return null;
+        }
+
+        var normalized = payload.Trim();
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(normalized);
+                if (document.RootElement.ValueKind == JsonValueKind.String)
+                {
+                    var inner = document.RootElement.GetString();
+                    if (string.IsNullOrWhiteSpace(inner))
+                    {
+                        return null;
+                    }
+
+                    normalized = inner.Trim();
+                    continue;
+                }
+
+                return document.RootElement.GetRawText();
+            }
+            catch (JsonException)
+            {
+                break;
+            }
+        }
+
+        return normalized;
+    }
+
+    private static string TruncateForLog(string? value, int maxLength = 600)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLength
+            ? trimmed
+            : trimmed[..maxLength] + "...";
     }
 }

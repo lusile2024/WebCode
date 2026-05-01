@@ -6,6 +6,7 @@ public interface ICcSwitchService
     Task<CcSwitchStatus> GetStatusAsync(CancellationToken cancellationToken = default);
     Task<CcSwitchToolStatus> GetToolStatusAsync(string toolId, CancellationToken cancellationToken = default);
     Task<IReadOnlyDictionary<string, CcSwitchToolStatus>> GetToolStatusesAsync(IEnumerable<string> toolIds, CancellationToken cancellationToken = default);
+    Task<CcSwitchModelCatalog> GetModelCatalogAsync(string toolId, string? providerId = null, CancellationToken cancellationToken = default);
 }
 
 public class CcSwitchStatus
@@ -40,6 +41,27 @@ public class CcSwitchToolStatus
     public string? ActiveProviderName { get; set; }
     public string? ActiveProviderCategory { get; set; }
     public string? StatusMessage { get; set; }
+}
+
+public class CcSwitchModelCatalog
+{
+    public string ToolId { get; set; } = string.Empty;
+    public string ToolName { get; set; } = string.Empty;
+    public string AppType { get; set; } = string.Empty;
+    public bool IsManaged { get; set; }
+    public bool IsDetected { get; set; }
+    public string? ProviderId { get; set; }
+    public string? ProviderName { get; set; }
+    public string? ProviderCategory { get; set; }
+    public bool IsRemoteFetched { get; set; }
+    public string? StatusMessage { get; set; }
+    public List<CcSwitchModelOption> Models { get; set; } = [];
+}
+
+public class CcSwitchModelOption
+{
+    public string Id { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
 }
 
 public class CcSwitchSessionSnapshot

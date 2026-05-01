@@ -9,7 +9,9 @@ public class FeishuStreamingHandle : IDisposable
     private readonly Func<string, int, Task> _finishAsync;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly int _throttleMs;
+    private readonly int _quietWindowAfterUpdateMs;
     private DateTime _lastUpdate = DateTime.MinValue;
+    private DateTime _quietUntil = DateTime.MinValue;
     private int _sequence = 0;
     private bool _disposed = false;
     private bool _isFinished = false;
@@ -34,13 +36,15 @@ public class FeishuStreamingHandle : IDisposable
         string messageId,
         Func<string, int, Task> updateAsync,
         Func<string, int, Task> finishAsync,
-        int throttleMs = 500)
+        int throttleMs = 500,
+        int quietWindowAfterUpdateMs = 0)
     {
         CardId = cardId;
         MessageId = messageId;
         _updateAsync = updateAsync;
         _finishAsync = finishAsync;
         _throttleMs = throttleMs;
+        _quietWindowAfterUpdateMs = Math.Max(0, quietWindowAfterUpdateMs);
     }
 
     /// <summary>
@@ -62,6 +66,11 @@ public class FeishuStreamingHandle : IDisposable
             }
 
             var now = DateTime.UtcNow;
+            if (now < _quietUntil)
+            {
+                return;
+            }
+
             if ((now - _lastUpdate).TotalMilliseconds < _throttleMs)
             {
                 return; // 节流跳过
@@ -70,6 +79,10 @@ public class FeishuStreamingHandle : IDisposable
             _lastUpdate = now;
             var sequence = Interlocked.Increment(ref _sequence);
             await _updateAsync(content, sequence);
+            if (_quietWindowAfterUpdateMs > 0)
+            {
+                _quietUntil = DateTime.UtcNow.AddMilliseconds(_quietWindowAfterUpdateMs);
+            }
         }
         finally
         {

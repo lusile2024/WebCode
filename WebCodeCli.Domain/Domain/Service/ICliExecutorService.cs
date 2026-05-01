@@ -44,6 +44,14 @@ public interface ICliExecutorService
     void SetCliThreadId(string sessionId, string threadId);
 
     /// <summary>
+    /// 仅重置当前会话运行态，不删除工作区和历史消息
+    /// </summary>
+    Task ResetSessionRuntimeAsync(
+        string sessionId,
+        bool clearCliThreadId = true,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 执行 CLI 命令并返回流式输出
     /// </summary>
     /// <param name="sessionId">会话ID,用于创建独立工作区</param>
@@ -53,8 +61,27 @@ public interface ICliExecutorService
     /// <returns>流式输出块</returns>
     IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
         string sessionId,
-        string toolId, 
-        string userPrompt, 
+        string toolId,
+        string userPrompt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 判断工具是否支持少打断执行
+    /// </summary>
+    bool SupportsLowInterruptionContinue(string toolId);
+
+    /// <summary>
+    /// 判断当前会话是否可以启动少打断执行
+    /// </summary>
+    bool CanStartLowInterruptionContinue(string sessionId, string toolId);
+
+    /// <summary>
+    /// 以原生 resume/continue 方式启动一次少打断执行
+    /// </summary>
+    IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(
+        string sessionId,
+        string toolId,
+        string? prompt = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -109,6 +136,14 @@ public interface ICliExecutorService
     /// <param name="toolId">工具ID，留空时使用会话当前工具</param>
     /// <returns>最新的会话快照元数据</returns>
     Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 将当前 Codex thread 同步到当前 cc-switch 激活 Provider
+    /// </summary>
+    Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(
+        string sessionId,
+        string? toolId = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// 保存指定工具的环境变量配置到数据库

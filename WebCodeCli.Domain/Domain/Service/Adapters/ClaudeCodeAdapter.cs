@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using WebCodeCli.Domain.Domain.Model;
 
 namespace WebCodeCli.Domain.Domain.Service.Adapters;
@@ -16,6 +17,10 @@ namespace WebCodeCli.Domain.Domain.Service.Adapters;
 /// </summary>
 public class ClaudeCodeAdapter : ICliToolAdapter
 {
+    private static readonly Regex ModelArgumentRegex = new(
+        "(?<!\\S)--model\\s+(?:\"[^\"]*\"|'[^']*'|\\S+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>
     /// 默认参数模板
     /// 支持的占位符:
@@ -23,6 +28,7 @@ public class ClaudeCodeAdapter : ICliToolAdapter
     /// - {session}: 会话恢复参数（如果有）
     /// </summary>
     public const string DefaultArgumentTemplate = "-p --verbose --output-format=stream-json --dangerously-skip-permissions {session} \"{prompt}\"";
+    public const string DefaultLowInterruptionArgumentTemplate = "-p --verbose --output-format=stream-json --dangerously-skip-permissions --permission-mode auto --resume {cliThreadId}";
 
     public string[] SupportedToolIds => new[] { "claude-code", "claude" };
 
@@ -66,7 +72,24 @@ public class ClaudeCodeAdapter : ICliToolAdapter
             result = result.Replace("  ", " ");
         }
 
-        return result;
+        return UpsertModelArgument(result, context.LaunchModelOverride);
+    }
+
+    public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.CliThreadId))
+        {
+            throw new InvalidOperationException("Low-interruption continue requires an existing CLI thread/session id.");
+        }
+
+        var template = !string.IsNullOrWhiteSpace(tool.LowInterruptionArgumentTemplate)
+            ? tool.LowInterruptionArgumentTemplate
+            : DefaultLowInterruptionArgumentTemplate;
+
+        return NormalizeArguments(
+            template
+                .Replace("{cliThreadId}", context.CliThreadId)
+                .Replace("{session}", $"--resume {context.CliThreadId}"));
     }
 
     public CliOutputEvent? ParseOutputLine(string line)
@@ -1024,6 +1047,30 @@ public class ClaudeCodeAdapter : ICliToolAdapter
             .Replace("\n", "\\n")
             .Replace("\r", "\\r")
             .Replace("\t", "\\t");
+    }
+
+    private static string NormalizeArguments(string arguments)
+    {
+        var normalized = arguments.Trim();
+
+        while (normalized.Contains("  ", StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return normalized;
+    }
+
+    private static string UpsertModelArgument(string arguments, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return NormalizeArguments(arguments);
+        }
+
+        var cleanedArguments = ModelArgumentRegex.Replace(arguments, string.Empty);
+        var modelArgument = $"--model \"{EscapeShellArgument(model)}\"";
+        return NormalizeArguments($"{cleanedArguments} {modelArgument}");
     }
 
     #endregion

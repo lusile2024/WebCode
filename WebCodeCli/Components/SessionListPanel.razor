@@ -1,4 +1,5 @@
 @using WebCodeCli.Domain.Domain.Model
+@using WebCodeCli.Domain.Domain.Service
 
 @if (Show)
 {
@@ -117,6 +118,12 @@
                                         </p>
                                     }
                                 }
+                                @if (TryGetLaunchOverrideSummary(session) is { } launchOverrideSummary)
+                                {
+                                    <p class="text-xs text-gray-500 mt-0.5 truncate" title="@launchOverrideSummary">
+                                        @LaunchSettingsText: @launchOverrideSummary
+                                    </p>
+                                }
                             </div>
                             <div class="flex items-center gap-1 flex-shrink-0">
                                 @if (IsLoadingSession && CurrentSessionId == session.SessionId)
@@ -142,6 +149,17 @@
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M5.636 18.364A9 9 0 103.514 9m16.85 6a9 9 0 01-2.122 3.364"></path>
                                                 </svg>
                                             }
+                                        </button>
+                                    }
+                                    @if (IsManagedTool(session))
+                                    {
+                                        <button @onclick:stopPropagation="true"
+                                                @onclick="() => OnConfigureSessionLaunch.InvokeAsync(session)"
+                                                class="p-1.5 hover:bg-amber-100 rounded-lg transition-colors"
+                                                title="@LaunchSettingsText">
+                                            <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-2.21 0-4 1.79-4 4m4-4c2.21 0 4 1.79 4 4m-4-4V4m0 8l-2 2m2-2l2 2m6 0a6 6 0 11-12 0 6 6 0 0112 0z"></path>
+                                            </svg>
                                         </button>
                                     }
                                     <button @onclick:stopPropagation="true" @onclick="() => OnShareSession.InvokeAsync(session)" class="p-1.5 hover:bg-indigo-100 rounded-lg transition-colors" title="@ShareSessionText">
@@ -212,6 +230,9 @@
     [Parameter] public string PinnedProviderText { get; set; } = string.Empty;
     [Parameter] public string SyncedAtText { get; set; } = string.Empty;
     [Parameter] public string UnsyncedProviderText { get; set; } = string.Empty;
+    [Parameter] public string LaunchSettingsText { get; set; } = string.Empty;
+    [Parameter] public string ModelText { get; set; } = string.Empty;
+    [Parameter] public string ReasoningText { get; set; } = string.Empty;
     [Parameter] public string ShareSessionText { get; set; } = string.Empty;
     [Parameter] public string AuthorizeSessionText { get; set; } = string.Empty;
     [Parameter] public string NoSessionsText { get; set; } = string.Empty;
@@ -226,6 +247,7 @@
     [Parameter] public EventCallback<string> OnSessionSelected { get; set; }
     [Parameter] public EventCallback<string> OnToggleSessionSelection { get; set; }
     [Parameter] public EventCallback<SessionHistory> OnSyncSessionProvider { get; set; }
+    [Parameter] public EventCallback<SessionHistory> OnConfigureSessionLaunch { get; set; }
     [Parameter] public EventCallback<SessionHistory> OnShareSession { get; set; }
     [Parameter] public EventCallback<SessionHistory> OnAuthorizeSession { get; set; }
     [Parameter] public EventCallback<SessionHistory> OnRenameSession { get; set; }
@@ -257,6 +279,30 @@
     private static bool IsManagedTool(SessionHistory session)
     {
         return NormalizeToolId(session.CcSwitchSnapshotToolId ?? session.ToolId) is "claude-code" or "codex" or "opencode";
+    }
+
+    private string? TryGetLaunchOverrideSummary(SessionHistory session)
+    {
+        var launchOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(session);
+        if (launchOverride == null)
+        {
+            return null;
+        }
+
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(launchOverride.Model))
+        {
+            parts.Add($"{ModelText}: {launchOverride.Model}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(launchOverride.ReasoningEffort))
+        {
+            parts.Add($"{ReasoningText}: {launchOverride.ReasoningEffort}");
+        }
+
+        return parts.Count == 0
+            ? null
+            : string.Join(" · ", parts);
     }
 
     private string GetPinnedProviderDisplay(SessionHistory session)

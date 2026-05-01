@@ -75,6 +75,79 @@ public class ExternalCliSessionHistoryServiceTests
     }
 
     [Fact]
+    public async Task GetRecentMessagesAsync_ForCodex_PrefersWorkspaceScopedRolloutOverGlobalLegacyRollout()
+    {
+        using var sandbox = new HistoryTestSandbox();
+        const string threadId = "codex-thread-resumed";
+        var globalRolloutPath = sandbox.WriteFile(
+            Path.Combine("global-codex", "2026", "04", "23", $"rollout-2026-04-23T17-19-27-{threadId}.jsonl"),
+            """
+            {"timestamp":"2026-03-23T01:00:00Z","type":"session_meta","payload":{"id":"codex-thread-resumed","cwd":"D:\\legacy"}}
+            {"timestamp":"2026-03-23T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"legacy user"}]}}
+            {"timestamp":"2026-03-23T01:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"legacy assistant"}]}}
+            """);
+        var workspacePath = sandbox.CreateDirectory("workspace");
+        sandbox.WriteFile(
+            Path.Combine("workspace", ".codex", "sessions", "2026", "04", "28", $"rollout-2026-04-28T09-12-00-{threadId}.jsonl"),
+            """
+            {"timestamp":"2026-04-28T09:12:00Z","type":"session_meta","payload":{"id":"codex-thread-resumed","cwd":"D:\\workspace"}}
+            {"timestamp":"2026-04-28T09:12:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"workspace user"}]}}
+            {"timestamp":"2026-04-28T09:12:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"workspace assistant"}]}}
+            """);
+
+        var service = new TestExternalCliSessionHistoryService(
+            codexSessionsRootPath: Path.GetDirectoryName(globalRolloutPath)!);
+
+        var messages = await service.GetRecentMessagesAsync("codex", threadId, workspacePath: workspacePath);
+
+        Assert.Collection(
+            messages,
+            message =>
+            {
+                Assert.Equal("user", message.Role);
+                Assert.Equal("workspace user", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal("assistant", message.Role);
+                Assert.Equal("workspace assistant", message.Content);
+            });
+    }
+
+    [Fact]
+    public async Task GetRecentMessagesAsync_ForCodex_ReadsArchivedWorkspaceRolloutWhenActiveHistoryWasArchived()
+    {
+        using var sandbox = new HistoryTestSandbox();
+        const string threadId = "codex-thread-archived";
+        var workspacePath = sandbox.CreateDirectory("workspace");
+
+        sandbox.WriteFile(
+            Path.Combine("workspace", ".codex", "archived_sessions", "2026", "04", "28", $"rollout-2026-04-28T09-12-00-{threadId}.jsonl"),
+            """
+            {"timestamp":"2026-04-28T09:12:00Z","type":"session_meta","payload":{"id":"codex-thread-archived","cwd":"D:\\workspace"}}
+            {"timestamp":"2026-04-28T09:12:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"archived user"}]}}
+            {"timestamp":"2026-04-28T09:12:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"archived assistant"}]}}
+            """);
+
+        var service = new TestExternalCliSessionHistoryService();
+
+        var messages = await service.GetRecentMessagesAsync("codex", threadId, workspacePath: workspacePath);
+
+        Assert.Collection(
+            messages,
+            message =>
+            {
+                Assert.Equal("user", message.Role);
+                Assert.Equal("archived user", message.Content);
+            },
+            message =>
+            {
+                Assert.Equal("assistant", message.Role);
+                Assert.Equal("archived assistant", message.Content);
+            });
+    }
+
+    [Fact]
     public async Task GetRecentMessagesAsync_ForClaudeCode_ReadsMessagesFromTranscriptFile()
     {
         using var sandbox = new HistoryTestSandbox();
@@ -248,7 +321,7 @@ public class ExternalCliSessionHistoryServiceTests
 
     private sealed class TestExternalCliSessionHistoryService : ExternalCliSessionHistoryService
     {
-        private readonly string? _codexSessionsRootPath;
+        private readonly string? _codexConfigRootPath;
         private readonly string? _claudeProjectsRootPath;
         private readonly Func<string, string, CancellationToken, Task<(int ExitCode, string Stdout, string Stderr)>>? _processHandler;
 
@@ -258,12 +331,12 @@ public class ExternalCliSessionHistoryServiceTests
             Func<string, string, CancellationToken, Task<(int ExitCode, string Stdout, string Stderr)>>? processHandler = null)
             : base(NullLogger<ExternalCliSessionHistoryService>.Instance)
         {
-            _codexSessionsRootPath = codexSessionsRootPath;
+            _codexConfigRootPath = codexSessionsRootPath;
             _claudeProjectsRootPath = claudeProjectsRootPath;
             _processHandler = processHandler;
         }
 
-        protected override string? GetCodexSessionsRootPath() => _codexSessionsRootPath;
+        protected override string? GetCodexConfigRootPath() => _codexConfigRootPath;
 
         protected override string? GetClaudeProjectsRootPath() => _claudeProjectsRootPath;
 

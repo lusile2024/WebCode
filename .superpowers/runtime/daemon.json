@@ -1,0 +1,7 @@
+{
+  "pid": 0,
+  "baseUrl": "http://127.0.0.1:0",
+  "token": "__REDACTED_RUNTIME_TOKEN__",
+  "startedAt": "1970-01-01T00:00:00Z",
+  "version": "task-6-runtime"
+}

@@ -8,6 +8,11 @@ namespace WebCodeCli.Domain.Domain.Model.Channels;
 /// </summary>
 public class FeishuHelpCardAction
 {
+    public const string SubmitSuperpowersQuickInputAction = "submit_superpowers_quick_input";
+    public const string ExecuteSuperpowersPlanAction = "execute_superpowers_plan";
+    public const string ExecuteSuperpowersSubagentPlanAction = "execute_superpowers_subagent_plan";
+    public const string RetrySuperpowersCapabilityDetectionAction = "retry_superpowers_capability_detection";
+
     /// <summary>
     /// 动作类型
     /// refresh_commands, select_command, back_to_list, execute_command
@@ -110,6 +115,24 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("page")]
     public int? Page { get; set; }
+
+    /// <summary>
+    /// 会话管理卡片是否展开显示全部会话
+    /// </summary>
+    [JsonPropertyName("show_all_sessions")]
+    public bool? ShowAllSessions { get; set; }
+
+    /// <summary>
+    /// 表单中的模型值（会话启动设置时使用）
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; set; }
+
+    /// <summary>
+    /// 表单中的思考等级（会话启动设置时使用）
+    /// </summary>
+    [JsonPropertyName("reasoning_effort")]
+    public string? ReasoningEffort { get; set; }
 
     /// <summary>
     /// 是否以新的聊天卡片发送，而不是替换当前卡片

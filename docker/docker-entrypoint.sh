@@ -39,16 +39,10 @@ context_compact_limit = ${CODEX_CONTEXT_COMPACT_LIMIT:-800000}
 approval_policy = "${CODEX_APPROVAL_POLICY:-never}"
 sandbox_mode = "${CODEX_SANDBOX_MODE:-danger-full-access}"
 
-rmcp_client = true
 model_reasoning_effort = "${CODEX_MODEL_REASONING_EFFORT:-xhigh}"
 model_reasoning_summary = "${CODEX_MODEL_REASONING_SUMMARY:-detailed}"
 model_verbosity = "${CODEX_MODEL_VERBOSITY:-high}"
 model_supports_reasoning_summaries = true
-
-[mcp_servers.claude]
-type = "stdio"
-command = "claude"
-args = ["mcp", "serve"]
 
 [model_providers."${CODEX_MODEL_PROVIDER:-${CODEX_PROVIDER_NAME:-meteor-ai}}"]
 name = "${CODEX_PROVIDER_NAME:-meteor-ai}"

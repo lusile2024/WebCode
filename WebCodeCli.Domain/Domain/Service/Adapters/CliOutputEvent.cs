@@ -187,6 +187,16 @@ public class CliSessionContext
     public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
+    /// 会话级模型覆盖值
+    /// </summary>
+    public string? LaunchModelOverride { get; set; }
+
+    /// <summary>
+    /// 会话级思考等级覆盖值（仅 Codex 使用）
+    /// </summary>
+    public string? LaunchReasoningEffortOverride { get; set; }
+
+    /// <summary>
     /// 是否为恢复会话（后续请求）
     /// </summary>
     public bool IsResume => !string.IsNullOrEmpty(CliThreadId);

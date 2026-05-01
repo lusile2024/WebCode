@@ -92,6 +92,12 @@ public class ChatSessionEntity
     /// </summary>
     [SugarColumn(IsNullable = true)]
     public DateTime? CcSwitchSnapshotSyncedAt { get; set; }
+
+    /// <summary>
+    /// 会话级工具启动覆盖项 JSON（按工具 ID 存储）
+    /// </summary>
+    [SugarColumn(ColumnDataType = "TEXT", IsNullable = true)]
+    public string? ToolLaunchOverridesJson { get; set; }
     
     /// <summary>
     /// 创建时间

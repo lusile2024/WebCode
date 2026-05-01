@@ -79,6 +79,11 @@ public class SessionHistory
     /// 最近一次同步会话快照的时间
     /// </summary>
     public DateTime? CcSwitchSnapshotSyncedAt { get; set; }
+
+    /// <summary>
+    /// 会话级工具启动覆盖项（按工具 ID 存储）
+    /// </summary>
+    public Dictionary<string, SessionToolLaunchOverride> ToolLaunchOverrides { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     
     /// <summary>
     /// 消息列表

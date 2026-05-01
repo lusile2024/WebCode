@@ -198,16 +198,10 @@ context_compact_limit = 800000
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 
-rmcp_client = true
 model_reasoning_effort = "xhigh"
 model_reasoning_summary = "detailed"
 model_verbosity = "high"
 model_supports_reasoning_summaries = true
-
-[mcp_servers.claude]
-type = "stdio"
-command = "claude"
-args = ["mcp", "serve"]
 
 [model_providers."meteor-ai"]
 name = "meteor-ai"

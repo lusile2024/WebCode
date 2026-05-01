@@ -263,7 +263,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             return msgType switch
             {
                 "text" => root.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "",
-                "post" => root.TryGetProperty("content", out var contentEl) ? contentEl.GetString() ?? "" : "",
+                "post" => FeishuPromptNormalizer.Normalize(rawContent),
                 _ => rawContent
             };
         }

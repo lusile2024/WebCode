@@ -41,7 +41,7 @@ public interface IChatSessionRepository : IRepository<ChatSessionEntity>
     /// <summary>
     /// 更新会话的 CLI ThreadId（用于恢复）
     /// </summary>
-    Task<bool> UpdateCliThreadIdAsync(string sessionId, string cliThreadId);
+    Task<bool> UpdateCliThreadIdAsync(string sessionId, string? cliThreadId);
 
     /// <summary>
     /// 更新会话的工作区绑定（仅更新数据库字段，不创建目录）

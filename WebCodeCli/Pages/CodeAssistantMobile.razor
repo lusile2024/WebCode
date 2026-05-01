@@ -168,6 +168,12 @@
                                             </p>
                                         }
                                     }
+                                    @if (TryGetSessionLaunchOverrideSummary(session) is { } launchOverrideSummary)
+                                    {
+                                        <p class="text-xs text-gray-500 mt-0.5 truncate" title="@launchOverrideSummary">
+                                            @T("codeAssistant.sessionLaunchSettings"): @launchOverrideSummary
+                                        </p>
+                                    }
                                 </div>
                                 <div class="flex items-center gap-1 flex-shrink-0 ml-2">
                                     @if (IsManagedTool(session))
@@ -187,6 +193,17 @@
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M5.636 18.364A9 9 0 103.514 9m16.85 6a9 9 0 01-2.122 3.364"></path>
                                                 </svg>
                                             }
+                                        </button>
+                                    }
+                                    @if (IsManagedTool(session))
+                                    {
+                                        <button @onclick:stopPropagation="true"
+                                                @onclick="() => ShowSessionLaunchOverrideDialog(session)"
+                                                class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-amber-100 active:bg-amber-200 transition-colors"
+                                                title="@T("codeAssistant.sessionLaunchSettings")">
+                                            <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-2.21 0-4 1.79-4 4m4-4c2.21 0 4 1.79 4 4m-4-4V4m0 8l-2 2m2-2l2 2m6 0a6 6 0 11-12 0 6 6 0 0112 0z"></path>
+                                            </svg>
                                         </button>
                                     }
                                     <button @onclick:stopPropagation="true"
@@ -247,6 +264,35 @@
                     OnClose="CloseRenameDialog"
                     OnConfirm="RenameSession"
                     OnKeyDown="HandleRenameKeyDown" />
+
+<SessionLaunchOverrideDialog Show="@(_showSessionLaunchOverrideDialog && _sessionToConfigureLaunch != null)"
+                             TitleText="@T("codeAssistant.sessionLaunchSettingsTitle")"
+                             DescriptionText="@T("codeAssistant.sessionLaunchSettingsDescription")"
+                             SessionLabelText="@T("codeAssistant.sessionLaunchSettingsSession")"
+                             SessionTitleText="@(_sessionToConfigureLaunch?.Title ?? string.Empty)"
+                             ToolLabelText="@T("codeAssistant.sessionLaunchSettingsTool")"
+                             ToolNameText="@GetSessionLaunchOverrideToolDisplayName(_sessionToConfigureLaunch)"
+                             ModelLabelText="@T("codeAssistant.sessionLaunchSettingsModel")"
+                             ModelPlaceholderText="@T("codeAssistant.sessionLaunchSettingsModelPlaceholder")"
+                             ReasoningLabelText="@T("codeAssistant.sessionLaunchSettingsReasoning")"
+                             FollowDefaultText="@T("codeAssistant.sessionLaunchSettingsFollowDefault")"
+                             ProviderNoteText="@T("codeAssistant.sessionLaunchSettingsProviderNote")"
+                             ResetNoteText="@T("codeAssistant.sessionLaunchSettingsResetNote")"
+                             ClearText="@T("codeAssistant.sessionLaunchSettingsClear")"
+                             CancelText="@T("common.cancel")"
+                             SaveText="@T("codeAssistant.sessionLaunchSettingsSave")"
+                             SavingText="@T("codeAssistant.sessionLaunchSettingsSaving")"
+                             ErrorMessage="@_sessionLaunchOverrideError"
+                             Model="@_sessionLaunchOverrideModel"
+                             ModelOptions="@_sessionLaunchModelOptions"
+                             ModelChanged="@((string value) => _sessionLaunchOverrideModel = value)"
+                             ReasoningEffort="@_sessionLaunchReasoningEffort"
+                             ReasoningEffortChanged="@((string value) => _sessionLaunchReasoningEffort = value)"
+                             ShowReasoningEffort="@CurrentSessionLaunchOverrideSupportsReasoning"
+                             IsSaving="@_isSavingSessionLaunchOverride"
+                             OnClose="CloseSessionLaunchOverrideDialog"
+                             OnSave="SaveSessionLaunchOverrideAsync"
+                             OnClear="ClearSessionLaunchOverrideAsync" />
 
 <!-- 删除会话确认对话框 -->
 @if (_showDeleteSessionDialog && _sessionToDelete != null)
@@ -505,6 +551,9 @@
                 }
                 else
                 {
+                    var superpowersEligibility = CurrentSuperpowersQuickActionEligibility;
+                    var superpowersViewState = CurrentSuperpowersQuickActionViewState;
+
                     @for (var i = 0; i < _messages.Count; i++)
                     {
                         var message = _messages[i];
@@ -512,6 +561,7 @@
                         var isAssistant = message.Role == "assistant";
                         var hasOutputDetails = isAssistant && _isJsonlOutputActive && _jsonlEvents.Any();
                         var isExpanded = IsMessageExpanded(messageIndex);
+                        var showSuperpowersQuickActions = IsSuperpowersQuickActionEligible(message, superpowersEligibility);
                         
                         <div class="@(message.Role == "user" ? "flex justify-end" : "flex justify-start flex-col items-start")">
                             <div class="@(message.Role == "user" 
@@ -560,6 +610,57 @@
                                         </button>
                                     }
                                 </div>
+                                @if (showSuperpowersQuickActions)
+                                {
+                                    <div class="mt-2 rounded-2xl border border-blue-100 bg-blue-50/70 p-3">
+                                        <p class="mb-2 text-xs leading-relaxed text-blue-900">@SuperpowersQuickActionDefaults.InstructionText</p>
+                                        <div class="flex flex-col gap-2">
+                                            <input @bind="_superpowersQuickInput"
+                                               @bind:event="oninput"
+                                               @onkeydown="@(args => HandleSuperpowersQuickInputKeyDown(message, args))"
+                                               disabled="@superpowersViewState.IsDisabled"
+                                               class="w-full rounded-full border border-blue-200 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                                               placeholder="@SuperpowersQuickActionDefaults.QuickInputPlaceholder" />
+                                            @if (superpowersViewState.ShowPlanActions)
+                                            {
+                                                <button @onclick="() => OnExecuteSuperpowersPlanAsync(message)"
+                                                        disabled="@superpowersViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-blue-700 hover:bg-blue-100")">
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                                    </svg>
+                                                    <span>@SuperpowersQuickActionDefaults.ExecutePlanButtonText</span>
+                                                </button>
+                                                <button @onclick="() => OnExecuteSuperpowersSubagentPlanAsync(message)"
+                                                        disabled="@superpowersViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-blue-600 text-white hover:bg-blue-700")">
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                                    </svg>
+                                                    <span>@SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText</span>
+                                                </button>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(superpowersViewState.StatusMessage) || superpowersViewState.ShowRetryAction)
+                                            {
+                                                <div class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-white/80 px-3 py-2 text-xs text-blue-900">
+                                                    @if (!string.IsNullOrWhiteSpace(superpowersViewState.StatusMessage))
+                                                    {
+                                                        <span>@superpowersViewState.StatusMessage</span>
+                                                    }
+                                                    @if (superpowersViewState.ShowRetryAction)
+                                                    {
+                                                        <button @onclick="() => RetrySuperpowersCapabilityAsync(message)"
+                                                                disabled="@superpowersViewState.RetryActionDisabled"
+                                                                class="inline-flex items-center justify-center rounded-full border border-blue-200 px-3 py-1 font-medium transition-colors @(superpowersViewState.RetryActionDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "text-blue-700 hover:bg-blue-100")"
+                                                                type="button">
+                                                            @superpowersViewState.RetryActionText
+                                                        </button>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
                             </div>
                             
                             @* 内嵌输出详情面板 *@
@@ -639,6 +740,34 @@
                             </div>
                             
                             @* 实时输出详情面板 *@
+                            <div class="mt-2 w-full max-w-[85%] rounded-2xl border border-blue-100 bg-blue-50/70 p-3">
+                                <p class="mb-2 text-xs leading-relaxed text-blue-900">@SuperpowersQuickActionDefaults.InstructionText</p>
+                                <div class="flex flex-col gap-2">
+                                    <input @bind="_superpowersQuickInput"
+                                           @bind:event="oninput"
+                                           disabled="true"
+                                           class="w-full rounded-full border border-blue-200 bg-gray-100 px-3 py-2 text-xs text-gray-400 outline-none disabled:cursor-not-allowed"
+                                           placeholder="@SuperpowersQuickActionDefaults.QuickInputPlaceholder" />
+                                    @if (CurrentSuperpowersQuickActionEligibility.ShowPlanActions)
+                                    {
+                                        <button disabled="true"
+                                                class="inline-flex items-center justify-center gap-1.5 rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-400">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                            </svg>
+                                            <span>@SuperpowersQuickActionDefaults.ExecutePlanButtonText</span>
+                                        </button>
+                                        <button disabled="true"
+                                                class="inline-flex items-center justify-center gap-1.5 rounded-full border border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-400">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                            </svg>
+                                            <span>@SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText</span>
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+
                             @if (_isJsonlOutputActive && _jsonlEvents.Any() && IsMessageExpanded(-1))
                             {
                                 <div class="mt-2 w-full max-w-[95%] animate-slideUp">
