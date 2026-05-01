@@ -15,6 +15,9 @@ public class UserFeishuBotConfigEntity
     [SugarColumn(IsNullable = false)]
     public bool IsEnabled { get; set; } = true;
 
+    [SugarColumn(IsNullable = false)]
+    public bool AutoStartEnabled { get; set; }
+
     [SugarColumn(Length = 128, IsNullable = true)]
     public string? AppId { get; set; }
 
@@ -38,6 +41,9 @@ public class UserFeishuBotConfigEntity
 
     [SugarColumn(IsNullable = true)]
     public int? StreamingThrottleMs { get; set; }
+
+    [SugarColumn(IsNullable = true)]
+    public DateTime? LastStartedAt { get; set; }
 
     [SugarColumn(IsNullable = false)]
     public DateTime CreatedAt { get; set; } = DateTime.Now;

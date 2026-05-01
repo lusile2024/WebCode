@@ -10,6 +10,8 @@ public interface IUserFeishuBotConfigService
     Task<UserFeishuBotConfigSaveResult> SaveAsync(UserFeishuBotConfigEntity config);
     Task<bool> DeleteAsync(string username);
     Task<string?> FindConflictingUsernameByAppIdAsync(string username, string? appId);
+    Task<List<UserFeishuBotConfigEntity>> GetAutoStartCandidatesAsync();
+    Task<bool> UpdateRuntimePreferenceAsync(string username, bool autoStartEnabled, DateTime? lastStartedAt = null);
     FeishuOptions GetSharedDefaults();
     Task<FeishuOptions> GetEffectiveOptionsAsync(string? username);
     Task<FeishuOptions?> GetEffectiveOptionsByAppIdAsync(string? appId);

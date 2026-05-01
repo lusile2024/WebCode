@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SqlSugar;
+using WebCodeCli.Domain.Common;
 using WebCodeCli.Domain.Common.Map;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Repositories.Base.SessionShare;
@@ -205,6 +206,8 @@ public static class DatabaseInitializer
             db.CodeFirst.InitTables<UserSettingEntity>();
             
             logger?.LogInformation("聊天会话相关表初始化成功");
+
+            EnsureChatSessionSchema(db, logger);
             
             // 创建索引
             InitializeChatSessionIndexes(db, logger);
@@ -217,6 +220,84 @@ public static class DatabaseInitializer
     }
     
     /// <summary>
+    /// 确保 ChatSession 表的增量字段和兼容数据已就位
+    /// </summary>
+    private static void EnsureChatSessionSchema(SqlSugarScope db, ILogger? logger = null)
+    {
+        try
+        {
+            EnsureColumnIfNotExists(db, "ChatSession", "CliThreadId", "varchar(256) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "UsesCcSwitchSnapshot", "INTEGER NOT NULL DEFAULT 0", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotToolId", "varchar(64) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchProviderId", "varchar(256) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchProviderName", "varchar(256) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchProviderCategory", "varchar(128) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchLiveConfigPath", "varchar(1024) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotRelativePath", "varchar(512) NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotSyncedAt", "datetime NULL", logger);
+            BackfillCliThreadIdsFromImportedTitles(db, logger);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "校正 ChatSession 表结构时发生警告");
+        }
+    }
+
+    private static void EnsureColumnIfNotExists(
+        SqlSugarScope db,
+        string tableName,
+        string columnName,
+        string columnDefinition,
+        ILogger? logger = null)
+    {
+        var pragmaSql = $"PRAGMA table_info(\"{tableName}\")";
+        var tableInfo = db.Ado.GetDataTable(pragmaSql);
+        var columnExists = tableInfo.Rows.Cast<System.Data.DataRow>()
+            .Any(row => string.Equals(row["name"]?.ToString(), columnName, StringComparison.OrdinalIgnoreCase));
+
+        if (columnExists)
+        {
+            return;
+        }
+
+        db.Ado.ExecuteCommand($"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition}");
+        logger?.LogInformation("已为表 {TableName} 补充列 {ColumnName}", tableName, columnName);
+    }
+
+    private static void BackfillCliThreadIdsFromImportedTitles(SqlSugarScope db, ILogger? logger = null)
+    {
+        var sessions = db.Queryable<ChatSessionEntity>()
+            .Where(x => x.CliThreadId == null || x.CliThreadId == string.Empty)
+            .Select(x => new ChatSessionEntity
+            {
+                SessionId = x.SessionId,
+                ToolId = x.ToolId,
+                Title = x.Title
+            })
+            .ToList();
+
+        var recoveredCount = 0;
+        foreach (var session in sessions)
+        {
+            var cliThreadId = CliThreadIdRecoveryHelper.TryRecoverFromImportedTitle(session.ToolId, session.Title);
+            if (string.IsNullOrWhiteSpace(cliThreadId))
+            {
+                continue;
+            }
+
+            recoveredCount += db.Updateable<ChatSessionEntity>()
+                .SetColumns(x => x.CliThreadId == cliThreadId)
+                .Where(x => x.SessionId == session.SessionId)
+                .ExecuteCommand();
+        }
+
+        if (recoveredCount > 0)
+        {
+            logger?.LogInformation("已从导入标题回填 {Count} 条 ChatSession.CliThreadId", recoveredCount);
+        }
+    }
+
+    /// <summary>
     /// 为聊天会话相关表创建索引
     /// </summary>
     private static void InitializeChatSessionIndexes(SqlSugarScope db, ILogger? logger = null)
@@ -228,6 +309,16 @@ public static class DatabaseInitializer
             // ChatSession: Username + UpdatedAt 索引（会话列表排序）
             CreateIndexIfNotExists(db, "ChatSession", "IX_ChatSession_Username_UpdatedAt", 
                 new[] { "Username", "UpdatedAt" }, logger);
+
+            // ChatSession: Username + ToolId + CliThreadId 索引（用于恢复外部/CLI会话时快速查找）
+            // 说明：CliThreadId 允许为空；SQLite 对 NULL 的唯一性处理较友好，但这里先用普通索引即可。
+            CreateIndexIfNotExists(db, "ChatSession", "IX_ChatSession_Username_ToolId_CliThreadId",
+                new[] { "Username", "ToolId", "CliThreadId" }, logger);
+
+            // ChatSession: ToolId + CliThreadId 唯一索引（跨用户，确保一个外部 CLI 会话只能被一个用户占用）
+            // 说明：CliThreadId 允许为空；SQLite UNIQUE INDEX 允许多个 NULL，不影响旧数据。
+            CreateIndexIfNotExists(db, "ChatSession", "IX_ChatSession_ToolId_CliThreadId",
+                new[] { "ToolId", "CliThreadId" }, logger, isUnique: true);
             
             // ChatMessage: SessionId 索引（按会话查询消息）
             CreateIndexIfNotExists(db, "ChatMessage", "IX_ChatMessage_SessionId", 

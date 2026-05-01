@@ -104,7 +104,8 @@ public interface IFeishuCardKitClient
         string initialContent,
         string? title = null,
         CancellationToken cancellationToken = default,
-        FeishuOptions? optionsOverride = null);
+        FeishuOptions? optionsOverride = null,
+        FeishuStreamingCardChrome? chrome = null);
 
     /// <summary>
     /// 发送原始JSON卡片消息（帮助功能专用）

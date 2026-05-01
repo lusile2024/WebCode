@@ -3,11 +3,19 @@ param(
     [string]$Version,
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-x64",
-    [string]$ProjectPath = (Join-Path $PSScriptRoot "..\WebCodeCli\WebCodeCli.csproj"),
-    [string]$OutputRoot = (Join-Path $PSScriptRoot "..\artifacts\windows-installer")
+    [string]$ProjectPath,
+    [string]$OutputRoot
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $ProjectPath) {
+    $ProjectPath = Join-Path $PSScriptRoot "..\WebCodeCli\WebCodeCli.csproj"
+}
+
+if (-not $OutputRoot) {
+    $OutputRoot = Join-Path $PSScriptRoot "..\artifacts\windows-installer"
+}
 
 function Get-RepoRoot {
     param([string]$ScriptRoot)
@@ -64,6 +72,28 @@ function Update-PublishAppSettings {
 
     $json = $settings | ConvertTo-Json -Depth 20
     [System.IO.File]::WriteAllText($settingsPath, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Get-LaunchUrlForReleaseNotes {
+    param([string]$PublishDirectory)
+
+    $settingsPath = Join-Path $PublishDirectory "appsettings.json"
+    if (-not (Test-Path $settingsPath)) {
+        throw "Published appsettings.json was not found at $settingsPath"
+    }
+
+    $settings = Get-Content -Path $settingsPath -Raw | ConvertFrom-Json
+    $configuredUrls = $settings.urls
+    if (-not $configuredUrls) {
+        return "http://localhost:5000"
+    }
+
+    $firstUrl = ($configuredUrls -split ';' | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1).Trim()
+    if (-not $firstUrl) {
+        return "http://localhost:5000"
+    }
+
+    return ($firstUrl -replace '://(\*|\+|0\.0\.0\.0)', '://localhost')
 }
 
 function Get-InnoSetupCompilerPath {
@@ -138,6 +168,7 @@ if (-not (Test-Path $publishedExePath)) {
 }
 
 Update-PublishAppSettings -PublishDirectory $publishDirectory
+$launchUrl = Get-LaunchUrlForReleaseNotes -PublishDirectory $publishDirectory
 
 if (Test-Path $portableStageDirectory) {
     Remove-Item -Recurse -Force $portableStageDirectory
@@ -191,7 +222,7 @@ $releaseNotes = @"
 - The installer keeps an existing appsettings.json on upgrade
 - Default install path is `%LOCALAPPDATA%\Programs\WebCode`
 - Default runtime data paths are `data/` and `workspaces/` under the install directory
-- After launch, open http://localhost:5000 in the browser
+- After launch, open $launchUrl in the browser
 "@
 [System.IO.File]::WriteAllText($releaseNotesPath, $releaseNotes.Trim() + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 

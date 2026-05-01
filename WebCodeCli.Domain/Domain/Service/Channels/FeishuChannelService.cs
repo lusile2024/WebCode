@@ -39,6 +39,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private readonly ConcurrentDictionary<string, DateTime> _processedEventIds = new();
     // 事件缓存过期时间（10分钟，超过这个时间的event_id会被清理）
     private const int EventCacheExpirationMinutes = 10;
+    private readonly Dictionary<string, ActiveSessionExecution> _activeExecutions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _activeExecutionsLock = new();
+    private const string SupersededExecutionMessage = "当前回复已停止：同一会话收到了新的补充消息，请查看新卡片继续结果。";
+    private const int StreamingStatusPulseIntervalMs = 900;
 
     /// <summary>
     /// 服务是否运行中
@@ -281,29 +285,60 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 CreatedAt = DateTime.UtcNow
             });
 
+            var (streamingChrome, baseStatusMarkdown) = BuildStreamingCardChrome(message.ChatId, sessionId, message.SenderName);
+
             // 创建流式回复，立即显示"思考中"状态
             var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
-            var handle = await SendStreamingMessageAsync(
+            var handle = await _cardKit.CreateStreamingHandleAsync(
                 message.ChatId,
+                null,
                 effectiveOptions.ThinkingMessage,
-                message.MessageId,
-                message.SenderName,
-                message.AppId);
+                effectiveOptions.DefaultCardTitle,
+                optionsOverride: effectiveOptions,
+                chrome: streamingChrome);
 
             _logger.LogInformation(
                 "🔥 [FeishuChannel] 流式句柄已创建: CardId={CardId}",
                 handle.CardId);
 
-            // 执行 CLI 工具并流式更新卡片
-            await ExecuteCliAndStreamAsync(
-                handle,
+            var activeExecution = new ActiveSessionExecution(
                 sessionId,
-                toolId,
-                message.Content,
                 message.MessageId,
-                effectiveOptions.ThinkingMessage,
-                message.SenderName,
-                message.AppId);
+                handle,
+                streamingChrome,
+                baseStatusMarkdown,
+                effectiveOptions.ThinkingMessage);
+            var statusPulseTask = RunStreamingStatusPulseAsync(activeExecution);
+            var previousExecution = RegisterActiveExecution(sessionId, activeExecution);
+            if (previousExecution != null)
+            {
+                await SupersedeExecutionAsync(previousExecution, message.MessageId);
+            }
+
+            var cliPrompt = message.Content;
+
+            try
+            {
+                // 执行 CLI 工具并流式更新卡片
+                await ExecuteCliAndStreamAsync(
+                    handle,
+                    sessionId,
+                    toolId,
+                    cliPrompt,
+                    message.MessageId,
+                    effectiveOptions.ThinkingMessage,
+                    activeExecution,
+                    message.SenderName,
+                    message.AppId,
+                    activeExecution.CancellationTokenSource.Token);
+            }
+            finally
+            {
+                activeExecution.CancelPulse();
+                await AwaitStatusPulseAsync(statusPulseTask);
+                UnregisterActiveExecution(sessionId, activeExecution);
+                activeExecution.Dispose();
+            }
         }
         catch (Exception ex)
         {
@@ -360,6 +395,57 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         if (expiredIds.Count > 0)
         {
             _logger.LogDebug("清理了 {Count} 个过期的事件ID", expiredIds.Count);
+        }
+    }
+
+    private ActiveSessionExecution? RegisterActiveExecution(string sessionId, ActiveSessionExecution execution)
+    {
+        lock (_activeExecutionsLock)
+        {
+            _activeExecutions.TryGetValue(sessionId, out var previousExecution);
+            _activeExecutions[sessionId] = execution;
+            return previousExecution;
+        }
+    }
+
+    private void UnregisterActiveExecution(string sessionId, ActiveSessionExecution execution)
+    {
+        lock (_activeExecutionsLock)
+        {
+            if (_activeExecutions.TryGetValue(sessionId, out var currentExecution) &&
+                currentExecution.OperationId == execution.OperationId)
+            {
+                _activeExecutions.Remove(sessionId);
+            }
+        }
+    }
+
+    private async Task SupersedeExecutionAsync(ActiveSessionExecution execution, string newMessageId)
+    {
+        execution.MarkSuperseded();
+        execution.CancelPulse();
+        execution.SetStoppedStatus();
+
+        try
+        {
+            execution.CancellationTokenSource.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        try
+        {
+            await execution.Handle.FinishAsync(SupersededExecutionMessage);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "结束被新消息接管的旧卡片失败: Session={SessionId}, PreviousMessageId={PreviousMessageId}, NewMessageId={NewMessageId}",
+                execution.SessionId,
+                execution.MessageId,
+                newMessageId);
         }
     }
 
@@ -539,8 +625,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         string userPrompt,
         string messageId,
         string thinkingMessage,
+        ActiveSessionExecution activeExecution,
         string? username = null,
-        string? appId = null)
+        string? appId = null,
+        CancellationToken cancellationToken = default)
     {
         var outputBuilder = new StringBuilder();
         var assistantMessageBuilder = new StringBuilder();
@@ -550,6 +638,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         if (tool == null)
         {
+            activeExecution.CancelPulse();
+            activeExecution.SetErrorStatus();
             await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
             _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
             return;
@@ -568,13 +658,24 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         try
         {
             // 执行 CLI 工具并流式处理输出
-            await foreach (var chunk in _cliExecutor.ExecuteStreamAsync(sessionId, tool.Id, userPrompt))
+            await foreach (var chunk in _cliExecutor.ExecuteStreamAsync(sessionId, tool.Id, userPrompt, cancellationToken))
             {
                 if (chunk.IsError)
                 {
+                    if (activeExecution.IsSuperseded && cancellationToken.IsCancellationRequested)
+                    {
+                        _logger.LogInformation(
+                            "CLI execution superseded by newer message: Session={SessionId}, MessageId={MessageId}",
+                            sessionId,
+                            messageId);
+                        return;
+                    }
+
                     _logger.LogError(
                         "CLI execution error: {Error}",
                         chunk.ErrorMessage ?? "Unknown error");
+                    activeExecution.CancelPulse();
+                    activeExecution.SetErrorStatus();
                     await handle.FinishAsync($"错误：{chunk.ErrorMessage ?? "执行失败"}");
                     return;
                 }
@@ -587,7 +688,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 if (useAdapter)
                 {
                     // 解析 JSONL 行并提取助手消息（使用缓冲区处理不完整的行）
-                    ProcessJsonlChunk(chunk.Content, adapter!, assistantMessageBuilder, jsonlBuffer);
+                    ProcessJsonlChunk(chunk.Content, sessionId, adapter!, assistantMessageBuilder, jsonlBuffer);
                     displayContent = assistantMessageBuilder.ToString();
 
                     // 如果没有助手消息，显示"思考中"
@@ -603,6 +704,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 }
 
                 // 流式更新卡片（节流在 handle 内部处理）
+                activeExecution.SetLatestRenderedContent(displayContent);
                 await handle.UpdateAsync(displayContent);
 
                 _logger.LogDebug(
@@ -614,6 +716,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 {
                     break;
                 }
+            }
+
+            if (useAdapter && jsonlBuffer.Length > 0)
+            {
+                ProcessJsonlLine(jsonlBuffer.ToString(), sessionId, adapter!, assistantMessageBuilder);
+                jsonlBuffer.Clear();
+            }
+
+            if (activeExecution.IsSuperseded && cancellationToken.IsCancellationRequested)
+            {
+                return;
             }
 
             // 完成流式回复
@@ -633,15 +746,25 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
 
+            activeExecution.SetLatestRenderedContent(finalOutput);
+            activeExecution.CancelPulse();
+            activeExecution.SetCompletedStatus();
+            // NOTE: 这条带会话标识的“已完成”普通文本回复不能删除。
+            // 飞书对流式卡片完成的提醒不够显眼，用户依赖这条文本通知及时感知 CLI 已结束，
+            // 同时还需要知道是哪一个会话完成了。
+            // 后续若重构流式卡片，也必须保留等价的显式完成通知能力。
             try
             {
-                await ReplyMessageAsync(messageId, "已完成", username, appId);
+                await ReplyMessageAsync(
+                    messageId,
+                    BuildCompletionNotificationText(sessionId),
+                    username,
+                    appId);
             }
             catch (Exception notificationEx)
             {
-                _logger.LogWarning(notificationEx, "发送完成通知失败: MessageId={MessageId}", messageId);
+                _logger.LogWarning(notificationEx, "发送流式完成文本通知失败: MessageId={MessageId}", messageId);
             }
-
             await handle.FinishAsync(finalOutput);
 
             // 添加助手回复到会话
@@ -670,9 +793,18 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 messageId,
                 sessionId);
         }
+        catch (OperationCanceledException) when (activeExecution.IsSuperseded && cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation(
+                "CLI execution cancelled because a newer message took over: Session={SessionId}, MessageId={MessageId}",
+                sessionId,
+                messageId);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "CLI execution failed for message: {MessageId}", messageId);
+            activeExecution.CancelPulse();
+            activeExecution.SetErrorStatus();
             await handle.FinishAsync($"执行出错：{ex.Message}");
         }
     }
@@ -811,6 +943,176 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         return lastUsefulContent;
     }
 
+    private (FeishuStreamingCardChrome Chrome, string BaseStatusMarkdown) BuildStreamingCardChrome(string chatId, string sessionId, string? username)
+    {
+        var chatKey = chatId.ToLowerInvariant();
+        var sessions = GetChatSessionEntities(chatKey, username);
+        var currentSession = sessions.FirstOrDefault(session =>
+            string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+
+        var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
+            ?? ExtractWorkspaceDirectoryName(currentSession?.WorkspacePath)
+            ?? "当前会话";
+        var toolLabel = GetToolDisplayName(currentSession?.ToolId);
+        var baseStatusMarkdown = $"当前会话：**{workspaceName}** · `{ShortSessionId(sessionId)}` · {toolLabel}";
+
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
+        };
+
+        foreach (var session in sessions
+                     .Where(session => !string.Equals(session.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+                     .Take(5))
+        {
+            chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+            {
+                Text = BuildSessionOptionText(session),
+                Value = new
+                {
+                    action = "switch_session",
+                    session_id = session.SessionId,
+                    chat_key = chatKey
+                }
+            });
+        }
+
+        chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
+        {
+            Text = "更多会话...",
+            Value = new
+            {
+                action = "open_session_manager",
+                chat_key = chatKey,
+                send_as_new_card = true
+            }
+        });
+
+        return (chrome, baseStatusMarkdown);
+    }
+
+    private async Task RunStreamingStatusPulseAsync(ActiveSessionExecution execution)
+    {
+        try
+        {
+            while (!execution.CancellationTokenSource.IsCancellationRequested)
+            {
+                await Task.Delay(StreamingStatusPulseIntervalMs, execution.CancellationTokenSource.Token);
+
+                if (execution.CancellationTokenSource.IsCancellationRequested || execution.IsSuperseded)
+                {
+                    break;
+                }
+
+                execution.AdvanceRunningStatus();
+                await execution.Handle.UpdateAsync(execution.GetLatestRenderedContent());
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private static async Task AwaitStatusPulseAsync(Task statusPulseTask)
+    {
+        try
+        {
+            await statusPulseTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private List<ChatSessionEntity> GetChatSessionEntities(string chatKey, string? username)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var bindingService = scope.ServiceProvider.GetRequiredService<IFeishuUserBindingService>();
+
+        return GetValidFeishuSessions(repo, bindingService, chatKey, username)
+            .Where(session => string.Equals(session.FeishuChatKey, chatKey, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(session => session.UpdatedAt)
+            .ToList();
+    }
+
+    private static string BuildSessionOptionText(ChatSessionEntity session)
+    {
+        var workspaceName = ExtractWorkspaceDirectoryName(session.WorkspacePath) ?? "未命名会话";
+        return $"{workspaceName} · {ShortSessionId(session.SessionId)} · {GetToolDisplayName(session.ToolId)}";
+    }
+
+    private string BuildCompletionNotificationText(string sessionId, string? fallbackWorkspacePath = null)
+    {
+        var workspaceName = TryGetSessionWorkspaceDirectoryName(sessionId)
+            ?? ExtractWorkspaceDirectoryName(fallbackWorkspacePath)
+            ?? "当前会话";
+
+        return $"当前会话：{workspaceName}  {ShortSessionId(sessionId)}\n已完成";
+    }
+
+    private static string ShortSessionId(string sessionId)
+    {
+        return string.IsNullOrWhiteSpace(sessionId)
+            ? "-"
+            : sessionId.Length <= 8
+                ? sessionId
+                : sessionId[..8];
+    }
+
+    private static string GetToolDisplayName(string? toolId)
+    {
+        return NormalizeToolId(toolId) switch
+        {
+            "claude-code" => "Claude Code",
+            "codex" => "Codex",
+            "opencode" => "OpenCode",
+            _ => "未设置"
+        };
+    }
+
+    private string? TryGetSessionWorkspaceDirectoryName(string sessionId)
+    {
+        try
+        {
+            return ExtractWorkspaceDirectoryName(_cliExecutor.GetSessionWorkspacePath(sessionId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "从 CLI 缓存获取飞书会话目录名失败，尝试仓储回退: {SessionId}", sessionId);
+        }
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            var session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+            return ExtractWorkspaceDirectoryName(session?.WorkspacePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "从仓储回退飞书会话目录名失败: {SessionId}", sessionId);
+            return null;
+        }
+    }
+
+    private static string? ExtractWorkspaceDirectoryName(string? workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return null;
+        }
+
+        var trimmedPath = workspacePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.IsNullOrWhiteSpace(trimmedPath))
+        {
+            return null;
+        }
+
+        var directoryName = Path.GetFileName(trimmedPath);
+        return string.IsNullOrWhiteSpace(directoryName) ? null : directoryName;
+    }
+
     /// <summary>
     /// 发送文本消息
     /// </summary>
@@ -905,7 +1207,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     /// 处理 JSONL 输出块，解析并提取助手消息
     /// 使用缓冲区处理跨 chunk 的不完整 JSON 行
     /// </summary>
-    private void ProcessJsonlChunk(string content, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder, StringBuilder jsonlBuffer)
+    private void ProcessJsonlChunk(string content, string sessionId, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder, StringBuilder jsonlBuffer)
     {
         if (string.IsNullOrEmpty(content))
         {
@@ -932,23 +1234,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             jsonlBuffer.Remove(0, newlineIndex + 1);
 
             // 处理这一行
-            ProcessJsonlLine(line, adapter, assistantMessageBuilder);
+            ProcessJsonlLine(line, sessionId, adapter, assistantMessageBuilder);
         }
     }
 
     /// <summary>
     /// 处理单行 JSONL
     /// </summary>
-    private void ProcessJsonlLine(string line, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder)
+    private void ProcessJsonlLine(string line, string sessionId, ICliToolAdapter adapter, StringBuilder assistantMessageBuilder)
     {
         var trimmedLine = line.Trim();
         if (string.IsNullOrWhiteSpace(trimmedLine))
-        {
-            return;
-        }
-
-        // 跳过非 JSON 行
-        if (!trimmedLine.StartsWith("{"))
         {
             return;
         }
@@ -962,6 +1258,16 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 return;
             }
 
+            var cliThreadId = adapter.ExtractSessionId(outputEvent);
+            if (!string.IsNullOrWhiteSpace(cliThreadId))
+            {
+                var existingThreadId = _cliExecutor.GetCliThreadId(sessionId);
+                if (!string.Equals(existingThreadId, cliThreadId, StringComparison.Ordinal))
+                {
+                    _cliExecutor.SetCliThreadId(sessionId, cliThreadId);
+                }
+            }
+
             // 提取助手消息
             var assistantMessage = adapter.ExtractAssistantMessage(outputEvent);
             if (!string.IsNullOrEmpty(assistantMessage))
@@ -972,6 +1278,107 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to parse JSONL line: {Line}", trimmedLine.Length > 100 ? trimmedLine[..100] : trimmedLine);
+        }
+    }
+
+    private sealed class ActiveSessionExecution : IDisposable
+    {
+        private readonly object _contentLock = new();
+        private int _superseded;
+        private int _runningFrame;
+        private string _latestRenderedContent;
+
+        public ActiveSessionExecution(
+            string sessionId,
+            string messageId,
+            FeishuStreamingHandle handle,
+            FeishuStreamingCardChrome chrome,
+            string baseStatusMarkdown,
+            string initialContent)
+        {
+            SessionId = sessionId;
+            MessageId = messageId;
+            Handle = handle;
+            Chrome = chrome;
+            BaseStatusMarkdown = baseStatusMarkdown;
+            _latestRenderedContent = initialContent;
+            CancellationTokenSource = new CancellationTokenSource();
+            OperationId = Guid.NewGuid();
+        }
+
+        public Guid OperationId { get; }
+
+        public string SessionId { get; }
+
+        public string MessageId { get; }
+
+        public FeishuStreamingHandle Handle { get; }
+
+        public FeishuStreamingCardChrome Chrome { get; }
+
+        public string BaseStatusMarkdown { get; }
+
+        public CancellationTokenSource CancellationTokenSource { get; }
+
+        public bool IsSuperseded => Volatile.Read(ref _superseded) == 1;
+
+        public void SetLatestRenderedContent(string content)
+        {
+            lock (_contentLock)
+            {
+                _latestRenderedContent = content;
+            }
+        }
+
+        public string GetLatestRenderedContent()
+        {
+            lock (_contentLock)
+            {
+                return _latestRenderedContent;
+            }
+        }
+
+        public void AdvanceRunningStatus()
+        {
+            Chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(
+                BaseStatusMarkdown,
+                Interlocked.Increment(ref _runningFrame));
+        }
+
+        public void SetCompletedStatus()
+        {
+            Chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(BaseStatusMarkdown);
+        }
+
+        public void SetStoppedStatus()
+        {
+            Chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithStoppedState(BaseStatusMarkdown);
+        }
+
+        public void SetErrorStatus()
+        {
+            Chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(BaseStatusMarkdown);
+        }
+
+        public void MarkSuperseded()
+        {
+            Interlocked.Exchange(ref _superseded, 1);
+        }
+
+        public void CancelPulse()
+        {
+            try
+            {
+                CancellationTokenSource.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            CancellationTokenSource.Dispose();
         }
     }
 }

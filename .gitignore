@@ -375,3 +375,8 @@ webcodecli-workspaces
 /webcodecli-logs
 .kiro
 .worktrees/
+.artifacts/
+.dotnet-cli/
+.omx/
+.playwright-cli/
+.workbuddy/

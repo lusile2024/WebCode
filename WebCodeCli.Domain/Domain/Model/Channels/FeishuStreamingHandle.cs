@@ -5,12 +5,14 @@ namespace WebCodeCli.Domain.Domain.Model.Channels;
 /// </summary>
 public class FeishuStreamingHandle : IDisposable
 {
-    private readonly Func<string, Task> _updateAsync;
-    private readonly Func<string, Task> _finishAsync;
+    private readonly Func<string, int, Task> _updateAsync;
+    private readonly Func<string, int, Task> _finishAsync;
+    private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly int _throttleMs;
     private DateTime _lastUpdate = DateTime.MinValue;
     private int _sequence = 0;
     private bool _disposed = false;
+    private bool _isFinished = false;
 
     /// <summary>
     /// 卡片 ID
@@ -30,8 +32,8 @@ public class FeishuStreamingHandle : IDisposable
     public FeishuStreamingHandle(
         string cardId,
         string messageId,
-        Func<string, Task> updateAsync,
-        Func<string, Task> finishAsync,
+        Func<string, int, Task> updateAsync,
+        Func<string, int, Task> finishAsync,
         int throttleMs = 500)
     {
         CardId = cardId;
@@ -46,15 +48,33 @@ public class FeishuStreamingHandle : IDisposable
     /// </summary>
     public async Task UpdateAsync(string content)
     {
-        if (_disposed) return;
+        if (_disposed || _isFinished)
+        {
+            return;
+        }
 
-        var now = DateTime.UtcNow;
-        if ((now - _lastUpdate).TotalMilliseconds < _throttleMs)
-            return; // 节流跳过
+        await _operationLock.WaitAsync();
+        try
+        {
+            if (_disposed || _isFinished)
+            {
+                return;
+            }
 
-        _lastUpdate = now;
-        _sequence++;
-        await _updateAsync(content);
+            var now = DateTime.UtcNow;
+            if ((now - _lastUpdate).TotalMilliseconds < _throttleMs)
+            {
+                return; // 节流跳过
+            }
+
+            _lastUpdate = now;
+            var sequence = Interlocked.Increment(ref _sequence);
+            await _updateAsync(content, sequence);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     /// <summary>
@@ -62,15 +82,33 @@ public class FeishuStreamingHandle : IDisposable
     /// </summary>
     public async Task FinishAsync(string finalContent)
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
 
-        _sequence++;
-        await _finishAsync(finalContent);
-        _disposed = true;
+        await _operationLock.WaitAsync();
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _isFinished = true;
+            var sequence = Interlocked.Increment(ref _sequence);
+            await _finishAsync(finalContent, sequence);
+            _disposed = true;
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public void Dispose()
     {
         _disposed = true;
+        _isFinished = true;
     }
 }

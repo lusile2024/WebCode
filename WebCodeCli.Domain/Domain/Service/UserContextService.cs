@@ -31,16 +31,10 @@ public class UserContextService : IUserContextService
 
     /// <summary>
     /// 获取当前用户名
-    /// 优先级：1. 覆盖值 2. 配置文件 3. 默认值
+    /// 优先级：1. 已认证用户 2. 覆盖值 3. 配置文件 4. 默认值
     /// </summary>
     public string GetCurrentUsername()
     {
-        // 如果有覆盖值，优先使用
-        if (!string.IsNullOrWhiteSpace(_overrideUsername))
-        {
-            return _overrideUsername;
-        }
-
         var claimsUsername = _httpContextAccessor.HttpContext?.User?.Identity?.IsAuthenticated == true
             ? _httpContextAccessor.HttpContext.User.Identity?.Name
             : null;
@@ -48,6 +42,12 @@ public class UserContextService : IUserContextService
         if (!string.IsNullOrWhiteSpace(claimsUsername))
         {
             return claimsUsername;
+        }
+
+        // 如果有覆盖值，优先于配置默认值，但不应覆盖已认证用户。
+        if (!string.IsNullOrWhiteSpace(_overrideUsername))
+        {
+            return _overrideUsername;
         }
         
         // 从配置读取，默认为 "default"

@@ -112,6 +112,38 @@ public class UserFeishuBotConfigService : IUserFeishuBotConfigService
         return FeishuBotAppIdOwnershipHelper.FindConflictingUsername(normalizedUsername, normalizedAppId, configs);
     }
 
+    public async Task<List<UserFeishuBotConfigEntity>> GetAutoStartCandidatesAsync()
+    {
+        var configs = await _repository.GetListAsync(x => x.AutoStartEnabled && x.IsEnabled && x.AppId != null && x.AppSecret != null);
+        return configs
+            .Where(UserFeishuBotOptionsFactory.HasUsableCredentials)
+            .ToList();
+    }
+
+    public async Task<bool> UpdateRuntimePreferenceAsync(string username, bool autoStartEnabled, DateTime? lastStartedAt = null)
+    {
+        var normalizedUsername = NormalizeValue(username);
+        if (normalizedUsername == null)
+        {
+            return false;
+        }
+
+        var existing = await _repository.GetByUsernameAsync(normalizedUsername);
+        if (existing == null)
+        {
+            return false;
+        }
+
+        existing.AutoStartEnabled = autoStartEnabled;
+        if (lastStartedAt.HasValue)
+        {
+            existing.LastStartedAt = lastStartedAt.Value;
+        }
+
+        existing.UpdatedAt = DateTime.Now;
+        return await _repository.UpdateAsync(existing);
+    }
+
     public async Task<FeishuOptions> GetEffectiveOptionsAsync(string? username)
     {
         var effective = GetSharedDefaults();

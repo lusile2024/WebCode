@@ -12,6 +12,7 @@ using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
 using WebCodeCli.Components.Dialogs;
+using WebCodeCli.Helpers;
 using WebCodeCli.Models;
 
 namespace WebCodeCli.Pages;
@@ -36,6 +37,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     [Inject] private IAuthenticationService AuthenticationService { get; set; } = default!;
     [Inject] private NavigationManager NavigationManager { get; set; } = default!;
     [Inject] private ISessionHistoryManager SessionHistoryManager { get; set; } = default!;
+    [Inject] private IExternalCliSessionHistoryService ExternalCliSessionHistoryService { get; set; } = default!;
     [Inject] private IContextManagerService ContextManagerService { get; set; } = default!;
     [Inject] private IFrontendProjectDetector FrontendProjectDetector { get; set; } = default!;
     [Inject] private IDevServerManager DevServerManager { get; set; } = default!;
@@ -164,6 +166,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
     // 环境变量配置模态框
     private EnvironmentVariableConfigModal _envConfigModal = default!;
+    private AssistantManagementModal _assistantManagementModal = default!;
+
+    // 外部 CLI 会话导入模态框
+    private ExternalCliSessionImportModal _externalCliSessionImportModal = default!;
     
     // 会话分享模态框
     private ShareSessionModal _shareSessionModal = default!;
@@ -248,6 +254,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     private bool _showSessionList = false;
     private bool _isLoadingSessions = false;
     private bool _isLoadingSession = false;
+    private string _syncingSessionId = string.Empty;
     private bool _openContextPanelOnRender = false;
     
     // Activity Bar 和 SidePanel 状态管理
@@ -560,29 +567,20 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             _allTools = CliExecutorService.GetAvailableTools(_currentUsername);
             
             // 获取启用的助手列表
-            _enabledAssistants = await SystemSettingsService.GetEnabledAssistantsAsync();
-            
-            // 根据启用的助手过滤工具
-            if (_enabledAssistants.Any())
+            _enabledAssistants = AssistantCatalogHelper.NormalizeEnabledAssistants(
+                await SystemSettingsService.GetEnabledAssistantsAsync());
+            _availableTools = AssistantCatalogHelper.FilterAvailableTools(_allTools, _enabledAssistants);
+
+            if (_availableTools.Any())
             {
-                _availableTools = _allTools.Where(tool => 
-                    _enabledAssistants.Any(assistant => 
-                        tool.Id.Contains(assistant.Replace("-", ""), StringComparison.OrdinalIgnoreCase) ||
-                        tool.Id.Equals(assistant, StringComparison.OrdinalIgnoreCase) ||
-                        (assistant == "claude-code" && tool.Id.Contains("claude", StringComparison.OrdinalIgnoreCase)) ||
-                        (assistant == "codex" && tool.Id.Contains("codex", StringComparison.OrdinalIgnoreCase)) ||
-                        (assistant == "opencode" && tool.Id.Contains("opencode", StringComparison.OrdinalIgnoreCase))
-                    )).ToList();
+                if (!_availableTools.Any(tool => tool.Id == _selectedToolId))
+                {
+                    _selectedToolId = _availableTools.First().Id;
+                }
             }
             else
             {
-                // 如果没有配置任何助手，显示所有工具（兼容旧配置）
-                _availableTools = _allTools;
-            }
-            
-            if (_availableTools.Any())
-            {
-                _selectedToolId = _availableTools.First().Id;
+                _selectedToolId = string.Empty;
             }
         }
         catch (Exception ex)
@@ -1932,6 +1930,16 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         StateHasChanged();
         await ScrollToBottom();
 
+        if (await TryHandleHistoryCommandAsync(message))
+        {
+            _isLoading = false;
+            _currentAssistantMessage = string.Empty;
+            StateHasChanged();
+            await ScrollToBottom();
+            await SaveCurrentSessionAsync();
+            return;
+        }
+
         // 创建助手消息
         var assistantMessage = new ChatMessage
         {
@@ -2096,8 +2104,126 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 });
             }, null, 50, Timeout.Infinite);
         }
-        
+
         return Task.CompletedTask;
+    }
+
+    private async Task<bool> TryHandleHistoryCommandAsync(string message)
+    {
+        if (!IsHistoryCommand(message))
+        {
+            return false;
+        }
+
+        var assistantMessage = new ChatMessage
+        {
+            Role = "assistant",
+            CliToolId = _selectedToolId,
+            IsCompleted = true
+        };
+
+        try
+        {
+            var session = _currentSession ?? await SessionHistoryManager.GetSessionAsync(_sessionId);
+            var cliThreadId = CliExecutorService.GetCliThreadId(_sessionId)
+                              ?? session?.CliThreadId
+                              ?? _activeThreadId;
+            var toolId = string.IsNullOrWhiteSpace(_selectedToolId) ? session?.ToolId : _selectedToolId;
+            var workspacePath = session?.WorkspacePath ?? GetSafeWorkspacePath();
+            var toolLabel = _availableTools.FirstOrDefault(tool => tool.Id == toolId)?.Name ?? toolId ?? "CLI";
+
+            if (string.IsNullOrWhiteSpace(toolId) || string.IsNullOrWhiteSpace(cliThreadId))
+            {
+                assistantMessage.Content = "当前会话尚未绑定 CLI 原生会话 ID，暂时无法读取历史消息。请先在该会话中执行一次 CLI 对话。";
+            }
+            else
+            {
+                var historyMessages = await ExternalCliSessionHistoryService.GetRecentMessagesAsync(toolId, cliThreadId, maxCount: 10);
+                assistantMessage.Content = BuildExternalCliHistoryText(historyMessages, toolLabel, workspacePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            assistantMessage.HasError = true;
+            assistantMessage.ErrorMessage = ex.Message;
+            assistantMessage.Content = $"读取 CLI 原生历史失败: {ex.Message}";
+        }
+
+        _messages.Add(assistantMessage);
+        ChatSessionService.AddMessage(_sessionId, assistantMessage);
+        await UpdatePreview(assistantMessage.Content);
+        StateHasChanged();
+        return true;
+    }
+
+    private string GetSafeWorkspacePath()
+    {
+        try
+        {
+            return CliExecutorService.GetSessionWorkspacePath(_sessionId);
+        }
+        catch
+        {
+            return _currentSession?.WorkspacePath ?? "(工作区未初始化或已失效)";
+        }
+    }
+
+    private static bool IsHistoryCommand(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        var trimmed = message.Trim();
+        return string.Equals(trimmed, "/history", StringComparison.OrdinalIgnoreCase)
+               || trimmed.StartsWith("/history ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildExternalCliHistoryText(
+        IReadOnlyList<ExternalCliHistoryMessage> messages,
+        string toolLabel,
+        string? workspacePath)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("当前 CLI 会话历史");
+        builder.AppendLine($"CLI 工具: {toolLabel}");
+        builder.AppendLine($"工作目录: {workspacePath ?? "(工作区未初始化或已失效)"}");
+        builder.AppendLine();
+
+        if (messages.Count == 0)
+        {
+            builder.AppendLine("该 CLI 会话暂无可解析的历史消息。");
+            return builder.ToString().TrimEnd();
+        }
+
+        foreach (var message in messages.TakeLast(10))
+        {
+            var roleLabel = string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase) ? "用户" : "助手";
+            if (message.CreatedAt.HasValue)
+            {
+                builder.AppendLine($"[{roleLabel}] {message.CreatedAt:HH:mm}");
+            }
+            else
+            {
+                builder.AppendLine($"[{roleLabel}]");
+            }
+
+            builder.AppendLine(NormalizeHistoryContent(message.Content));
+            builder.AppendLine();
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string NormalizeHistoryContent(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return string.Empty;
+        }
+
+        return content.Replace("\r\n", "\n").Trim();
     }
 
     private void QueueSaveOutputState(bool forceImmediate = false)
@@ -2212,6 +2338,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             _rawOutput = state.RawOutput ?? string.Empty;
             _isJsonlOutputActive = state.IsJsonlOutputActive;
             _activeThreadId = state.ActiveThreadId ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(_activeThreadId))
+            {
+                // 刷新页面/重连后恢复 CLI thread id，保证后续可以 resume
+                CliExecutorService.SetCliThreadId(sessionId, _activeThreadId);
+            }
 
             _jsonlEvents.Clear();
             _jsonlGroupOpenState.Clear();
@@ -2881,7 +3012,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         var selectedTool = _availableTools.FirstOrDefault(t => t.Id == _selectedToolId);
         if (selectedTool != null && _envConfigModal != null)
         {
-            await _envConfigModal.ShowAsync(selectedTool);
+            await _envConfigModal.ShowAsync(selectedTool, _currentUsername);
         }
     }
     
@@ -3906,6 +4037,58 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             StateHasChanged();
         }
     }
+
+    private async Task SyncSessionProviderAsync(SessionHistory session)
+    {
+        if (session == null || string.IsNullOrWhiteSpace(session.SessionId) || _syncingSessionId == session.SessionId)
+        {
+            return;
+        }
+
+        try
+        {
+            _syncingSessionId = session.SessionId;
+            StateHasChanged();
+
+            var effectiveToolId = string.IsNullOrWhiteSpace(session.CcSwitchSnapshotToolId)
+                ? session.ToolId
+                : session.CcSwitchSnapshotToolId;
+
+            await CliExecutorService.SyncSessionCcSwitchSnapshotAsync(session.SessionId, effectiveToolId);
+            await LoadSessionsAsync();
+
+            var refreshedSession = _sessions.FirstOrDefault(x => x.SessionId == session.SessionId);
+            if (refreshedSession != null && _currentSession?.SessionId == refreshedSession.SessionId)
+            {
+                MergeCcSwitchSnapshotState(_currentSession, refreshedSession);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[会话同步] 同步会话 Provider 失败: {ex.Message}");
+            await JSRuntime.InvokeVoidAsync("alert", T("codeAssistant.providerSyncFailed", ("message", ex.Message)));
+        }
+        finally
+        {
+            _syncingSessionId = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    private static void MergeCcSwitchSnapshotState(SessionHistory target, SessionHistory source)
+    {
+        target.ToolId = source.ToolId;
+        target.WorkspacePath = source.WorkspacePath;
+        target.UpdatedAt = source.UpdatedAt;
+        target.UsesCcSwitchSnapshot = source.UsesCcSwitchSnapshot;
+        target.CcSwitchSnapshotToolId = source.CcSwitchSnapshotToolId;
+        target.CcSwitchProviderId = source.CcSwitchProviderId;
+        target.CcSwitchProviderName = source.CcSwitchProviderName;
+        target.CcSwitchProviderCategory = source.CcSwitchProviderCategory;
+        target.CcSwitchLiveConfigPath = source.CcSwitchLiveConfigPath;
+        target.CcSwitchSnapshotRelativePath = source.CcSwitchSnapshotRelativePath;
+        target.CcSwitchSnapshotSyncedAt = source.CcSwitchSnapshotSyncedAt;
+    }
     
     /// <summary>
     /// 保存当前会话
@@ -4186,6 +4369,30 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>
+    /// 从侧边面板打开助手管理
+    /// </summary>
+    private async Task OpenAssistantManagementFromSidePanel()
+    {
+        _showSidePanel = false;
+        StateHasChanged();
+
+        if (_assistantManagementModal != null)
+        {
+            await _assistantManagementModal.ShowAsync();
+        }
+    }
+
+    /// <summary>
+    /// 从侧边面板打开“外部 CLI 会话导入”
+    /// </summary>
+    private async Task OpenExternalCliSessionImportFromSidePanel()
+    {
+        _showSidePanel = false;
+        StateHasChanged();
+        await OpenExternalCliSessionImportModalAsync();
+    }
+
+    /// <summary>
     /// 从侧边面板检查更新
     /// </summary>
     private async Task CheckForUpdateFromSidePanel()
@@ -4213,6 +4420,42 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         _showSidePanel = false;
         StateHasChanged();
         await HandleLogout();
+    }
+
+    private async Task OpenExternalCliSessionImportModalAsync()
+    {
+        if (_externalCliSessionImportModal == null)
+        {
+            return;
+        }
+
+        await _externalCliSessionImportModal.ShowAsync(_currentUsername);
+    }
+
+    private async Task HandleAssistantManagementSaved(List<string> enabledAssistants)
+    {
+        _enabledAssistants = AssistantCatalogHelper.NormalizeEnabledAssistants(enabledAssistants);
+        await LoadAvailableTools();
+        StateHasChanged();
+    }
+
+    private async Task ReloadSessionsAfterExternalImportAsync(string sessionId)
+    {
+        // 导入成功后刷新会话列表（不强制切换）
+        await LoadSessionsAsync();
+        StateHasChanged();
+    }
+
+    private async Task OpenSessionFromExternalImportAsync(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return;
+        }
+
+        // 打开前先同步刷新一次列表，避免 UI 与 DB 不一致
+        await LoadSessionsAsync();
+        await LoadSession(sessionId);
     }
     
     /// <summary>

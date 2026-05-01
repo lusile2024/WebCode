@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using WebCodeCli.Domain.Common;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
@@ -29,6 +30,7 @@ public class CliExecutorService : ICliExecutorService
     private readonly IServiceProvider _serviceProvider;
     private readonly IChatSessionService _chatSessionService;
     private readonly ICliAdapterFactory _adapterFactory;
+    private readonly ICcSwitchService _ccSwitchService;
     
     // 缓存的有效工作区根目录
     private string? _effectiveWorkspaceRoot;
@@ -52,7 +54,8 @@ public class CliExecutorService : ICliExecutorService
         ILogger<PersistentProcessManager> processManagerLogger,
         IServiceProvider serviceProvider,
         IChatSessionService chatSessionService,
-        ICliAdapterFactory adapterFactory)
+        ICliAdapterFactory adapterFactory,
+        ICcSwitchService ccSwitchService)
     {
         _logger = logger;
         _options = options.Value;
@@ -61,6 +64,7 @@ public class CliExecutorService : ICliExecutorService
         _serviceProvider = serviceProvider;
         _chatSessionService = chatSessionService;
         _adapterFactory = adapterFactory;
+        _ccSwitchService = ccSwitchService;
         
         // 初始化工作区根目录（延迟加载，首次使用时从数据库获取）
         InitializeWorkspaceRoot();
@@ -175,11 +179,73 @@ public class CliExecutorService : ICliExecutorService
 
     public string? GetCliThreadId(string sessionId)
     {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
         lock (_cliSessionLock)
         {
-            _cliThreadIds.TryGetValue(sessionId, out var threadId);
-            return threadId;
+            if (_cliThreadIds.TryGetValue(sessionId, out var cached) && !string.IsNullOrWhiteSpace(cached))
+            {
+                return cached;
+            }
         }
+
+        // 缓存未命中时，从数据库回退（ChatSession.CliThreadId / SessionOutput.ActiveThreadId）
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+
+            var sessionRepo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+            var session = sessionRepo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+            var threadId = session?.CliThreadId;
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                var outputService = scope.ServiceProvider.GetService<ISessionOutputService>();
+                var output = outputService?.GetBySessionIdAsync(sessionId).GetAwaiter().GetResult();
+                if (!string.IsNullOrWhiteSpace(output?.ActiveThreadId))
+                {
+                    threadId = output.ActiveThreadId;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(threadId) && session != null)
+            {
+                threadId = CliThreadIdRecoveryHelper.TryRecoverFromImportedTitle(session.ToolId, session.Title);
+                if (!string.IsNullOrWhiteSpace(threadId))
+                {
+                    _logger.LogInformation("从导入标题恢复会话 {SessionId} 的 CLI ThreadId: {ThreadId}", sessionId, threadId);
+
+                    lock (_cliSessionLock)
+                    {
+                        _cliThreadIds[sessionId] = threadId;
+                    }
+
+                    if (sessionRepo != null)
+                    {
+                        _ = sessionRepo.UpdateCliThreadIdAsync(sessionId, threadId).GetAwaiter().GetResult();
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(threadId))
+            {
+                lock (_cliSessionLock)
+                {
+                    _cliThreadIds[sessionId] = threadId;
+                }
+
+                return threadId;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "从数据库回退 CLI ThreadId 失败: {SessionId}", sessionId);
+        }
+
+        return null;
     }
 
     public void SetCliThreadId(string sessionId, string threadId)
@@ -190,6 +256,18 @@ public class CliExecutorService : ICliExecutorService
         {
             _cliThreadIds[sessionId] = threadId;
             _logger.LogInformation("设置会话 {SessionId} 的CLI线程ID: {ThreadId}", sessionId, threadId);
+        }
+
+        // 最佳努力：持久化到数据库，保证服务重启/页面刷新后仍可恢复会话
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            _ = repo.UpdateCliThreadIdAsync(sessionId, threadId).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "持久化 CLI ThreadId 失败: {SessionId}", sessionId);
         }
     }
 
@@ -203,13 +281,21 @@ public class CliExecutorService : ICliExecutorService
     {
         var username = ResolveUsernameForToolOperation(null, sessionId);
         var tool = GetTool(toolId, username);
+        if (tool == null && await HasValidCcSwitchSnapshotAsync(sessionId, toolId))
+        {
+            tool = _options.Tools
+                .Where(t => t.Enabled)
+                .FirstOrDefault(t => string.Equals(t.Id, toolId, StringComparison.OrdinalIgnoreCase));
+        }
+
         if (tool == null)
         {
+            var launchBlockingMessage = await GetLaunchBlockingMessageAsync(toolId, cancellationToken);
             yield return new StreamOutputChunk
             {
                 IsError = true,
                 IsCompleted = true,
-                ErrorMessage = $"CLI 工具 '{toolId}' 不存在或当前用户无权使用"
+                ErrorMessage = launchBlockingMessage ?? $"CLI 工具 '{toolId}' 不存在或当前用户无权使用"
             };
             yield break;
         }
@@ -275,17 +361,56 @@ public class CliExecutorService : ICliExecutorService
         string userPrompt,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var launchBlockingMessage = await GetLaunchBlockingMessageAsync(tool.Id, sessionId, cancellationToken);
+        if (launchBlockingMessage != null)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = launchBlockingMessage
+            };
+            yield break;
+        }
+
         var sessionWorkspace = GetOrCreateSessionWorkspace(sessionId);
+        var workingDirectory = !string.IsNullOrWhiteSpace(tool.WorkingDirectory)
+            ? tool.WorkingDirectory
+            : sessionWorkspace;
+        var workingDirectoryError = GetWorkingDirectoryValidationError(workingDirectory, sessionId);
+        if (workingDirectoryError != null)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = workingDirectoryError
+            };
+            yield break;
+        }
         
         // 解析命令路径
         var resolvedCommand = ResolveCommandPath(tool.Command);
+
+        var managedSnapshotError = await EnsureManagedToolSessionSnapshotAsync(sessionId, tool.Id, sessionWorkspace, cancellationToken);
+        if (managedSnapshotError != null)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = managedSnapshotError
+            };
+            yield break;
+        }
         
         // 获取环境变量(优先从数据库)
         var environmentVariables = await GetToolEnvironmentVariablesAsync(tool.Id);
         
         // 对于 Codex 工具，需要根据环境变量动态生成配置文件
         // 因为 Codex CLI 优先读取配置文件而非环境变量
-        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
+            && !_ccSwitchService.IsManagedTool(tool.Id))
         {
             GenerateCodexConfigFile(environmentVariables);
         }
@@ -475,6 +600,8 @@ public class CliExecutorService : ICliExecutorService
 
         if (cancelled)
         {
+            _processManager.CleanupSessionProcesses(sessionId);
+
             yield return new StreamOutputChunk
             {
                 IsError = true,
@@ -599,6 +726,18 @@ public class CliExecutorService : ICliExecutorService
         string userPrompt,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var launchBlockingMessage = await GetLaunchBlockingMessageAsync(tool.Id, sessionId, cancellationToken);
+        if (launchBlockingMessage != null)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = launchBlockingMessage
+            };
+            yield break;
+        }
+
         Process? process = null;
         
         // 获取适配器
@@ -610,6 +749,18 @@ public class CliExecutorService : ICliExecutorService
         
         // 获取或创建会话专属的工作目录
         var sessionWorkspace = GetOrCreateSessionWorkspace(sessionId);
+
+        var managedSnapshotError = await EnsureManagedToolSessionSnapshotAsync(sessionId, tool.Id, sessionWorkspace, cancellationToken);
+        if (managedSnapshotError != null)
+        {
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = managedSnapshotError
+            };
+            yield break;
+        }
         
         // 构建会话上下文
         var sessionContext = new CliSessionContext
@@ -641,7 +792,8 @@ public class CliExecutorService : ICliExecutorService
         
         // 对于 Codex 工具，需要根据环境变量动态生成配置文件
         // 因为 Codex CLI 优先读取配置文件而非环境变量
-        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
+            && !_ccSwitchService.IsManagedTool(tool.Id))
         {
             GenerateCodexConfigFile(environmentVariables);
         }
@@ -671,6 +823,19 @@ public class CliExecutorService : ICliExecutorService
         {
             // 使用会话专属的工作目录
             startInfo.WorkingDirectory = sessionWorkspace;
+        }
+
+        var workingDirectoryError = GetWorkingDirectoryValidationError(startInfo.WorkingDirectory, sessionId);
+        if (workingDirectoryError != null)
+        {
+            _logger.LogWarning("启动 CLI 进程前发现无效工作目录: {WorkingDirectory}", startInfo.WorkingDirectory);
+            yield return new StreamOutputChunk
+            {
+                IsError = true,
+                IsCompleted = true,
+                ErrorMessage = workingDirectoryError
+            };
+            yield break;
         }
 
         // 设置环境变量
@@ -716,6 +881,7 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
+        RewriteCodexLaunchToNode(startInfo, tool, commandPath, arguments);
         RewriteClaudeLaunchToNode(startInfo, tool, commandPath, arguments);
         EnsurePreferredNodeForClaude(startInfo, tool, commandPath);
 
@@ -862,6 +1028,17 @@ public class CliExecutorService : ICliExecutorService
             else
             {
                 processCancelled = true;
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "取消执行时终止进程失败");
+                }
             }
         }
 
@@ -885,15 +1062,18 @@ public class CliExecutorService : ICliExecutorService
         }
         else if (process.ExitCode != 0)
         {
+            var output = fullOutput.ToString();
+            var failureMessage = BuildDetailedFailureMessage(output, adapter, process.ExitCode);
+
             yield return new StreamOutputChunk
             {
                 IsError = true,
                 IsCompleted = true,
-                ErrorMessage = $"执行失败（退出码 {process.ExitCode}）"
+                ErrorMessage = failureMessage
             };
 
-            _logger.LogWarning("CLI 工具执行失败: {Tool}, 退出代码: {ExitCode}",
-                tool.Name, process.ExitCode);
+            _logger.LogWarning("CLI 工具执行失败: {Tool}, 退出代码: {ExitCode}, 错误信息: {ErrorMessage}",
+                tool.Name, process.ExitCode, failureMessage);
         }
         else
         {
@@ -1033,7 +1213,7 @@ public class CliExecutorService : ICliExecutorService
 
     public List<CliToolConfig> GetAvailableTools(string? username = null)
     {
-        var enabledTools = _options.Tools.Where(t => t.Enabled).ToList();
+        var enabledTools = FilterCcSwitchLaunchReadyTools(_options.Tools.Where(t => t.Enabled));
         var resolvedUsername = ResolveUsernameForToolOperation(username);
         if (string.IsNullOrWhiteSpace(resolvedUsername))
         {
@@ -1139,7 +1319,46 @@ public class CliExecutorService : ICliExecutorService
         {
             if (_sessionWorkspaces.TryGetValue(sessionId, out var existingWorkspace))
             {
-                return existingWorkspace;
+                if (Directory.Exists(existingWorkspace))
+                {
+                    return existingWorkspace;
+                }
+
+                _logger.LogWarning("缓存中的会话工作目录已不存在，将重新解析: {SessionId}, {Workspace}", sessionId, existingWorkspace);
+                _sessionWorkspaces.Remove(sessionId);
+            }
+
+            // 优先使用数据库中已绑定的工作目录（适用于：自定义目录 / 外部会话导入 / 进程重启后恢复）
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var chatSessionRepository = scope.ServiceProvider.GetService<IChatSessionRepository>();
+                var session = chatSessionRepository?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+
+                if (session != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(session.WorkspacePath) && Directory.Exists(session.WorkspacePath))
+                    {
+                        _sessionWorkspaces[sessionId] = session.WorkspacePath;
+                        return session.WorkspacePath;
+                    }
+
+                    // 自定义目录但不存在时，避免悄悄创建临时目录导致误用
+                    if (session.IsCustomWorkspace && !string.IsNullOrWhiteSpace(session.WorkspacePath))
+                    {
+                        throw new InvalidOperationException(
+                            $"会话 {sessionId} 工作目录不存在或已被清理，请重新创建会话");
+                    }
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // 自定义目录不存在时：直接失败，避免静默创建临时目录导致误用
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "从数据库恢复会话工作目录失败，将创建临时目录: {SessionId}", sessionId);
             }
 
             // 创建新的会话工作目录
@@ -1159,6 +1378,22 @@ public class CliExecutorService : ICliExecutorService
                 // 在工作目录中创建一个标记文件,记录创建时间
                 var markerFile = Path.Combine(workspacePath, ".workspace_info");
                 File.WriteAllText(markerFile, $"Created: {DateTime.UtcNow:O}\nSessionId: {sessionId}");
+
+                // 最佳努力：把新创建的临时目录绑定写回数据库，避免后续 GetSessionWorkspacePath 查询不到
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var chatSessionRepository = scope.ServiceProvider.GetService<IChatSessionRepository>();
+                    if (chatSessionRepository != null)
+                    {
+                        _ = chatSessionRepository.UpdateWorkspaceBindingAsync(sessionId, workspacePath, isCustomWorkspace: false)
+                            .GetAwaiter().GetResult();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "写回会话工作目录绑定失败(可忽略): {SessionId}", sessionId);
+                }
                 
                 return workspacePath;
             }
@@ -1355,6 +1590,105 @@ public class CliExecutorService : ICliExecutorService
             _logger.LogError(ex, "解析CLI thread id失败");
             return null;
         }
+    }
+
+    /// <summary>
+    /// 从CLI输出中构建更具体的失败信息，优先返回适配器解析出的上游错误
+    /// </summary>
+    private string BuildDetailedFailureMessage(string output, ICliToolAdapter? adapter, int exitCode)
+    {
+        if (adapter != null)
+        {
+            var parsedFailureMessage = ParseCliFailureMessage(output, adapter);
+            if (!string.IsNullOrWhiteSpace(parsedFailureMessage))
+            {
+                return parsedFailureMessage;
+            }
+        }
+
+        return $"执行失败（退出码 {exitCode}）";
+    }
+
+    /// <summary>
+    /// 使用适配器从CLI输出中解析失败原因
+    /// </summary>
+    private string? ParseCliFailureMessage(string output, ICliToolAdapter adapter)
+    {
+        try
+        {
+            string? lastFallbackMessage = null;
+            string? lastDetailedMessage = null;
+
+            var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var line in lines)
+            {
+                var trimmedLine = line.Trim();
+                if (string.IsNullOrEmpty(trimmedLine))
+                {
+                    continue;
+                }
+
+                var outputEvent = adapter.ParseOutputLine(trimmedLine);
+                if (outputEvent == null || !outputEvent.IsError)
+                {
+                    continue;
+                }
+
+                var detailedMessage = SelectFailureMessage(outputEvent, skipTransientMessages: true);
+                if (!string.IsNullOrWhiteSpace(detailedMessage))
+                {
+                    lastDetailedMessage = detailedMessage;
+                }
+
+                var fallbackMessage = SelectFailureMessage(outputEvent, skipTransientMessages: false);
+                if (!string.IsNullOrWhiteSpace(fallbackMessage))
+                {
+                    lastFallbackMessage = fallbackMessage;
+                }
+            }
+
+            return lastDetailedMessage ?? lastFallbackMessage;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "解析CLI失败信息失败");
+            return null;
+        }
+    }
+
+    private static string? SelectFailureMessage(CliOutputEvent outputEvent, bool skipTransientMessages)
+    {
+        var candidates = new[] { outputEvent.ErrorMessage, outputEvent.Content };
+
+        foreach (var candidate in candidates)
+        {
+            var normalizedCandidate = NormalizeFailureMessage(candidate);
+            if (string.IsNullOrWhiteSpace(normalizedCandidate))
+            {
+                continue;
+            }
+
+            if (skipTransientMessages && IsTransientFailureMessage(normalizedCandidate))
+            {
+                continue;
+            }
+
+            return normalizedCandidate;
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeFailureMessage(string? message)
+    {
+        return string.IsNullOrWhiteSpace(message) ? null : message.Trim();
+    }
+
+    private static bool IsTransientFailureMessage(string message)
+    {
+        return message.StartsWith("Reconnecting...", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(message, "本轮交互失败。", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(message, "发生未知错误。", StringComparison.OrdinalIgnoreCase);
     }
     
     /// <summary>
@@ -1636,13 +1970,153 @@ public class CliExecutorService : ICliExecutorService
             }
         }
 
+        var resolvedFromPath = ResolveCommandFromPathEnvironment(command);
+        if (!string.IsNullOrWhiteSpace(resolvedFromPath))
+        {
+            _logger.LogDebug("将系统PATH中的命令 {Command} 解析为完整路径: {FullPath}", command, resolvedFromPath);
+            return resolvedFromPath;
+        }
+
         // 否则返回原始命令(假设是系统PATH中的命令)
+        if (OperatingSystem.IsWindows())
+        {
+            var pathResolvedCommand = TryResolveWindowsCommandPathFromPath(command);
+            if (!string.IsNullOrWhiteSpace(pathResolvedCommand))
+            {
+                _logger.LogDebug("浠?PATH 瑙ｆ瀽鍛戒护 {Command} 鍒? {FullPath}", command, pathResolvedCommand);
+                return pathResolvedCommand;
+            }
+        }
+
         return command;
+    }
+
+    private string? ResolveCommandFromPathEnvironment(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command) ||
+            command.Contains(Path.DirectorySeparatorChar) ||
+            command.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return null;
+        }
+
+        var pathValue = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathValue))
+        {
+            return null;
+        }
+
+        foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var normalizedDirectory = directory.Trim().Trim('"');
+            if (string.IsNullOrWhiteSpace(normalizedDirectory) || !Directory.Exists(normalizedDirectory))
+            {
+                continue;
+            }
+
+            foreach (var candidate in GetPathResolutionCandidates(normalizedDirectory, command))
+            {
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private IEnumerable<string> GetPathResolutionCandidates(string directory, string command)
+    {
+        if (Path.HasExtension(command))
+        {
+            yield return Path.Combine(directory, command);
+            yield break;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            yield return Path.Combine(directory, command);
+            yield break;
+        }
+
+        var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+        var extensions = string.IsNullOrWhiteSpace(pathExt)
+            ? [".COM", ".EXE", ".BAT", ".CMD"]
+            : pathExt.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var extension in extensions)
+        {
+            var normalizedExtension = extension.StartsWith(".", StringComparison.Ordinal)
+                ? extension
+                : "." + extension;
+
+            yield return Path.Combine(directory, command + normalizedExtension);
+        }
+    }
+
+    private string? GetWorkingDirectoryValidationError(string? workingDirectory, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return "工作目录为空，无法启动 CLI 进程。";
+        }
+
+        if (Directory.Exists(workingDirectory))
+        {
+            return null;
+        }
+
+        return $"会话 {sessionId} 的工作目录不存在: {workingDirectory}。请确认目录存在，或重新创建会话。";
     }
 
     /// <summary>
     /// 获取NPM全局安装路径（优先使用配置的路径，如果未配置则自动检测）
     /// </summary>
+    private string? TryResolveWindowsCommandPathFromPath(string command)
+    {
+        var pathValue = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(pathValue))
+        {
+            return null;
+        }
+
+        foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!Directory.Exists(directory))
+            {
+                continue;
+            }
+
+            foreach (var candidate in BuildWindowsCommandCandidates(command))
+            {
+                var fullPath = Path.Combine(directory, candidate);
+                if (File.Exists(fullPath))
+                {
+                    return fullPath;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> BuildWindowsCommandCandidates(string command)
+    {
+        var extension = Path.GetExtension(command);
+        if (!string.IsNullOrWhiteSpace(extension))
+        {
+            yield return command;
+            yield break;
+        }
+
+        yield return command + ".cmd";
+        yield return command + ".bat";
+        yield return command + ".exe";
+        yield return command + ".com";
+        yield return command;
+    }
+
     private string? GetNpmGlobalPath()
     {
         // 如果配置中指定了路径,直接使用
@@ -1722,46 +2196,287 @@ public class CliExecutorService : ICliExecutorService
     }
 
     /// <summary>
-    /// 获取指定工具的环境变量配置（智能合并：当数据库API key与本地配置一致时，优先使用本地完整配置）
+    /// 将会话固定的 Provider 快照同步到当前 cc-switch 激活 Provider
+    /// </summary>
+    public async Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        var session = await TryGetChatSessionAsync(sessionId);
+        var effectiveToolId = NormalizeManagedToolId(toolId ?? session?.ToolId);
+        if (string.IsNullOrWhiteSpace(effectiveToolId))
+        {
+            throw new InvalidOperationException("当前会话尚未绑定可同步的 CLI 工具。");
+        }
+
+        if (!_ccSwitchService.IsManagedTool(effectiveToolId))
+        {
+            throw new InvalidOperationException("当前会话未绑定由 cc-switch 管理的 CLI 工具。");
+        }
+
+        var sessionWorkspace = GetOrCreateSessionWorkspace(sessionId);
+        return await MaterializeCcSwitchSessionSnapshotAsync(sessionId, effectiveToolId, sessionWorkspace, cancellationToken);
+    }
+
+    private async Task<string?> EnsureManagedToolSessionSnapshotAsync(
+        string sessionId,
+        string toolId,
+        string sessionWorkspace,
+        CancellationToken cancellationToken)
+    {
+        var normalizedToolId = NormalizeManagedToolId(toolId);
+        if (string.IsNullOrWhiteSpace(normalizedToolId) || !_ccSwitchService.IsManagedTool(normalizedToolId))
+        {
+            return null;
+        }
+
+        var session = await TryGetChatSessionAsync(sessionId);
+        if (HasCcSwitchSnapshotForTool(session, normalizedToolId))
+        {
+            return GetCcSwitchSnapshotValidationError(session!, normalizedToolId);
+        }
+
+        try
+        {
+            await MaterializeCcSwitchSessionSnapshotAsync(sessionId, normalizedToolId, sessionWorkspace, cancellationToken);
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "同步会话 {SessionId} 的 cc-switch 快照失败: {ToolId}", sessionId, normalizedToolId);
+            return ex.Message;
+        }
+    }
+
+    private async Task<CcSwitchSessionSnapshot> MaterializeCcSwitchSessionSnapshotAsync(
+        string sessionId,
+        string toolId,
+        string sessionWorkspace,
+        CancellationToken cancellationToken)
+    {
+        var status = await _ccSwitchService.GetToolStatusAsync(toolId, cancellationToken);
+        if (!status.IsLaunchReady)
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(status.StatusMessage)
+                    ? $"CLI 工具 '{ResolveManagedToolDisplayName(toolId)}' 依赖 cc-switch，但当前未就绪。"
+                    : status.StatusMessage);
+        }
+
+        if (string.IsNullOrWhiteSpace(status.LiveConfigPath) || !File.Exists(status.LiveConfigPath))
+        {
+            throw new InvalidOperationException(
+                $"未找到 {ResolveManagedToolDisplayName(toolId)} 当前激活 Provider 的 live 配置文件，请先在 cc-switch 中完成同步。");
+        }
+
+        var snapshotRelativePath = GetCcSwitchSnapshotRelativePath(toolId);
+        var snapshotFullPath = Path.Combine(sessionWorkspace, snapshotRelativePath);
+        var snapshotDirectory = Path.GetDirectoryName(snapshotFullPath);
+        if (!string.IsNullOrWhiteSpace(snapshotDirectory))
+        {
+            Directory.CreateDirectory(snapshotDirectory);
+        }
+
+        await using (var source = new FileStream(status.LiveConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        await using (var target = new FileStream(snapshotFullPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            await source.CopyToAsync(target, cancellationToken);
+        }
+
+        var snapshot = new CcSwitchSessionSnapshot
+        {
+            UsesSnapshot = true,
+            ToolId = toolId,
+            ProviderId = status.ActiveProviderId,
+            ProviderName = status.ActiveProviderName,
+            ProviderCategory = status.ActiveProviderCategory,
+            SourceLiveConfigPath = status.LiveConfigPath,
+            SnapshotRelativePath = snapshotRelativePath,
+            SyncedAt = DateTime.Now
+        };
+
+        await PersistCcSwitchSessionSnapshotAsync(sessionId, toolId, sessionWorkspace, snapshot);
+        return snapshot;
+    }
+
+    private async Task PersistCcSwitchSessionSnapshotAsync(
+        string sessionId,
+        string toolId,
+        string workspacePath,
+        CcSwitchSessionSnapshot snapshot)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var chatSessionRepository = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var existingSession = await chatSessionRepository.GetByIdAsync(sessionId);
+
+        if (existingSession != null)
+        {
+            existingSession.ToolId = toolId;
+            existingSession.WorkspacePath ??= workspacePath;
+            existingSession.IsWorkspaceValid = Directory.Exists(workspacePath);
+            existingSession.UsesCcSwitchSnapshot = snapshot.UsesSnapshot;
+            existingSession.CcSwitchSnapshotToolId = snapshot.ToolId;
+            existingSession.CcSwitchProviderId = snapshot.ProviderId;
+            existingSession.CcSwitchProviderName = snapshot.ProviderName;
+            existingSession.CcSwitchProviderCategory = snapshot.ProviderCategory;
+            existingSession.CcSwitchLiveConfigPath = snapshot.SourceLiveConfigPath;
+            existingSession.CcSwitchSnapshotRelativePath = snapshot.SnapshotRelativePath;
+            existingSession.CcSwitchSnapshotSyncedAt = snapshot.SyncedAt;
+            existingSession.UpdatedAt = DateTime.Now;
+            await chatSessionRepository.InsertOrUpdateAsync(existingSession);
+            return;
+        }
+
+        var username = ResolveUsernameForToolOperation(null, sessionId) ?? "default";
+        await chatSessionRepository.InsertOrUpdateAsync(new ChatSessionEntity
+        {
+            SessionId = sessionId,
+            Username = username,
+            Title = "新会话",
+            WorkspacePath = workspacePath,
+            ToolId = toolId,
+            CreatedAt = DateTime.Now,
+            UpdatedAt = DateTime.Now,
+            IsWorkspaceValid = Directory.Exists(workspacePath),
+            UsesCcSwitchSnapshot = snapshot.UsesSnapshot,
+            CcSwitchSnapshotToolId = snapshot.ToolId,
+            CcSwitchProviderId = snapshot.ProviderId,
+            CcSwitchProviderName = snapshot.ProviderName,
+            CcSwitchProviderCategory = snapshot.ProviderCategory,
+            CcSwitchLiveConfigPath = snapshot.SourceLiveConfigPath,
+            CcSwitchSnapshotRelativePath = snapshot.SnapshotRelativePath,
+            CcSwitchSnapshotSyncedAt = snapshot.SyncedAt
+        });
+    }
+
+    private async Task<ChatSessionEntity?> TryGetChatSessionAsync(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var chatSessionRepository = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        return chatSessionRepository == null
+            ? null
+            : await chatSessionRepository.GetByIdAsync(sessionId);
+    }
+
+    private bool HasCcSwitchSnapshotForTool(ChatSessionEntity? session, string toolId)
+    {
+        return session != null
+            && session.UsesCcSwitchSnapshot
+            && string.Equals(NormalizeManagedToolId(session.CcSwitchSnapshotToolId), toolId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string? GetCcSwitchSnapshotValidationError(ChatSessionEntity session, string toolId)
+    {
+        if (string.IsNullOrWhiteSpace(session.CcSwitchSnapshotRelativePath))
+        {
+            return BuildCcSwitchSnapshotSyncRequiredMessage(toolId);
+        }
+
+        var workspacePath = ResolveSessionWorkspacePath(session.SessionId, session.WorkspacePath);
+        var snapshotFullPath = Path.Combine(workspacePath, session.CcSwitchSnapshotRelativePath);
+        if (!File.Exists(snapshotFullPath))
+        {
+            return BuildCcSwitchSnapshotSyncRequiredMessage(toolId);
+        }
+
+        return null;
+    }
+
+    private string ResolveSessionWorkspacePath(string sessionId, string? workspacePath)
+    {
+        if (!string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return workspacePath;
+        }
+
+        lock (_workspaceLock)
+        {
+            if (_sessionWorkspaces.TryGetValue(sessionId, out var cachedWorkspace))
+            {
+                return cachedWorkspace;
+            }
+        }
+
+        return Path.Combine(GetEffectiveWorkspaceRoot(), sessionId);
+    }
+
+    private static string GetCcSwitchSnapshotRelativePath(string toolId)
+    {
+        return NormalizeManagedToolId(toolId) switch
+        {
+            "claude-code" => Path.Combine(".claude", "settings.json"),
+            "codex" => Path.Combine(".codex", "config.toml"),
+            "opencode" => "opencode.json",
+            _ => throw new InvalidOperationException($"工具 '{toolId}' 不支持 cc-switch 会话快照。")
+        };
+    }
+
+    private static string NormalizeManagedToolId(string? toolId)
+    {
+        return toolId?.Trim().ToLowerInvariant() switch
+        {
+            "claude" => "claude-code",
+            "opencode-cli" => "opencode",
+            var value => value ?? string.Empty
+        };
+    }
+
+    private static string ResolveManagedToolDisplayName(string toolId)
+    {
+        return NormalizeManagedToolId(toolId) switch
+        {
+            "claude-code" => "Claude Code",
+            "codex" => "Codex",
+            "opencode" => "OpenCode",
+            _ => toolId
+        };
+    }
+
+    private string BuildCcSwitchSnapshotSyncRequiredMessage(string toolId)
+    {
+        var toolName = ResolveManagedToolDisplayName(toolId);
+        return $"当前会话固定的 {toolName} Provider 快照已缺失或不可用。请点击“同步到当前 cc-switch Provider”后再继续。";
+    }
+
+    /// <summary>
+    /// 获取指定工具的环境变量配置
     /// </summary>
     public async Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null)
     {
+        var normalizedToolId = NormalizeManagedToolId(toolId);
+        if (_ccSwitchService.IsManagedTool(normalizedToolId))
+        {
+            try
+            {
+                var status = await _ccSwitchService.GetToolStatusAsync(normalizedToolId);
+                if (!status.IsLaunchReady)
+                {
+                    _logger.LogWarning("cc-switch 受管工具 {ToolId} 当前未就绪，忽略 WebCode 本地环境变量。Reason={Reason}", normalizedToolId, status.StatusMessage);
+                }
+                else
+                {
+                    _logger.LogInformation("cc-switch 受管工具 {ToolId} 通过会话快照或 live 配置驱动，WebCode 不再注入本地环境变量。", normalizedToolId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "读取 cc-switch 状态失败，工具 {ToolId} 将不注入本地环境变量", normalizedToolId);
+            }
+
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
         try
         {
             var resolvedUsername = ResolveUsernameForToolOperation(username);
             using var scope = _serviceProvider.CreateScope();
             var envService = scope.ServiceProvider.GetRequiredService<ICliToolEnvironmentService>();
             var dbEnvVars = await envService.GetEnvironmentVariablesAsync(toolId, resolvedUsername);
-
-            // 智能配置合并：检测本地CLI配置
-            var localConfig = await GetLocalCliConfigAsync(toolId);
-            if (localConfig != null && localConfig.HasValidApiKey)
-            {
-                // 比较数据库和本地配置的 API key
-                var dbApiKey = GetApiKeyFromEnvVars(dbEnvVars, toolId);
-                var localApiKey = GetApiKeyFromEnvVars(localConfig.EnvironmentVariables, toolId);
-
-                // 如果 API key 一致，优先使用本地完整配置
-                if (!string.IsNullOrEmpty(dbApiKey) &&
-                    !string.IsNullOrEmpty(localApiKey) &&
-                    string.Equals(dbApiKey, localApiKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation(
-                        "工具 {ToolId} 的数据库API key与本地配置一致，优先使用本地完整配置",
-                        toolId);
-
-                    // 记录配置来源
-                    foreach (var kvp in localConfig.EnvironmentVariables)
-                    {
-                        var maskedValue = kvp.Value.Length > 8
-                            ? kvp.Value.Substring(0, 4) + "****"
-                            : "****";
-                        _logger.LogDebug("  本地环境变量: {Key} = {Value}", kvp.Key, maskedValue);
-                    }
-
-                    return localConfig.EnvironmentVariables;
-                }
-            }
 
             // 默认使用数据库配置
             _logger.LogInformation("获取工具 {ToolId} 的环境变量，共 {Count} 个", toolId, dbEnvVars.Count);
@@ -1782,46 +2497,6 @@ public class CliExecutorService : ICliExecutorService
             // 降级到appsettings配置
             var tool = GetTool(toolId, username);
             return tool?.EnvironmentVariables ?? new Dictionary<string, string>();
-        }
-    }
-
-    /// <summary>
-    /// 从环境变量中提取 API key（根据工具类型）
-    /// </summary>
-    private string GetApiKeyFromEnvVars(Dictionary<string, string> envVars, string toolId)
-    {
-        return toolId.ToLower() switch
-        {
-            "claude-code" => envVars.GetValueOrDefault("ANTHROPIC_API_KEY", ""),
-            "codex" => envVars.GetValueOrDefault("OPENAI_API_KEY", "")
-                ?? envVars.GetValueOrDefault("NEW_API_KEY", ""),
-            "opencode" => envVars.GetValueOrDefault("OPENCODE_CONFIG_CONTENT", ""),
-            _ => ""
-        };
-    }
-
-    /// <summary>
-    /// 获取本地 CLI 配置
-    /// </summary>
-    private async Task<DetectedCliConfig?> GetLocalCliConfigAsync(string toolId)
-    {
-        try
-        {
-            using var scope = _serviceProvider.CreateScope();
-            var detector = scope.ServiceProvider.GetService<ILocalCliConfigDetector>();
-            if (detector == null)
-            {
-                return null;
-            }
-
-            var result = await detector.DetectLocalConfigsAsync();
-            return result?.DetectedConfigs?.FirstOrDefault(c =>
-                c.ToolId.Equals(toolId, StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "获取本地 CLI 配置失败: {ToolId}", toolId);
-            return null;
         }
     }
 
@@ -1868,6 +2543,51 @@ public class CliExecutorService : ICliExecutorService
         startInfo.FileName = preferredNodePath;
         startInfo.Arguments = $"\"{cliJsPath}\" {originalArguments}";
         _logger.LogInformation("Claude Code 改为直接使用 Node.js 启动: {NodePath}", preferredNodePath);
+    }
+
+    private void RewriteCodexLaunchToNode(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath, string originalArguments)
+    {
+        var isWindows = OperatingSystem.IsWindows();
+        var isCodexTool = IsCodexTool(tool, commandPath);
+        _logger.LogInformation("Codex 启动重写检查: IsWindows={IsWindows}, IsCodexTool={IsCodexTool}, CommandPath={CommandPath}", isWindows, isCodexTool, commandPath);
+
+        if (!isWindows || !isCodexTool)
+        {
+            return;
+        }
+
+        var extension = Path.GetExtension(commandPath);
+        if (!string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("Codex 启动重写跳过：命令不是 .cmd，Extension={Extension}", extension);
+            return;
+        }
+
+        var commandDirectory = Path.GetDirectoryName(commandPath);
+        if (string.IsNullOrWhiteSpace(commandDirectory))
+        {
+            _logger.LogWarning("Codex 启动重写跳过：无法获取命令目录，CommandPath={CommandPath}", commandPath);
+            return;
+        }
+
+        var cliJsPath = Path.Combine(commandDirectory, "node_modules", "@openai", "codex", "bin", "codex.js");
+        _logger.LogInformation("Codex 启动重写检查 codex.js 路径: {CliJsPath}, Exists={Exists}", cliJsPath, File.Exists(cliJsPath));
+        if (!File.Exists(cliJsPath))
+        {
+            return;
+        }
+
+        var preferredNodePath = GetPreferredNodeExecutablePath();
+        _logger.LogInformation("Codex 启动重写检查 Node.js 路径: {NodePath}", preferredNodePath ?? "<null>");
+        if (string.IsNullOrWhiteSpace(preferredNodePath) || !File.Exists(preferredNodePath))
+        {
+            _logger.LogWarning("Codex 启动重写跳过：未找到可用的 Node.js");
+            return;
+        }
+
+        startInfo.FileName = preferredNodePath;
+        startInfo.Arguments = $"\"{cliJsPath}\" {originalArguments}";
+        _logger.LogInformation("Codex 改为直接使用 Node.js 启动: {NodePath}", preferredNodePath);
     }
 
     private void EnsurePreferredNodeForClaude(ProcessStartInfo startInfo, CliToolConfig tool, string commandPath)
@@ -1959,11 +2679,25 @@ public class CliExecutorService : ICliExecutorService
             || string.Equals(fileName, "claude", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsCodexTool(CliToolConfig tool, string commandPath)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(commandPath);
+        return string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "codex", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// 保存指定工具的环境变量配置到数据库
     /// </summary>
     public async Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
     {
+        var normalizedToolId = NormalizeManagedToolId(toolId);
+        if (_ccSwitchService.IsManagedTool(normalizedToolId))
+        {
+            _logger.LogWarning("工具 {ToolId} 受 cc-switch 管理，拒绝保存 WebCode 本地环境变量", normalizedToolId);
+            return false;
+        }
+
         try
         {
             var resolvedUsername = ResolveUsernameForToolOperation(username);
@@ -2016,19 +2750,8 @@ public class CliExecutorService : ICliExecutorService
     {
         try
         {
-            // 从环境变量中提取配置值
-            var baseUrl = envVars.GetValueOrDefault("CODEX_BASE_URL", "https://api.antsk.cn/v1");
-            var model = envVars.GetValueOrDefault("CODEX_MODEL", "glm-4.7");
-            var profile = envVars.GetValueOrDefault("CODEX_PROFILE", "webcode");
-            var providerName = envVars.GetValueOrDefault("CODEX_PROVIDER_NAME", "webcode codex");
-            var wireApi = envVars.GetValueOrDefault("CODEX_WIRE_API", "chat");
-            var approvalPolicy = envVars.GetValueOrDefault("CODEX_APPROVAL_POLICY", "never");
-            var reasoningEffort = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_EFFORT", "medium");
-            var sandboxMode = envVars.GetValueOrDefault("CODEX_SANDBOX_MODE", "danger-full-access");
-            
-            // 计算配置哈希值（不包含时间戳）
-            var configKey = $"{baseUrl}|{model}|{profile}|{providerName}|{wireApi}|{approvalPolicy}|{reasoningEffort}|{sandboxMode}";
-            var configHash = configKey.GetHashCode().ToString();
+            var configContent = BuildCodexConfigContent(envVars);
+            var configHash = configContent.GetHashCode().ToString();
             
             // 检查配置是否变化
             lock (_codexConfigLock)
@@ -2062,47 +2785,169 @@ public class CliExecutorService : ICliExecutorService
                 Directory.CreateDirectory(codexConfigDir);
             }
             
-            // 生成配置文件内容（不包含动态时间戳，便于比较）
-            var configContent = $@"# Codex CLI 配置文件（由 WebCode 动态生成）
-
-model = ""{model}""
-model_reasoning_effort = ""{reasoningEffort}""
-
-profile = ""{profile}""
-windows_wsl_setup_acknowledged = true
-
-[model_providers.{profile}]
-name = ""{providerName}""
-base_url = ""{baseUrl}""
-env_key = ""NEW_API_KEY""
-wire_api = ""{wireApi}""
-
-
-[profiles.{profile}]
-# 深度模型
-model = ""{model}""
-# provider id
-model_provider = ""{profile}""
-# 审批策略
-approval_policy = ""{approvalPolicy}""
-# 推理强度
-model_reasoning_effort = ""{reasoningEffort}""
-# 推理总结粒度
-model_reasoning_summary = ""detailed""
-# 是否强制开启推理总结
-model_supports_reasoning_summaries = true
-model_reasoning_summary_format = ""experimental""
-sandbox_mode = ""{sandboxMode}""
-";
-            
             // 写入配置文件
             File.WriteAllText(codexConfigFile, configContent);
-            _logger.LogInformation("已生成 Codex 配置文件: {Path}, BaseUrl: {BaseUrl}", codexConfigFile, baseUrl);
+            _logger.LogInformation("已生成 Codex 配置文件: {Path}", codexConfigFile);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "生成 Codex 配置文件失败");
         }
+    }
+
+    private async Task<string?> GetLaunchBlockingMessageAsync(string toolId, string sessionId, CancellationToken cancellationToken = default)
+    {
+        var normalizedToolId = NormalizeManagedToolId(toolId);
+        if (_ccSwitchService.IsManagedTool(normalizedToolId))
+        {
+            var session = await TryGetChatSessionAsync(sessionId);
+            if (HasCcSwitchSnapshotForTool(session, normalizedToolId))
+            {
+                var snapshotValidationError = GetCcSwitchSnapshotValidationError(session!, normalizedToolId);
+                return snapshotValidationError ?? null;
+            }
+        }
+
+        return await GetLaunchBlockingMessageAsync(normalizedToolId, cancellationToken);
+    }
+
+    private async Task<bool> HasValidCcSwitchSnapshotAsync(string sessionId, string toolId)
+    {
+        var normalizedToolId = NormalizeManagedToolId(toolId);
+        if (!_ccSwitchService.IsManagedTool(normalizedToolId))
+        {
+            return false;
+        }
+
+        var session = await TryGetChatSessionAsync(sessionId);
+        return HasCcSwitchSnapshotForTool(session, normalizedToolId)
+            && GetCcSwitchSnapshotValidationError(session!, normalizedToolId) == null;
+    }
+
+    private async Task<string?> GetLaunchBlockingMessageAsync(string toolId, CancellationToken cancellationToken = default)
+    {
+        var normalizedToolId = NormalizeManagedToolId(toolId);
+        if (!_ccSwitchService.IsManagedTool(normalizedToolId))
+        {
+            return null;
+        }
+
+        try
+        {
+            var status = await _ccSwitchService.GetToolStatusAsync(normalizedToolId, cancellationToken);
+            if (status.IsLaunchReady)
+            {
+                return null;
+            }
+
+            return string.IsNullOrWhiteSpace(status.StatusMessage)
+                ? $"CLI 工具 '{status.ToolName}' 依赖 cc-switch，但当前未就绪。"
+                : status.StatusMessage;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "读取 cc-switch 工具状态失败: {ToolId}", normalizedToolId);
+            return $"CLI 工具 '{normalizedToolId}' 依赖 cc-switch，但当前状态无法读取。";
+        }
+    }
+
+    private List<CliToolConfig> FilterCcSwitchLaunchReadyTools(IEnumerable<CliToolConfig> tools)
+    {
+        var toolList = tools.ToList();
+        var managedToolIds = toolList
+            .Select(tool => NormalizeManagedToolId(tool.Id))
+            .Where(toolId => _ccSwitchService.IsManagedTool(toolId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (managedToolIds.Length == 0)
+        {
+            return toolList;
+        }
+
+        try
+        {
+            var statuses = _ccSwitchService
+                .GetToolStatusesAsync(managedToolIds)
+                .GetAwaiter()
+                .GetResult();
+
+            return toolList
+                .Where(tool =>
+                {
+                    var normalizedToolId = NormalizeManagedToolId(tool.Id);
+                    if (!_ccSwitchService.IsManagedTool(normalizedToolId))
+                    {
+                        return true;
+                    }
+
+                    if (statuses.TryGetValue(normalizedToolId, out var status) && status.IsLaunchReady)
+                    {
+                        return true;
+                    }
+
+                    var message = statuses.TryGetValue(normalizedToolId, out var blockedStatus)
+                        ? blockedStatus.StatusMessage
+                        : "未能读取 cc-switch 状态。";
+                    _logger.LogInformation("过滤未就绪的 cc-switch 受管工具: {ToolId}, Reason={Reason}", normalizedToolId, message);
+                    return false;
+                })
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "批量读取 cc-switch 状态失败，所有受管工具将被视为不可用");
+            return toolList
+                .Where(tool => !_ccSwitchService.IsManagedTool(NormalizeManagedToolId(tool.Id)))
+                .ToList();
+        }
+    }
+
+    private static string BuildCodexConfigContent(Dictionary<string, string> envVars)
+    {
+        var baseUrl = envVars.GetValueOrDefault("CODEX_BASE_URL", "https://api.routin.ai/v1");
+        var model = envVars.GetValueOrDefault("CODEX_MODEL", "gpt-5.4");
+        var providerName = envVars.GetValueOrDefault("CODEX_PROVIDER_NAME", "meteor-ai");
+        var providerId = envVars.GetValueOrDefault("CODEX_MODEL_PROVIDER", providerName);
+        var wireApi = envVars.GetValueOrDefault("CODEX_WIRE_API", "responses");
+        var approvalPolicy = envVars.GetValueOrDefault("CODEX_APPROVAL_POLICY", "never");
+        var reasoningEffort = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_EFFORT", "xhigh");
+        var reasoningSummary = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_SUMMARY", "detailed");
+        var modelVerbosity = envVars.GetValueOrDefault("CODEX_MODEL_VERBOSITY", "high");
+        var sandboxMode = envVars.GetValueOrDefault("CODEX_SANDBOX_MODE", "danger-full-access");
+        var maxContext = envVars.GetValueOrDefault("CODEX_MAX_CONTEXT", "1000000");
+        var contextCompactLimit = envVars.GetValueOrDefault("CODEX_CONTEXT_COMPACT_LIMIT", "800000");
+
+        return $@"# Codex CLI 配置文件（由 WebCode 动态生成）
+
+model = ""{model}""
+model_provider = ""{providerId}""
+disable_response_storage = true
+max_context = {maxContext}
+context_compact_limit = {contextCompactLimit}
+approval_policy = ""{approvalPolicy}""
+sandbox_mode = ""{sandboxMode}""
+
+rmcp_client = true
+model_reasoning_effort = ""{reasoningEffort}""
+model_reasoning_summary = ""{reasoningSummary}""
+model_verbosity = ""{modelVerbosity}""
+model_supports_reasoning_summaries = true
+
+[mcp_servers.claude]
+type = ""stdio""
+command = ""claude""
+args = [""mcp"", ""serve""]
+
+[model_providers.""{providerId}""]
+name = ""{providerName}""
+base_url = ""{baseUrl}""
+requires_openai_auth = true
+wire_api = ""{wireApi}""
+
+[windows]
+sandbox = ""elevated""
+";
     }
 
     /// <summary>

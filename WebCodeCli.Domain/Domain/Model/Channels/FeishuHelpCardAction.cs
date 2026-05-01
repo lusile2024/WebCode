@@ -82,6 +82,18 @@ public class FeishuHelpCardAction
     public string? ToolId { get; set; }
 
     /// <summary>
+    /// 外部 CLI 会话/线程 ID（导入外部会话时使用）
+    /// </summary>
+    [JsonPropertyName("cli_thread_id")]
+    public string? CliThreadId { get; set; }
+
+    /// <summary>
+    /// 外部会话标题（导入外部会话时使用）
+    /// </summary>
+    [JsonPropertyName("title")]
+    public string? Title { get; set; }
+
+    /// <summary>
     /// 当前浏览的目录路径（相对于会话工作区根目录）
     /// </summary>
     [JsonPropertyName("directory_path")]
@@ -98,4 +110,10 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("page")]
     public int? Page { get; set; }
+
+    /// <summary>
+    /// 是否以新的聊天卡片发送，而不是替换当前卡片
+    /// </summary>
+    [JsonPropertyName("send_as_new_card")]
+    public bool SendAsNewCard { get; set; }
 }

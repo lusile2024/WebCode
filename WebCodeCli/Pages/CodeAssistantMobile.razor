@@ -156,8 +156,47 @@
                                             @session.WorkspacePath
                                         </p>
                                     }
+                                    @if (IsManagedTool(session))
+                                    {
+                                        <p class="text-xs text-gray-500 mt-0.5 truncate" title="@GetPinnedProviderDisplay(session)">
+                                            @T("codeAssistant.pinnedProvider"): @GetPinnedProviderDisplay(session)
+                                        </p>
+                                        @if (session.CcSwitchSnapshotSyncedAt.HasValue)
+                                        {
+                                            <p class="text-xs text-gray-400 mt-0.5 truncate" title="@session.CcSwitchSnapshotSyncedAt.Value.ToString("yyyy-MM-dd HH:mm:ss")">
+                                                @T("codeAssistant.providerSyncedAt"): @FormatDateTime(session.CcSwitchSnapshotSyncedAt.Value)
+                                            </p>
+                                        }
+                                    }
                                 </div>
                                 <div class="flex items-center gap-1 flex-shrink-0 ml-2">
+                                    @if (IsManagedTool(session))
+                                    {
+                                        <button @onclick:stopPropagation="true"
+                                                @onclick="() => SyncSessionProviderAsync(session)"
+                                                disabled="@(_syncingSessionId == session.SessionId)"
+                                                class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-blue-100 active:bg-blue-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                                title="@T("codeAssistant.syncSessionProvider")">
+                                            @if (_syncingSessionId == session.SessionId)
+                                            {
+                                                <div class="animate-spin h-5 w-5 border-2 border-blue-300 rounded-full border-t-blue-700"></div>
+                                            }
+                                            else
+                                            {
+                                                <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M5.636 18.364A9 9 0 103.514 9m16.85 6a9 9 0 01-2.122 3.364"></path>
+                                                </svg>
+                                            }
+                                        </button>
+                                    }
+                                    <button @onclick:stopPropagation="true"
+                                            @onclick="() => ShowRenameDialog(session)"
+                                            class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100 active:bg-gray-200 transition-colors"
+                                            title="@T("codeAssistant.renameSession")">
+                                        <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                        </svg>
+                                    </button>
                                     <button @onclick:stopPropagation="true"
                                             @onclick="() => ShowDeleteSessionConfirm(session)"
                                             class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-red-100 active:bg-red-200 transition-colors">
@@ -190,6 +229,24 @@
         </div>
     </div>
 }
+
+<RenameSessionDialog Show="@(_showRenameDialog && _sessionToRename != null)"
+                    Title="@T("codeAssistant.renameDialogTitle")"
+                    LabelText="@T("codeAssistant.renameDialogLabel")"
+                    Placeholder="@T("codeAssistant.renameDialogPlaceholder")"
+                    HintText="@T("codeAssistant.renameDialogHint")"
+                    CurrentLengthText="@($"{_newSessionTitle?.Length ?? 0} / 100")"
+                    CancelText="@T("codeAssistant.renameDialogCancel")"
+                    SaveText="@T("codeAssistant.renameDialogSave")"
+                    SavingText="@T("codeAssistant.renameDialogSaving")"
+                    ErrorMessage="@_renameError"
+                    SessionTitle="@_newSessionTitle"
+                    SessionTitleChanged="@((string value) => _newSessionTitle = value)"
+                    IsSaving="@_isRenamingSession"
+                    InputClass="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-gray-600 focus:border-transparent"
+                    OnClose="CloseRenameDialog"
+                    OnConfirm="RenameSession"
+                    OnKeyDown="HandleRenameKeyDown" />
 
 <!-- 删除会话确认对话框 -->
 @if (_showDeleteSessionDialog && _sessionToDelete != null)
@@ -343,6 +400,12 @@
 
 <!-- 环境变量配置模态框 -->
 <EnvironmentVariableConfigModal @ref="_envConfigModal" />
+<AssistantManagementModal @ref="_assistantManagementModal" OnSaved="HandleAssistantManagementSaved" />
+
+<!-- 外部 CLI 会话导入模态框 -->
+<ExternalCliSessionImportModal @ref="_externalCliSessionImportModal"
+                               OnOpenSession="OpenSessionFromExternalImportAsync"
+                               OnImported="ReloadSessionsAfterExternalImportAsync" />
 
 <!-- 更新提示模态框 -->
 <UpdateNotificationModal @ref="_updateNotificationModal" />
@@ -1192,6 +1255,22 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                         </svg>
                     </button>
+
+                    <button @onclick="OpenAssistantManagement"
+                            class="w-full flex items-center gap-4 px-4 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-100">
+                        <div class="w-10 h-10 bg-gray-800/10 rounded-xl flex items-center justify-center">
+                            <svg class="w-5 h-5 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5V4H2v16h5m10 0v-4a3 3 0 00-3-3H10a3 3 0 00-3 3v4m10 0H7m10-12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1 text-left">
+                            <p class="font-medium text-gray-800">@T("assistantManagement.title")</p>
+                            <p class="text-xs text-gray-500">@T("assistantManagement.subtitle")</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </button>
                     
                     <button @onclick="OpenEnvConfig"
                             class="w-full flex items-center gap-4 px-4 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-100">
@@ -1204,6 +1283,23 @@
                         <div class="flex-1 text-left">
                             <p class="font-medium text-gray-800">@T("codeAssistant.envConfig")</p>
                             <p class="text-xs text-gray-500">@T("codeAssistant.envConfigDesc")</p>
+                        </div>
+                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </button>
+
+                    <button @onclick="OpenExternalCliSessionImportModalAsync"
+                            class="w-full flex items-center gap-4 px-4 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-100">
+                        <div class="w-10 h-10 bg-gray-700/10 rounded-xl flex items-center justify-center">
+                            <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M8 9l3 3-3 3m5 0h3M4 19h16a2 2 0 002-2V7a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1 text-left">
+                            <p class="font-medium text-gray-800">导入本地会话</p>
+                            <p class="text-xs text-gray-500">发现并导入 OpenCode/Codex/Claude Code</p>
                         </div>
                         <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>

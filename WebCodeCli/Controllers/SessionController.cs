@@ -17,17 +17,20 @@ public class SessionController : ControllerBase
     private readonly ISessionHistoryManager _sessionHistoryManager;
     private readonly ISessionOutputService _sessionOutputService;
     private readonly ISessionDirectoryService _sessionDirectoryService;
+    private readonly IExternalCliSessionService _externalCliSessionService;
     private readonly ILogger<SessionController> _logger;
 
     public SessionController(
         ISessionHistoryManager sessionHistoryManager,
         ISessionOutputService sessionOutputService,
         ISessionDirectoryService sessionDirectoryService,
+        IExternalCliSessionService externalCliSessionService,
         ILogger<SessionController> logger)
     {
         _sessionHistoryManager = sessionHistoryManager;
         _sessionOutputService = sessionOutputService;
         _sessionDirectoryService = sessionDirectoryService;
+        _externalCliSessionService = externalCliSessionService;
         _logger = logger;
     }
 
@@ -291,6 +294,59 @@ public class SessionController : ControllerBase
         {
             _logger.LogError(ex, "获取会话工作区失败: {SessionId}", sessionId);
             return StatusCode(500, new { error = "服务器错误", message = ex.Message });
+        }
+    }
+
+    #endregion
+
+    #region 外部 CLI 会话发现/导入
+
+    /// <summary>
+    /// 发现当前操作系统账户下的外部 CLI 会话（仅标记当前 Web 用户是否已导入）
+    /// </summary>
+    [HttpGet("discovered")]
+    public async Task<ActionResult<List<ExternalCliSessionSummary>>> DiscoverExternalSessions(
+        [FromQuery] string? toolId = null,
+        [FromQuery] int maxCount = 20)
+    {
+        try
+        {
+            var username = GetCurrentUsername();
+            var result = await _externalCliSessionService.DiscoverAsync(username, toolId, maxCount);
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "发现外部 CLI 会话失败");
+            return StatusCode(500, new { Error = "发现外部 CLI 会话失败" });
+        }
+    }
+
+    /// <summary>
+    /// 导入外部 CLI 会话为 WebCode 会话
+    /// </summary>
+    [HttpPost("import")]
+    public async Task<ActionResult<ImportExternalCliSessionResult>> ImportExternalSession([FromBody] ImportExternalCliSessionRequest request)
+    {
+        try
+        {
+            var username = GetCurrentUsername();
+            var result = await _externalCliSessionService.ImportAsync(username, request);
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "导入外部 CLI 会话失败");
+            return StatusCode(500, new ImportExternalCliSessionResult
+            {
+                Success = false,
+                ErrorMessage = "导入外部 CLI 会话失败"
+            });
         }
     }
 
