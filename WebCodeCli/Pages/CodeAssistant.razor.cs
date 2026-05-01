@@ -4330,7 +4330,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                 ? session.ToolId
                 : session.CcSwitchSnapshotToolId;
 
-            await CliExecutorService.SyncSessionCcSwitchSnapshotAsync(session.SessionId, effectiveToolId);
+            var syncResult = await CliExecutorService.SyncCodexThreadProviderAsync(session.SessionId, effectiveToolId);
             await LoadSessionsAsync();
 
             var refreshedSession = _sessions.FirstOrDefault(x => x.SessionId == session.SessionId);
@@ -4338,6 +4338,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             {
                 MergeCcSwitchSnapshotState(_currentSession, refreshedSession);
             }
+
+            var syncMessage = string.IsNullOrWhiteSpace(syncResult.Message)
+                ? "Codex thread 同步完成"
+                : syncResult.Message;
+            await JSRuntime.InvokeVoidAsync("alert", syncResult.HasWarnings ? $"⚠️ {syncMessage}" : $"✅ {syncMessage}");
         }
         catch (Exception ex)
         {

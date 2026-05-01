@@ -138,6 +138,14 @@ public interface ICliExecutorService
     Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// 将当前 Codex thread 同步到当前 cc-switch 激活 Provider
+    /// </summary>
+    Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(
+        string sessionId,
+        string? toolId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 保存指定工具的环境变量配置到数据库
     /// </summary>
     /// <param name="toolId">工具ID</param>

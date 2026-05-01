@@ -101,6 +101,166 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public async Task SyncCodexThreadProviderAsync_WhenCliThreadIdIsRecovered_PassesResolvedThreadAndActiveProviderToSyncService()
+    {
+        const string sessionId = "session-sync-thread-provider";
+        const string cliThreadId = "019d1338-0c3f-7eb3-ae2b-e4617eb7d24e";
+
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(workspaceRoot, "workspace");
+        var liveConfigPath = Path.Combine(workspaceRoot, "codex-live-config.toml");
+        Directory.CreateDirectory(workspacePath);
+        await File.WriteAllTextAsync(liveConfigPath, "model_provider = \"provider-new\"\n");
+
+        try
+        {
+            var repository = new StubChatSessionRepository(
+                [
+                    new ChatSessionEntity
+                    {
+                        SessionId = sessionId,
+                        Username = "luhaiyan",
+                        ToolId = "codex",
+                        Title = $"[Codex] {cliThreadId}",
+                        WorkspacePath = workspacePath,
+                        CreatedAt = DateTime.Now,
+                        UpdatedAt = DateTime.Now
+                    }
+                ]);
+            var threadSyncService = new RecordingCodexThreadProviderSyncService();
+            var ccSwitchService = new StubCcSwitchService(
+                new Dictionary<string, CcSwitchToolStatus>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["codex"] = new CcSwitchToolStatus
+                    {
+                        ToolId = "codex",
+                        ToolName = "Codex",
+                        IsManaged = true,
+                        IsDetected = true,
+                        HasDatabase = true,
+                        HasSettingsFile = true,
+                        HasLiveConfig = true,
+                        IsLaunchReady = true,
+                        ConfigDirectory = Path.Combine(workspaceRoot, "cc-switch"),
+                        LiveConfigPath = liveConfigPath,
+                        ActiveProviderId = "provider-new",
+                        ActiveProviderName = "Provider New",
+                        ActiveProviderCategory = "custom",
+                        StatusMessage = "ready"
+                    }
+                });
+            var serviceProvider = new NullServiceProvider(repository, new StubSessionOutputService(), threadSyncService);
+
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                    Tools = []
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                serviceProvider,
+                new StubChatSessionService(),
+                new StubCliAdapterFactory(),
+                ccSwitchService);
+
+            var result = await service.SyncCodexThreadProviderAsync(sessionId);
+
+            var request = Assert.Single(threadSyncService.Requests);
+            Assert.Equal(workspacePath, request.SessionWorkspacePath);
+            Assert.Equal(cliThreadId, request.ThreadId);
+            Assert.Equal("provider-new", request.TargetProviderId);
+            Assert.False(result.HasWarnings);
+            Assert.True(File.Exists(Path.Combine(workspacePath, ".codex", "config.toml")));
+            Assert.Equal(cliThreadId, repository.LastUpdatedCliThreadId);
+        }
+        finally
+        {
+            if (Directory.Exists(workspaceRoot))
+            {
+                Directory.Delete(workspaceRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task SyncCodexThreadProviderAsync_WhenCliThreadIdCannotBeResolved_FailsFast()
+    {
+        const string sessionId = "session-sync-thread-provider-missing";
+
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(workspaceRoot, "workspace");
+        var liveConfigPath = Path.Combine(workspaceRoot, "codex-live-config.toml");
+        Directory.CreateDirectory(workspacePath);
+        await File.WriteAllTextAsync(liveConfigPath, "model_provider = \"provider-new\"\n");
+
+        try
+        {
+            var repository = new StubChatSessionRepository(
+                [
+                    new ChatSessionEntity
+                    {
+                        SessionId = sessionId,
+                        Username = "luhaiyan",
+                        ToolId = "codex",
+                        Title = "new session",
+                        WorkspacePath = workspacePath,
+                        CreatedAt = DateTime.Now,
+                        UpdatedAt = DateTime.Now
+                    }
+                ]);
+            var threadSyncService = new RecordingCodexThreadProviderSyncService();
+            var ccSwitchService = new StubCcSwitchService(
+                new Dictionary<string, CcSwitchToolStatus>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["codex"] = new CcSwitchToolStatus
+                    {
+                        ToolId = "codex",
+                        ToolName = "Codex",
+                        IsManaged = true,
+                        IsDetected = true,
+                        HasDatabase = true,
+                        HasSettingsFile = true,
+                        HasLiveConfig = true,
+                        IsLaunchReady = true,
+                        ConfigDirectory = Path.Combine(workspaceRoot, "cc-switch"),
+                        LiveConfigPath = liveConfigPath,
+                        ActiveProviderId = "provider-new",
+                        ActiveProviderName = "Provider New",
+                        ActiveProviderCategory = "custom",
+                        StatusMessage = "ready"
+                    }
+                });
+            var serviceProvider = new NullServiceProvider(repository, new StubSessionOutputService(), threadSyncService);
+
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                    Tools = []
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                serviceProvider,
+                new StubChatSessionService(),
+                new StubCliAdapterFactory(),
+                ccSwitchService);
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.SyncCodexThreadProviderAsync(sessionId));
+
+            Assert.Contains("CLI thread", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(threadSyncService.Requests);
+        }
+        finally
+        {
+            if (Directory.Exists(workspaceRoot))
+            {
+                Directory.Delete(workspaceRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void CodexAdapter_BuildLowInterruptionArguments_UsesResumeFullAutoWithoutPrompt()
     {
         var adapter = new CodexAdapter();
@@ -1011,7 +1171,7 @@ public class CliExecutorServiceTests
             Command = "cmd.exe",
             PersistentModeArguments = $"/d /c \"{scriptPath}\"",
             UsePersistentProcess = true,
-            TimeoutSeconds = 1,
+            TimeoutSeconds = 5,
             Enabled = true
         };
 
@@ -1507,6 +1667,7 @@ args = ["mcp", "serve"]
         const string secondAuthContent = "{\n  \"OPENAI_API_KEY\": \"sk-provider-b\"\n}\n";
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        var originalCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
 
         Directory.CreateDirectory(workspacePath);
         Directory.CreateDirectory(liveConfigDirectory);
@@ -1518,6 +1679,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", sourceHomePath);
             Environment.SetEnvironmentVariable("USERPROFILE", sourceHomePath);
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
 
             var repository = new StubChatSessionRepository(
             [
@@ -1598,6 +1760,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            Environment.SetEnvironmentVariable("CODEX_HOME", originalCodexHome);
 
             if (Directory.Exists(tempRoot))
             {
@@ -1778,6 +1941,7 @@ args = ["mcp", "serve"]
         const string globalAuthAfterSwitchContent = "{\n  \"OPENAI_API_KEY\": \"sk-current-provider\"\n}\n";
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        var originalCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
 
         Directory.CreateDirectory(workspacePath);
         Directory.CreateDirectory(liveConfigDirectory);
@@ -1789,6 +1953,8 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", sourceHomePath);
             Environment.SetEnvironmentVariable("USERPROFILE", sourceHomePath);
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
 
             var repository = new StubChatSessionRepository(
             [
@@ -1831,7 +1997,7 @@ args = ["mcp", "serve"]
                             Id = "codex",
                             Name = "Codex",
                             Command = "powershell.exe",
-                            ArgumentTemplate = "-NoProfile -Command \"$authPath = Join-Path $env:USERPROFILE '.codex\\auth.json'; Write-Output (Get-Content $authPath -Raw)\"",
+                            ArgumentTemplate = "-NoProfile -Command \"$authPath = Join-Path $env:CODEX_HOME 'auth.json'; Write-Output (Get-Content $authPath -Raw)\"",
                             TimeoutSeconds = 10,
                             Enabled = true
                         }
@@ -1869,6 +2035,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            Environment.SetEnvironmentVariable("CODEX_HOME", originalCodexHome);
 
             if (Directory.Exists(tempRoot))
             {
@@ -1892,6 +2059,7 @@ args = ["mcp", "serve"]
         const string globalAuthAfterSwitchContent = "{\n  \"OPENAI_API_KEY\": \"sk-current-provider\"\n}\n";
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        var originalCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
 
         Directory.CreateDirectory(workspacePath);
         Directory.CreateDirectory(liveConfigDirectory);
@@ -1903,6 +2071,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", sourceHomePath);
             Environment.SetEnvironmentVariable("USERPROFILE", sourceHomePath);
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
 
             var repository = new StubChatSessionRepository(
             [
@@ -1985,6 +2154,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            Environment.SetEnvironmentVariable("CODEX_HOME", originalCodexHome);
 
             if (Directory.Exists(tempRoot))
             {
@@ -2135,6 +2305,7 @@ args = ["mcp", "serve"]
         const string rolloutContent = "{\"type\":\"thread.started\",\"thread_id\":\"019db9a3-19cf-7260-bece-1c08f337520a\"}\n";
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        var originalCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
 
         Directory.CreateDirectory(workspacePath);
         Directory.CreateDirectory(liveConfigDirectory);
@@ -2148,6 +2319,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", sourceHomePath);
             Environment.SetEnvironmentVariable("USERPROFILE", sourceHomePath);
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
 
             var repository = new StubChatSessionRepository(
             [
@@ -2219,6 +2391,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            Environment.SetEnvironmentVariable("CODEX_HOME", originalCodexHome);
 
             if (Directory.Exists(tempRoot))
             {
@@ -2389,6 +2562,7 @@ args = ["mcp", "serve"]
         const string workspaceRolloutContent = "{\"type\":\"thread.started\",\"thread_id\":\"019db9a3-19cf-7260-bece-1c08f337520a\"}\n";
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        var originalCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
 
         Directory.CreateDirectory(workspacePath);
         Directory.CreateDirectory(liveConfigDirectory);
@@ -2406,6 +2580,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", sourceHomePath);
             Environment.SetEnvironmentVariable("USERPROFILE", sourceHomePath);
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
 
             var repository = new StubChatSessionRepository(
             [
@@ -2477,6 +2652,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            Environment.SetEnvironmentVariable("CODEX_HOME", originalCodexHome);
 
             if (Directory.Exists(tempRoot))
             {
@@ -2501,6 +2677,7 @@ args = ["mcp", "serve"]
         const string globalAuthContent = "{\n  \"OPENAI_API_KEY\": \"sk-global-home\"\n}\n";
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        var originalCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
 
         Directory.CreateDirectory(Path.GetDirectoryName(projectAuthPath)!);
         Directory.CreateDirectory(liveConfigDirectory);
@@ -2513,6 +2690,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", sourceHomePath);
             Environment.SetEnvironmentVariable("USERPROFILE", sourceHomePath);
+            Environment.SetEnvironmentVariable("CODEX_HOME", Path.Combine(sourceHomePath, ".codex"));
 
             var repository = new StubChatSessionRepository(
             [
@@ -2556,7 +2734,7 @@ args = ["mcp", "serve"]
                             Id = "codex",
                             Name = "Codex",
                             Command = "powershell.exe",
-                            ArgumentTemplate = "-NoProfile -Command \"$authPath = Join-Path $env:USERPROFILE '.codex\\auth.json'; Write-Output (Get-Content $authPath -Raw)\"",
+                            ArgumentTemplate = "-NoProfile -Command \"$authPath = Join-Path $env:CODEX_HOME 'auth.json'; Write-Output (Get-Content $authPath -Raw)\"",
                             TimeoutSeconds = 10,
                             Enabled = true
                         }
@@ -2586,6 +2764,7 @@ args = ["mcp", "serve"]
         {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            Environment.SetEnvironmentVariable("CODEX_HOME", originalCodexHome);
 
             if (Directory.Exists(tempRoot))
             {
@@ -3297,6 +3476,24 @@ args = ["mcp", "serve"]
         public Task<bool> DeleteBySessionIdAsync(string sessionId) => Task.FromResult(true);
     }
 
+    private sealed class RecordingCodexThreadProviderSyncService : ICodexThreadProviderSyncService
+    {
+        public List<CodexThreadProviderSyncRequest> Requests { get; } = new();
+
+        public CodexThreadProviderSyncResult Result { get; set; } = new()
+        {
+            Message = "thread sync complete"
+        };
+
+        public Task<CodexThreadProviderSyncResult> SyncThreadProviderAsync(
+            CodexThreadProviderSyncRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(Result);
+        }
+    }
+
     private sealed class StubCcSwitchService : ICcSwitchService
     {
         private readonly Dictionary<string, CcSwitchToolStatus> _statuses;
@@ -3440,7 +3637,8 @@ args = ["mcp", "serve"]
 
     private sealed class NullServiceProvider(
         IChatSessionRepository? chatSessionRepository = null,
-        ISessionOutputService? sessionOutputService = null)
+        ISessionOutputService? sessionOutputService = null,
+        ICodexThreadProviderSyncService? codexThreadProviderSyncService = null)
         : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         public object? GetService(Type serviceType)
@@ -3458,6 +3656,11 @@ args = ["mcp", "serve"]
             if (serviceType == typeof(ISessionOutputService))
             {
                 return sessionOutputService;
+            }
+
+            if (serviceType == typeof(ICodexThreadProviderSyncService))
+            {
+                return codexThreadProviderSyncService;
             }
 
             return null;

@@ -2931,6 +2931,50 @@ public class CliExecutorService : ICliExecutorService
         return await MaterializeCcSwitchSessionSnapshotAsync(sessionId, effectiveToolId, sessionWorkspace, cancellationToken);
     }
 
+    public async Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(
+        string sessionId,
+        string? toolId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        var cliThreadId = GetCliThreadId(sessionId);
+        if (string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            throw new InvalidOperationException("当前会话尚未绑定 CLI thread，无法同步 Codex provider。");
+        }
+
+        var session = await TryGetChatSessionAsync(sessionId);
+        var effectiveToolId = NormalizeManagedToolId(toolId ?? session?.ToolId);
+        if (string.IsNullOrWhiteSpace(effectiveToolId))
+        {
+            throw new InvalidOperationException("当前会话尚未绑定可同步的 CLI 工具。");
+        }
+
+        if (!_ccSwitchService.IsManagedTool(effectiveToolId))
+        {
+            throw new InvalidOperationException("当前会话未绑定由 cc-switch 管理的 CLI 工具。");
+        }
+
+        var snapshot = await SyncSessionCcSwitchSnapshotAsync(sessionId, effectiveToolId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(snapshot?.ProviderId))
+        {
+            throw new InvalidOperationException("当前 cc-switch 未激活可同步的 Provider。");
+        }
+
+        var sessionWorkspace = GetSessionWorkspacePath(sessionId);
+        using var scope = _serviceProvider.CreateScope();
+        var threadSyncService = scope.ServiceProvider.GetRequiredService<ICodexThreadProviderSyncService>();
+        return await threadSyncService.SyncThreadProviderAsync(
+            new CodexThreadProviderSyncRequest
+            {
+                SessionWorkspacePath = sessionWorkspace,
+                ThreadId = cliThreadId,
+                TargetProviderId = snapshot.ProviderId
+            },
+            cancellationToken);
+    }
+
     private async Task<string?> EnsureManagedToolSessionSnapshotAsync(
         string sessionId,
         string toolId,

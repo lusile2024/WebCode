@@ -1506,12 +1506,14 @@ public class FeishuCardActionService
 
         try
         {
-            await _cliExecutor.SyncSessionCcSwitchSnapshotAsync(sessionId, effectiveToolId);
+            var syncResult = await _cliExecutor.SyncCodexThreadProviderAsync(sessionId, effectiveToolId);
             var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions);
             return _cardBuilder.BuildCardActionResponseV2(
                 card,
-                $"✅ 已将会话 {sessionId[..Math.Min(8, sessionId.Length)]} 同步到当前 cc-switch Provider",
-                "success");
+                string.IsNullOrWhiteSpace(syncResult.Message)
+                    ? $"已将会话 {sessionId[..Math.Min(8, sessionId.Length)]} 同步到当前 cc-switch Provider"
+                    : syncResult.Message,
+                syncResult.HasWarnings ? "warning" : "success");
         }
         catch (Exception ex)
         {

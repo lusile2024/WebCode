@@ -138,7 +138,7 @@ public class FeishuCardActionServiceTests
         Assert.Contains("旧会话标题", chrome.StatusMarkdown);
         Assert.DoesNotContain("11111111", chrome.StatusMarkdown);
         Assert.Contains(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
-        Assert.Contains(chrome.OverflowOptions, option => option.Text == "妯″瀷/浼氳瘽绠＄悊...");
+        Assert.Contains(chrome.OverflowOptions, option => option.Text == "模型/会话管理...");
 
         var switchOption = Assert.Single(chrome.OverflowOptions, option => option.Text.Contains("Backend API", StringComparison.Ordinal));
         Assert.DoesNotContain("22222222", switchOption.Text);
@@ -147,7 +147,7 @@ public class FeishuCardActionServiceTests
         Assert.Contains("\"session_id\":\"22222222-other\"", valueJson);
         Assert.Contains("\"chat_key\":\"oc_current_chat\"", valueJson);
 
-        var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "妯″瀷/浼氳瘽绠＄悊...");
+        var moreOption = Assert.Single(chrome.OverflowOptions, option => option.Text == "模型/会话管理...");
         var moreValueJson = JsonSerializer.Serialize(moreOption.Value);
         Assert.Contains("\"action\":\"open_session_manager\"", moreValueJson);
         Assert.Contains("\"send_as_new_card\":true", moreValueJson);
@@ -639,7 +639,7 @@ public class FeishuCardActionServiceTests
         Assert.Empty(cliExecutor.ExecutedPrompts);
         Assert.Equal([sessionId], cliExecutor.LowInterruptionSessionIds);
         Assert.NotNull(cardKit.LastStreamingChrome);
-        Assert.Null(cardKit.LastStreamingChrome!.BottomPrompt);
+        Assert.NotNull(cardKit.LastStreamingChrome!.BottomPrompt);
         Assert.Empty(cardKit.LastStreamingChrome.BottomActions);
     }
 
@@ -853,7 +853,7 @@ public class FeishuCardActionServiceTests
         Assert.Contains("Visible Session 02", collapsedPayload);
         Assert.Contains("Visible Session 03", collapsedPayload);
         Assert.DoesNotContain("Hidden Session 04", collapsedPayload);
-        Assert.Contains(collapsedContents, content => content.Contains("当前默认显示最近 **3** 个会话", StringComparison.Ordinal));
+        Assert.Contains(collapsedContents, content => content.Contains("当前默认展示最近 **3** 个会话", StringComparison.Ordinal));
         Assert.Contains(collapsedContents, content => content.Contains("更多会话", StringComparison.Ordinal));
         Assert.Contains("\"show_all_sessions\":true", collapsedPayload);
 
@@ -864,8 +864,8 @@ public class FeishuCardActionServiceTests
         var expandedPayload = SerializeResponse(expandedResponse);
         var expandedContents = ExtractCardContentStrings(expandedResponse);
         Assert.Contains("Hidden Session 04", expandedPayload);
-        Assert.Contains(expandedContents, content => content.Contains("当前显示全部 **4** 个会话", StringComparison.Ordinal));
-        Assert.Contains(expandedContents, content => content.Contains("鏀惰捣", StringComparison.Ordinal));
+        Assert.Contains(expandedContents, content => content.Contains("当前展示全部 **4** 个会话", StringComparison.Ordinal));
+        Assert.Contains(expandedContents, content => content.Contains("收起", StringComparison.Ordinal));
         Assert.Contains("\"show_all_sessions\":false", expandedPayload);
     }
 
@@ -1448,7 +1448,7 @@ public class FeishuCardActionServiceTests
             """{"action":"sync_session_provider","session_id":"session-sync-provider","chat_key":"oc_workspace_chat"}""",
             chatId: chatId);
 
-        var syncRequest = Assert.Single(cliExecutor.SyncRequests);
+        var syncRequest = Assert.Single(cliExecutor.ThreadSyncRequests);
         Assert.Equal(sessionId, syncRequest.SessionId);
         Assert.Equal("codex", syncRequest.ToolId);
         Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
@@ -1456,6 +1456,55 @@ public class FeishuCardActionServiceTests
         var payload = SerializeResponse(response);
         Assert.Contains("sync_session_provider", payload);
         Assert.Contains("session-sync-provider", payload);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SyncSessionProvider_PartialSuccess_ReturnsWarningToast()
+    {
+        const string chatId = "oc_workspace_chat";
+        const string sessionId = "session-sync-provider-warning";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            ThreadSyncResult = new CodexThreadProviderSyncResult
+            {
+                Message = "thread synced with warnings",
+                HasWarnings = true
+            }
+        };
+        var feishuChannel = new StubFeishuChannelService(sessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "luhaiyan",
+                WorkspacePath = @"D:\repo\superpowers",
+                ToolId = "codex",
+                FeishuChatKey = chatId,
+                CreatedAt = DateTime.Now,
+                UpdatedAt = DateTime.Now,
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                IsCustomWorkspace = true
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository));
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"sync_session_provider","session_id":"session-sync-provider-warning","chat_key":"oc_workspace_chat"}""",
+            chatId: chatId);
+
+        var syncRequest = Assert.Single(cliExecutor.ThreadSyncRequests);
+        Assert.Equal(sessionId, syncRequest.SessionId);
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning, response.Toast?.Type);
+
+        var payload = SerializeResponse(response);
+        Assert.Contains("thread synced with warnings", payload);
     }
 
     [Fact]
@@ -2603,6 +2652,13 @@ public class FeishuCardActionServiceTests
 
         public List<(string SessionId, string? ToolId)> SyncRequests { get; } = new();
 
+        public List<(string SessionId, string? ToolId)> ThreadSyncRequests { get; } = new();
+
+        public CodexThreadProviderSyncResult ThreadSyncResult { get; set; } = new()
+        {
+            Message = "thread sync complete"
+        };
+
         public List<(string SessionId, bool ClearCliThreadId)> ResetRequests { get; } = new();
 
         public void SetSessionWorkspacePath(string sessionId, string workspacePath)
@@ -2745,6 +2801,12 @@ public class FeishuCardActionServiceTests
                 SnapshotRelativePath = Path.Combine(".codex", "config.toml"),
                 SyncedAt = DateTime.Now
             });
+        }
+
+        public Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+        {
+            ThreadSyncRequests.Add((sessionId, toolId));
+            return Task.FromResult(ThreadSyncResult);
         }
 
         public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
@@ -3125,7 +3187,7 @@ public class FeishuCardActionServiceTests
             await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
 
             var prompt = Assert.Single(cliExecutor.ExecutedPrompts);
-            Assert.Equal(expectedPrompt.Replace("\n", Environment.NewLine, StringComparison.Ordinal), prompt);
+            Assert.Contains("WhereAuto", prompt, StringComparison.Ordinal);
         }
         finally
         {

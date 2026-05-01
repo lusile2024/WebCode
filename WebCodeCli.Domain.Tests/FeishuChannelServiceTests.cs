@@ -1549,6 +1549,12 @@ public class FeishuChannelServiceTests
         public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
             => Task.FromResult<CcSwitchSessionSnapshot?>(null);
 
+        public Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CodexThreadProviderSyncResult
+            {
+                Message = "thread sync complete"
+            });
+
         public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
             => Task.FromResult(true);
 
@@ -1694,6 +1700,12 @@ public class FeishuChannelServiceTests
 
         public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
             => Task.FromResult<CcSwitchSessionSnapshot?>(null);
+
+        public Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CodexThreadProviderSyncResult
+            {
+                Message = "thread sync complete"
+            });
 
         public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null)
             => Task.FromResult(true);
