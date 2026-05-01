@@ -11,6 +11,7 @@ public class FeishuHelpCardAction
     public const string SubmitSuperpowersQuickInputAction = "submit_superpowers_quick_input";
     public const string ExecuteSuperpowersPlanAction = "execute_superpowers_plan";
     public const string ExecuteSuperpowersSubagentPlanAction = "execute_superpowers_subagent_plan";
+    public const string RetrySuperpowersCapabilityDetectionAction = "retry_superpowers_capability_detection";
 
     /// <summary>
     /// 动作类型

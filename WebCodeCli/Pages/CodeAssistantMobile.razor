@@ -552,6 +552,7 @@
                 else
                 {
                     var superpowersEligibility = CurrentSuperpowersQuickActionEligibility;
+                    var superpowersViewState = CurrentSuperpowersQuickActionViewState;
 
                     @for (var i = 0; i < _messages.Count; i++)
                     {
@@ -617,27 +618,45 @@
                                             <input @bind="_superpowersQuickInput"
                                                @bind:event="oninput"
                                                @onkeydown="@(args => HandleSuperpowersQuickInputKeyDown(message, args))"
-                                               disabled="@superpowersEligibility.IsDisabled"
+                                               disabled="@superpowersViewState.IsDisabled"
                                                class="w-full rounded-full border border-blue-200 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                                                placeholder="@SuperpowersQuickActionDefaults.QuickInputPlaceholder" />
-                                            @if (superpowersEligibility.ShowPlanActions)
+                                            @if (superpowersViewState.ShowPlanActions)
                                             {
                                                 <button @onclick="() => OnExecuteSuperpowersPlanAsync(message)"
-                                                        disabled="@superpowersEligibility.IsDisabled"
-                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersEligibility.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-blue-700 hover:bg-blue-100")">
+                                                        disabled="@superpowersViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-blue-700 hover:bg-blue-100")">
                                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
                                                     </svg>
                                                     <span>@SuperpowersQuickActionDefaults.ExecutePlanButtonText</span>
                                                 </button>
                                                 <button @onclick="() => OnExecuteSuperpowersSubagentPlanAsync(message)"
-                                                        disabled="@superpowersEligibility.IsDisabled"
-                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersEligibility.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-blue-600 text-white hover:bg-blue-700")">
+                                                        disabled="@superpowersViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-blue-600 text-white hover:bg-blue-700")">
                                                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
                                                     </svg>
                                                     <span>@SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText</span>
                                                 </button>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(superpowersViewState.StatusMessage) || superpowersViewState.ShowRetryAction)
+                                            {
+                                                <div class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-white/80 px-3 py-2 text-xs text-blue-900">
+                                                    @if (!string.IsNullOrWhiteSpace(superpowersViewState.StatusMessage))
+                                                    {
+                                                        <span>@superpowersViewState.StatusMessage</span>
+                                                    }
+                                                    @if (superpowersViewState.ShowRetryAction)
+                                                    {
+                                                        <button @onclick="() => RetrySuperpowersCapabilityAsync(message)"
+                                                                disabled="@superpowersViewState.RetryActionDisabled"
+                                                                class="inline-flex items-center justify-center rounded-full border border-blue-200 px-3 py-1 font-medium transition-colors @(superpowersViewState.RetryActionDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "text-blue-700 hover:bg-blue-100")"
+                                                                type="button">
+                                                            @superpowersViewState.RetryActionText
+                                                        </button>
+                                                    }
+                                                </div>
                                             }
                                         </div>
                                     </div>

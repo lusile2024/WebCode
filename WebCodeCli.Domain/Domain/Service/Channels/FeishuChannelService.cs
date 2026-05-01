@@ -1260,18 +1260,22 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
 
         var normalizedToolId = NormalizeToolId(toolId) ?? toolId;
+        var capabilityState = ResolveSuperpowersCapabilityState(sessionId, normalizedToolId);
         chrome.BottomPrompt = SuperpowersQuickActionCardHelper.CreateBottomPrompt(
             sessionId,
             chatKey,
-            normalizedToolId);
+            normalizedToolId,
+            capabilityState);
         chrome.BottomActions.Clear();
-        if (ShouldShowSuperpowersPlanActions(sessionId))
-        {
-            chrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
-                sessionId,
-                chatKey,
-                normalizedToolId));
-        }
+        chrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
+            sessionId,
+            chatKey,
+            normalizedToolId,
+            showPlanActions: ShouldShowSuperpowersPlanActions(sessionId),
+            capabilityState));
+        chrome.StatusMarkdown = SuperpowersQuickActionCardHelper.MergeCapabilityStatusMarkdown(
+            chrome.StatusMarkdown,
+            capabilityState);
     }
 
     private bool ShouldShowSuperpowersPlanActions(string sessionId)
@@ -1324,6 +1328,27 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             _logger.LogDebug(ex, "从会话仓储读取工作区失败: SessionId={SessionId}", sessionId);
             return null;
         }
+    }
+
+    private SuperpowersCapabilitySnapshot? ResolveSuperpowersCapabilityState(string sessionId, string toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetService<ISuperpowersCapabilityService>();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (capabilityService == null)
+        {
+            return null;
+        }
+
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return capabilityService.GetStateAsync(new SuperpowersCapabilityContext
+        {
+            ToolId = normalizedToolId,
+            ProviderId = session?.CcSwitchProviderId,
+            WorkspacePath = session?.WorkspacePath
+        }).GetAwaiter().GetResult();
     }
 
     private static bool SessionContainsSuperpowers(IEnumerable<ChatMessage> messages)

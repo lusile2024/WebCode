@@ -13,4 +13,8 @@ public static class SuperpowersQuickActionDefaults
     public const string ExecutePlanPrompt = "使用superpowers的executing-plans技能执行计划";
     public const string ExecuteSubagentPlanPrompt = "使用superpowers的executing-plans技能执行计划,并且使用superpowers的subagent-driven-development技能";
     public const string QuickSkillPrefix = "使用superpowers技能，";
+    public const string CapabilityCheckingText = "正在检测当前 Provider 的 superpowers 能力...";
+    public const string CapabilityUnavailableText = "当前 Provider 缺少 superpowers 能力";
+    public const string CapabilityProbeFailedText = "检测 superpowers 能力失败，请重试";
+    public const string CapabilityRetryButtonText = "重新检测";
 }

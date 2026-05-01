@@ -156,6 +156,8 @@ public class FeishuCardActionService
                 case FeishuHelpCardAction.ExecuteSuperpowersPlanAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction:
                     return await HandleSuperpowersQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId);
+                case FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction:
+                    return await HandleRetrySuperpowersCapabilityDetectionAsync(action, chatId);
                 case LowInterruptionContinueHelper.ActionName:
                     return await HandleLowInterruptionContinueAsync(action.SessionId, action.ChatKey ?? chatId, action.ToolId, formValueElement, operatorUserId, appId);
                 case "switch_session":
@@ -330,7 +332,9 @@ public class FeishuCardActionService
         string? chatId,
         string? operatorUserId,
         string? inputValues = null,
-        string? appId = null)
+        string? appId = null,
+        string? preferredSessionId = null,
+        string? preferredToolId = null)
     {
         if (string.IsNullOrEmpty(chatId))
         {
@@ -368,7 +372,9 @@ public class FeishuCardActionService
         _logger.LogInformation("🚀 [FeishuHelp] 执行命令: {Command}", commandInput);
 
         var actualChatKey = NormalizeChatKey(chatId);
-        var currentSessionId = _feishuChannel.GetCurrentSession(actualChatKey);
+        var currentSessionId = string.IsNullOrWhiteSpace(preferredSessionId)
+            ? _feishuChannel.GetCurrentSession(actualChatKey)
+            : preferredSessionId;
         if (string.IsNullOrWhiteSpace(currentSessionId))
         {
             _logger.LogInformation("⚠️ [FeishuHelp] 当前聊天没有活跃会话，跳转到新建会话表单: ChatId={ChatId}", chatId);
@@ -414,9 +420,9 @@ public class FeishuCardActionService
                 var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
                 var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
 
-                // 获取或创建会话
-                var toolId = ResolveToolIdForChat(chatId);
-                var sessionId = GetOrCreateSession(chatId, toolId);
+                var sessionId = currentSessionId;
+                var toolId = NormalizeToolId(preferredToolId)
+                             ?? await ResolveSessionToolIdAsync(sessionId, null, actualChatKey, username);
                 var cliPrompt = FeishuPromptNormalizer.Normalize(commandInput);
 
                 // 添加用户消息到会话
@@ -496,13 +502,65 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已有任务在执行，请等待完成后再试", "warning");
         }
 
+        if (string.IsNullOrWhiteSpace(activeSessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少当前会话，无法执行 superpowers 快捷操作", "error");
+        }
+
+        var effectiveToolId = await ResolveSessionToolIdAsync(activeSessionId, action.ToolId, targetChatKey, null);
+        var capabilityResult = await ProbeSuperpowersCapabilityAsync(activeSessionId, effectiveToolId, forceRefresh: false);
+        if (capabilityResult.State != SuperpowersCapabilityState.Available)
+        {
+            var message = string.IsNullOrWhiteSpace(capabilityResult.Message)
+                ? SuperpowersQuickActionDefaults.CapabilityProbeFailedText
+                : capabilityResult.Message!;
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                capabilityResult.State == SuperpowersCapabilityState.Unavailable
+                    ? $"⚠️ {message}"
+                    : $"⚠️ {message}",
+                "warning");
+        }
+
         return await HandleExecuteCommandAsync(
             formValue: null,
             commandFromAction: prompt,
             chatId: targetChatKey,
             operatorUserId: operatorUserId,
             inputValues: null,
-            appId: appId);
+            appId: appId,
+            preferredSessionId: activeSessionId,
+            preferredToolId: effectiveToolId);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleRetrySuperpowersCapabilityDetectionAsync(
+        FeishuHelpCardAction action,
+        string? chatId)
+    {
+        var targetChatKey = action.ChatKey ?? chatId;
+        if (string.IsNullOrWhiteSpace(targetChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少必要参数", "error");
+        }
+
+        var activeSessionId = action.SessionId ?? _feishuChannel.GetCurrentSession(NormalizeChatKey(targetChatKey));
+        if (string.IsNullOrWhiteSpace(activeSessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少当前会话，无法重新检测", "error");
+        }
+
+        var effectiveToolId = await ResolveSessionToolIdAsync(activeSessionId, action.ToolId, targetChatKey, null);
+        var capabilityResult = await ProbeSuperpowersCapabilityAsync(activeSessionId, effectiveToolId, forceRefresh: true);
+        if (capabilityResult.State == SuperpowersCapabilityState.Available)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                "✅ 已重新检测，当前 Provider 已具备 superpowers 能力，请重新点击对应操作",
+                "success");
+        }
+
+        var message = string.IsNullOrWhiteSpace(capabilityResult.Message)
+            ? SuperpowersQuickActionDefaults.CapabilityProbeFailedText
+            : capabilityResult.Message!;
+        return _cardBuilder.BuildCardActionToastOnlyResponse($"⚠️ {message}", "warning");
     }
 
     private async Task<CardActionTriggerResponseDto> HandleLowInterruptionContinueAsync(
@@ -635,7 +693,7 @@ public class FeishuCardActionService
         using var scope = _serviceProvider.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
         var session = await repo.GetByIdAsync(sessionId);
-        var sessionToolId = NormalizeToolId(session?.ToolId);
+        var sessionToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? session?.ToolId);
         if (!string.IsNullOrWhiteSpace(sessionToolId))
         {
             return sessionToolId;
@@ -1012,18 +1070,22 @@ public class FeishuCardActionService
         }
 
         var normalizedToolId = NormalizeToolId(toolId) ?? toolId;
+        var capabilityState = ResolveSuperpowersCapabilityState(sessionId, normalizedToolId);
         streamingChrome.BottomPrompt = SuperpowersQuickActionCardHelper.CreateBottomPrompt(
             sessionId,
             normalizedChatKey,
-            normalizedToolId);
+            normalizedToolId,
+            capabilityState);
         streamingChrome.BottomActions.Clear();
-        if (ShouldShowSuperpowersPlanActions(sessionId))
-        {
-            streamingChrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
-                sessionId,
-                normalizedChatKey,
-                normalizedToolId));
-        }
+        streamingChrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
+            sessionId,
+            normalizedChatKey,
+            normalizedToolId,
+            showPlanActions: ShouldShowSuperpowersPlanActions(sessionId),
+            capabilityState));
+        streamingChrome.StatusMarkdown = SuperpowersQuickActionCardHelper.MergeCapabilityStatusMarkdown(
+            streamingChrome.StatusMarkdown,
+            capabilityState);
     }
 
     private bool ShouldShowSuperpowersPlanActions(string sessionId)
@@ -1076,6 +1138,48 @@ public class FeishuCardActionService
             _logger.LogDebug(ex, "从会话仓储读取工作区失败: SessionId={SessionId}", sessionId);
             return null;
         }
+    }
+
+    private SuperpowersCapabilitySnapshot? ResolveSuperpowersCapabilityState(string sessionId, string toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetService<ISuperpowersCapabilityService>();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (capabilityService == null)
+        {
+            return null;
+        }
+
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return capabilityService.GetStateAsync(new SuperpowersCapabilityContext
+        {
+            ToolId = normalizedToolId,
+            ProviderId = session?.CcSwitchProviderId,
+            WorkspacePath = session?.WorkspacePath
+        }).GetAwaiter().GetResult();
+    }
+
+    private async Task<SuperpowersCapabilityProbeResult> ProbeSuperpowersCapabilityAsync(
+        string sessionId,
+        string toolId,
+        bool forceRefresh)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetRequiredService<ISuperpowersCapabilityService>();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAsync(sessionId);
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return await capabilityService.ProbeAsync(
+            new SuperpowersCapabilityContext
+            {
+                ToolId = normalizedToolId,
+                ProviderId = session?.CcSwitchProviderId,
+                WorkspacePath = session?.WorkspacePath
+            },
+            forceRefresh: forceRefresh);
     }
 
     private static bool SessionContainsSuperpowers(IEnumerable<Domain.Model.ChatMessage> messages)

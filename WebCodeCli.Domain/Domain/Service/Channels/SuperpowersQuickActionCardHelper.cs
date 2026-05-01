@@ -1,5 +1,6 @@
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
+using WebCodeCli.Domain.Domain.Service;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -13,11 +14,17 @@ internal static class SuperpowersQuickActionCardHelper
                && SessionContainsSuperpowers(sessionContents);
     }
 
-    public static FeishuStreamingCardBottomPrompt CreateBottomPrompt(
+    public static FeishuStreamingCardBottomPrompt? CreateBottomPrompt(
         string sessionId,
         string chatKey,
-        string? toolId)
+        string? toolId,
+        SuperpowersCapabilitySnapshot? capabilityState = null)
     {
+        if (capabilityState?.State == SuperpowersCapabilityState.Unavailable)
+        {
+            return null;
+        }
+
         return new FeishuStreamingCardBottomPrompt
         {
             InputName = SuperpowersQuickActionDefaults.QuickInputFieldName,
@@ -37,8 +44,32 @@ internal static class SuperpowersQuickActionCardHelper
     public static IReadOnlyList<FeishuStreamingCardBottomAction> CreateBottomActions(
         string sessionId,
         string chatKey,
-        string? toolId)
+        string? toolId,
+        bool showPlanActions,
+        SuperpowersCapabilitySnapshot? capabilityState = null)
     {
+        if (capabilityState?.State == SuperpowersCapabilityState.Unavailable)
+        {
+            return
+            [
+                new FeishuStreamingCardBottomAction
+                {
+                    Text = SuperpowersQuickActionDefaults.CapabilityRetryButtonText,
+                    Type = "default",
+                    Value = BuildActionValue(
+                        FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction,
+                        sessionId,
+                        chatKey,
+                        toolId)
+                }
+            ];
+        }
+
+        if (!showPlanActions)
+        {
+            return [];
+        }
+
         return
         [
             new FeishuStreamingCardBottomAction
@@ -62,6 +93,22 @@ internal static class SuperpowersQuickActionCardHelper
                     toolId)
             }
         ];
+    }
+
+    public static string? MergeCapabilityStatusMarkdown(
+        string? statusMarkdown,
+        SuperpowersCapabilitySnapshot? capabilityState)
+    {
+        if (capabilityState?.State != SuperpowersCapabilityState.Unavailable
+            || string.IsNullOrWhiteSpace(capabilityState.Message))
+        {
+            return statusMarkdown;
+        }
+
+        var capabilityMessage = $"⚠️ {capabilityState.Message}，请点击“{SuperpowersQuickActionDefaults.CapabilityRetryButtonText}”";
+        return string.IsNullOrWhiteSpace(statusMarkdown)
+            ? capabilityMessage
+            : $"{statusMarkdown}\n{capabilityMessage}";
     }
 
     private static object BuildActionValue(

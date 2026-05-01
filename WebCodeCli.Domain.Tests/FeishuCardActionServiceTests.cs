@@ -550,8 +550,60 @@ public class FeishuCardActionServiceTests
 
         Assert.Equal(
             SuperpowersPromptBuilder.BuildExecutePlanPrompt(),
-            Assert.Single(cliExecutor.ExecutedPrompts));
+        Assert.Single(cliExecutor.ExecutedPrompts));
         Assert.Empty(cliExecutor.LowInterruptionSessionIds);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ExecuteSuperpowersPlan_UsesSnapshotToolForProbeAndExecution()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-snapshot-tool";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "plan completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubSuperpowersCapabilityService
+        {
+            ProbeState = SuperpowersCapabilityState.Available,
+            ProbeOutcome = SuperpowersCapabilityProbeOutcome.Available
+        };
+
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = activeSessionId,
+                ToolId = "claude-code",
+                CcSwitchSnapshotToolId = "codex",
+                FeishuChatKey = chatId,
+                IsFeishuActive = true
+            }
+        ]);
+
+        var service = CreateService(
+            cliExecutor,
+            new StubFeishuChannelService(activeSessionId),
+            new TestServiceProvider(
+                chatSessionRepository: sessionRepository,
+                superpowersCapabilityService: capabilityService));
+
+        await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ExecuteSuperpowersPlanAction}}","chat_key":"{{chatId}}","session_id":"{{activeSessionId}}"}""",
+            chatId: chatId);
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+        var probeContext = Assert.Single(capabilityService.ProbeContexts);
+        Assert.Equal("codex", probeContext.ToolId);
+
+        var execution = Assert.Single(cliExecutor.StandardExecutionRequests);
+        Assert.Equal(activeSessionId, execution.SessionId);
+        Assert.Equal("codex", execution.ToolId);
+        Assert.Equal(SuperpowersPromptBuilder.BuildExecutePlanPrompt(), execution.Prompt);
     }
 
     [Fact]
@@ -606,6 +658,64 @@ public class FeishuCardActionServiceTests
         Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning, response.Toast?.Type);
         Assert.Contains("已有任务在执行", response.Toast?.Content, StringComparison.Ordinal);
         Assert.Empty(cliExecutor.ExecutedPrompts);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SuperpowersQuickAction_WhenCapabilityMissing_ReturnsWarningWithoutExecuting()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-missing-capability";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "plan completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubSuperpowersCapabilityService
+        {
+            ProbeState = SuperpowersCapabilityState.Unavailable,
+            ProbeOutcome = SuperpowersCapabilityProbeOutcome.MissingCapability,
+            ProbeMessage = SuperpowersQuickActionDefaults.CapabilityUnavailableText
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(superpowersCapabilityService: capabilityService));
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ExecuteSuperpowersPlanAction}}","chat_key":"{{chatId}}","session_id":"{{activeSessionId}}"}""",
+            chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning, response.Toast?.Type);
+        Assert.Contains(SuperpowersQuickActionDefaults.CapabilityUnavailableText, response.Toast?.Content, StringComparison.Ordinal);
+        Assert.Empty(cliExecutor.ExecutedPrompts);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_RetrySuperpowersCapabilityDetection_WhenCapabilityAvailable_ReturnsSuccessToast()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-retry";
+
+        var capabilityService = new StubSuperpowersCapabilityService
+        {
+            ProbeState = SuperpowersCapabilityState.Available,
+            ProbeOutcome = SuperpowersCapabilityProbeOutcome.Available
+        };
+
+        var response = await CreateService(
+                new RecordingCliExecutorService(),
+                new StubFeishuChannelService(activeSessionId),
+                new TestServiceProvider(superpowersCapabilityService: capabilityService))
+            .HandleCardActionAsync(
+                $$"""{"action":"{{FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction}}","chat_key":"{{chatId}}","session_id":"{{activeSessionId}}","tool_id":"codex"}""",
+                chatId: chatId);
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Success, response.Toast?.Type);
+        Assert.Contains("已重新检测", response.Toast?.Content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2646,6 +2756,8 @@ public class FeishuCardActionServiceTests
 
         public List<string> ExecutedPrompts { get; } = new();
 
+        public List<(string SessionId, string ToolId, string Prompt)> StandardExecutionRequests { get; } = new();
+
         public List<string> LowInterruptionSessionIds { get; } = new();
 
         public List<string?> LowInterruptionPrompts { get; } = new();
@@ -2715,6 +2827,7 @@ public class FeishuCardActionServiceTests
         {
             WasExecuted = true;
             ExecutedPrompts.Add(userPrompt);
+            StandardExecutionRequests.Add((sessionId, toolId, userPrompt));
             _executionStarted.TrySetResult(sessionId);
 
             var hasTrailingCompletionChunk = StandardExecutionCompletionDelay > TimeSpan.Zero
@@ -3236,6 +3349,7 @@ public class FeishuCardActionServiceTests
         private readonly IChatSessionRepository _chatSessionRepository;
         private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService;
         private readonly IExternalCliSessionService _externalCliSessionService;
+        private readonly ISuperpowersCapabilityService _superpowersCapabilityService;
 
         public TestServiceProvider(
             TestUserContextService? userContextService = null,
@@ -3243,7 +3357,8 @@ public class FeishuCardActionServiceTests
             IChatSessionRepository? chatSessionRepository = null,
             ICcSwitchService? ccSwitchService = null,
             IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
-            IExternalCliSessionService? externalCliSessionService = null)
+            IExternalCliSessionService? externalCliSessionService = null,
+            ISuperpowersCapabilityService? superpowersCapabilityService = null)
         {
             _userContextService = userContextService ?? new TestUserContextService();
             _projectService = projectService ?? new TestProjectService(_userContextService);
@@ -3251,6 +3366,7 @@ public class FeishuCardActionServiceTests
             _ccSwitchService = ccSwitchService ?? new StubCcSwitchService();
             _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
             _externalCliSessionService = externalCliSessionService ?? new StubExternalCliSessionService([]);
+            _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
         }
 
         public object? GetService(Type serviceType)
@@ -3303,6 +3419,11 @@ public class FeishuCardActionServiceTests
             if (serviceType == typeof(IExternalCliSessionService))
             {
                 return _externalCliSessionService;
+            }
+
+            if (serviceType == typeof(ISuperpowersCapabilityService))
+            {
+                return _superpowersCapabilityService;
             }
 
             return null;
@@ -3387,6 +3508,61 @@ public class FeishuCardActionServiceTests
                 ProviderId = providerId,
                 Models = models,
                 IsRemoteFetched = true
+            });
+        }
+    }
+
+    private sealed class StubSuperpowersCapabilityService : ISuperpowersCapabilityService
+    {
+        public SuperpowersCapabilityState CachedState { get; set; } = SuperpowersCapabilityState.Unknown;
+
+        public string? CachedMessage { get; set; }
+
+        public SuperpowersCapabilityState ProbeState { get; set; } = SuperpowersCapabilityState.Available;
+
+        public SuperpowersCapabilityProbeOutcome ProbeOutcome { get; set; } = SuperpowersCapabilityProbeOutcome.Available;
+
+        public string? ProbeMessage { get; set; }
+
+        public List<SuperpowersCapabilityContext> ProbeContexts { get; } = new();
+
+        public Task<SuperpowersCapabilitySnapshot> GetStateAsync(
+            SuperpowersCapabilityContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return Task.FromResult<SuperpowersCapabilitySnapshot>(new SuperpowersCapabilitySnapshot
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId}",
+                State = CachedState,
+                Message = CachedMessage
+            });
+        }
+
+        public Task<SuperpowersCapabilityProbeResult> ProbeAsync(
+            SuperpowersCapabilityContext context,
+            bool forceRefresh = false,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ProbeContexts.Add(new SuperpowersCapabilityContext
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId,
+                WorkspacePath = context.WorkspacePath
+            });
+
+            return Task.FromResult(new SuperpowersCapabilityProbeResult
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId}",
+                State = ProbeState,
+                Outcome = ProbeOutcome,
+                Message = ProbeMessage
             });
         }
     }

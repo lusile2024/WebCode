@@ -37,6 +37,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     [Inject] private ISystemSettingsService SystemSettingsService { get; set; } = default!;
     [Inject] private IUserContextService UserContextService { get; set; } = default!;
     [Inject] private ICcSwitchService CcSwitchService { get; set; } = default!;
+    [Inject] private ISuperpowersCapabilityService SuperpowersCapabilityService { get; set; } = default!;
     [Inject] private IVersionService VersionService { get; set; } = default!;
     [Inject] private HttpClient Http { get; set; } = default!;
     [Inject] private IFrontendProjectDetector FrontendProjectDetector { get; set; } = default!;
@@ -430,12 +431,38 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     }
 
     private string _superpowersQuickInput = string.Empty;
+    private SuperpowersCapabilityPresentationState _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Unknown;
+    private string _superpowersCapabilityPresentationContextKey = string.Empty;
+
+    private const string SuperpowersCapabilityCheckingText = "正在检测 superpowers 能力...";
+    private const string SuperpowersCapabilityUnavailableText = "当前 Provider 缺少 superpowers 能力";
+    private const string SuperpowersCapabilityProbeFailedText = "检测 superpowers 能力失败，请重试";
+    private const string SuperpowersCapabilityRetryText = "重新检测";
 
     private SuperpowersQuickActionEligibility CurrentSuperpowersQuickActionEligibility =>
         SuperpowersQuickActionHelper.Evaluate(
             _messages,
             hasSuperpowersPlanFiles: HasSuperpowersPlanFiles(),
             isProcessRunning: _isLoading);
+
+    private SuperpowersQuickActionViewState CurrentSuperpowersQuickActionViewState
+    {
+        get
+        {
+            var eligibility = CurrentSuperpowersQuickActionEligibility;
+            return new SuperpowersQuickActionViewState(
+                MessageId: eligibility.MessageId,
+                ShowQuickInput: eligibility.ShowQuickInput,
+                ShowPlanActions: eligibility.ShowPlanActions,
+                IsDisabled: eligibility.IsDisabled
+                            || _superpowersCapabilityPresentation.IsChecking
+                            || _superpowersCapabilityPresentation.State == SuperpowersCapabilityState.Unavailable,
+                StatusMessage: _superpowersCapabilityPresentation.StatusMessage,
+                ShowRetryAction: _superpowersCapabilityPresentation.ShowRetryAction,
+                RetryActionDisabled: eligibility.IsDisabled || _superpowersCapabilityPresentation.IsChecking,
+                RetryActionText: SuperpowersCapabilityRetryText);
+        }
+    }
 
     private bool HasSuperpowersPlanFiles()
     {
@@ -956,8 +983,9 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         SuperpowersQuickActionRequestType requestType)
     {
         var eligibility = CurrentSuperpowersQuickActionEligibility;
+        var viewState = CurrentSuperpowersQuickActionViewState;
         if (_isLoading
-            || eligibility.IsDisabled
+            || viewState.IsDisabled
             || !IsSuperpowersQuickActionEligible(sourceMessage, eligibility))
         {
             return;
@@ -969,12 +997,214 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             return;
         }
 
+        var capabilityAvailable = await EnsureSuperpowersCapabilityAvailableAsync(forceRefresh: false);
+        if (!capabilityAvailable)
+        {
+            return;
+        }
+
         if (requestType == SuperpowersQuickActionRequestType.QuickInput)
         {
             _superpowersQuickInput = string.Empty;
         }
 
         await SendMessageCoreAsync(message, clearComposerInput: false, closeTransientPanels: true);
+    }
+
+    private async Task RetrySuperpowersCapabilityAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentSuperpowersQuickActionEligibility;
+        if (_isLoading || !IsSuperpowersQuickActionEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        await EnsureSuperpowersCapabilityAvailableAsync(forceRefresh: true);
+    }
+
+    private async Task<bool> EnsureSuperpowersCapabilityAvailableAsync(bool forceRefresh)
+    {
+        await RefreshSuperpowersCapabilityPresentationContextAsync();
+
+        if (_superpowersCapabilityPresentation.IsChecking)
+        {
+            return false;
+        }
+
+        if (!forceRefresh && _superpowersCapabilityPresentation.State == SuperpowersCapabilityState.Available)
+        {
+            return true;
+        }
+
+        _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Checking(SuperpowersCapabilityCheckingText);
+        await InvokeAsync(StateHasChanged);
+
+        var probeResult = await SuperpowersCapabilityService.ProbeAsync(
+            BuildSuperpowersCapabilityContext(),
+            forceRefresh: forceRefresh);
+
+        _superpowersCapabilityPresentation = probeResult.Outcome switch
+        {
+            SuperpowersCapabilityProbeOutcome.Available => SuperpowersCapabilityPresentationState.Available,
+            SuperpowersCapabilityProbeOutcome.MissingCapability => SuperpowersCapabilityPresentationState.Unavailable(
+                string.IsNullOrWhiteSpace(probeResult.Message)
+                    ? SuperpowersCapabilityUnavailableText
+                    : probeResult.Message),
+            _ => SuperpowersCapabilityPresentationState.ProbeFailed(
+                string.IsNullOrWhiteSpace(probeResult.Message)
+                    ? SuperpowersCapabilityProbeFailedText
+                    : probeResult.Message)
+        };
+
+        await InvokeAsync(StateHasChanged);
+        return _superpowersCapabilityPresentation.State == SuperpowersCapabilityState.Available;
+    }
+
+    private SuperpowersCapabilityContext BuildSuperpowersCapabilityContext()
+    {
+        return new SuperpowersCapabilityContext
+        {
+            ToolId = _selectedToolId,
+            ProviderId = GetCurrentPinnedProviderIdForSuperpowers(),
+            WorkspacePath = GetCurrentSuperpowersWorkspacePath()
+        };
+    }
+
+    private string? GetCurrentPinnedProviderIdForSuperpowers()
+    {
+        if (_currentSession == null || string.IsNullOrWhiteSpace(_currentSession.CcSwitchProviderId))
+        {
+            return null;
+        }
+
+        var selectedToolId = NormalizeSuperpowersCapabilityToolId(_selectedToolId);
+        var sessionToolId = NormalizeSuperpowersCapabilityToolId(_currentSession.CcSwitchSnapshotToolId ?? _currentSession.ToolId);
+        if (!string.Equals(selectedToolId, sessionToolId, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return _currentSession.CcSwitchProviderId;
+    }
+
+    private string? GetCurrentSuperpowersWorkspacePath()
+    {
+        try
+        {
+            return CliExecutorService.GetSessionWorkspacePath(_sessionId)
+                   ?? _currentSession?.WorkspacePath;
+        }
+        catch
+        {
+            return _currentSession?.WorkspacePath;
+        }
+    }
+
+    private async Task RefreshSuperpowersCapabilityPresentationContextAsync()
+    {
+        var nextContextKey = await ResolveSuperpowersCapabilityPresentationContextKeyAsync();
+        if (string.Equals(_superpowersCapabilityPresentationContextKey, nextContextKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _superpowersCapabilityPresentationContextKey = nextContextKey;
+        _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Unknown;
+    }
+
+    private async Task<string> ResolveSuperpowersCapabilityPresentationContextKeyAsync()
+    {
+        try
+        {
+            var snapshot = await SuperpowersCapabilityService.GetStateAsync(BuildSuperpowersCapabilityContext());
+            if (!string.IsNullOrWhiteSpace(snapshot.CacheKey))
+            {
+                return snapshot.CacheKey;
+            }
+        }
+        catch
+        {
+        }
+
+        return BuildFallbackSuperpowersCapabilityPresentationContextKey();
+    }
+
+    private void InvalidateSuperpowersCapabilityPresentation()
+    {
+        _superpowersCapabilityPresentationContextKey = string.Empty;
+        _superpowersCapabilityPresentation = SuperpowersCapabilityPresentationState.Unknown;
+    }
+
+    private string BuildFallbackSuperpowersCapabilityPresentationContextKey()
+    {
+        return $"{NormalizeSuperpowersCapabilityToolId(_selectedToolId) ?? string.Empty}::{GetCurrentPinnedProviderIdForSuperpowers() ?? string.Empty}";
+    }
+
+    private static string? NormalizeSuperpowersCapabilityToolId(string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            return null;
+        }
+
+        if (toolId.Equals("claude", StringComparison.OrdinalIgnoreCase))
+        {
+            return "claude-code";
+        }
+
+        if (toolId.Equals("opencode-cli", StringComparison.OrdinalIgnoreCase))
+        {
+            return "opencode";
+        }
+
+        return toolId;
+    }
+
+    private readonly record struct SuperpowersQuickActionViewState(
+        string? MessageId,
+        bool ShowQuickInput,
+        bool ShowPlanActions,
+        bool IsDisabled,
+        string? StatusMessage,
+        bool ShowRetryAction,
+        bool RetryActionDisabled,
+        string RetryActionText);
+
+    private readonly record struct SuperpowersCapabilityPresentationState(
+        SuperpowersCapabilityState State,
+        bool IsChecking,
+        string? StatusMessage,
+        bool ShowRetryAction)
+    {
+        public static SuperpowersCapabilityPresentationState Unknown => new(
+            SuperpowersCapabilityState.Unknown,
+            IsChecking: false,
+            StatusMessage: null,
+            ShowRetryAction: false);
+
+        public static SuperpowersCapabilityPresentationState Available => new(
+            SuperpowersCapabilityState.Available,
+            IsChecking: false,
+            StatusMessage: null,
+            ShowRetryAction: false);
+
+        public static SuperpowersCapabilityPresentationState Checking(string statusMessage) => new(
+            SuperpowersCapabilityState.Unknown,
+            IsChecking: true,
+            StatusMessage: statusMessage,
+            ShowRetryAction: false);
+
+        public static SuperpowersCapabilityPresentationState Unavailable(string statusMessage) => new(
+            SuperpowersCapabilityState.Unavailable,
+            IsChecking: false,
+            StatusMessage: statusMessage,
+            ShowRetryAction: true);
+
+        public static SuperpowersCapabilityPresentationState ProbeFailed(string statusMessage) => new(
+            SuperpowersCapabilityState.Unknown,
+            IsChecking: false,
+            StatusMessage: statusMessage,
+            ShowRetryAction: true);
     }
 
     private async Task HandleSuperpowersQuickInputKeyDown(ChatMessage message, KeyboardEventArgs args)
@@ -2420,6 +2650,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
                 ProjectId = projectId,
                 ProjectName = projectName
             };
+            InvalidateSuperpowersCapabilityPresentation();
 
             await SessionHistoryManager.SaveSessionImmediateAsync(_currentSession);
             await LoadSessions();
@@ -2499,6 +2730,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
                 _isJsonlOutputActive = false;
                 _jsonlAssistantMessageBuilder = null;
                 _currentAssistantMessage = string.Empty;
+                InvalidateSuperpowersCapabilityPresentation();
 
                 await LoadOutputStateAsync(_sessionId);
 
@@ -2548,6 +2780,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             if (refreshedSession != null && _currentSession?.SessionId == refreshedSession.SessionId)
             {
                 MergeCcSwitchSnapshotState(_currentSession, refreshedSession);
+                InvalidateSuperpowersCapabilityPresentation();
             }
 
             var syncMessage = string.IsNullOrWhiteSpace(syncResult.Message)
@@ -3192,7 +3425,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     
     private async Task OnToolChanged()
     {
-        // 工具切换后可以执行一些操作
+        InvalidateSuperpowersCapabilityPresentation();
         await Task.CompletedTask;
     }
     

@@ -957,6 +957,97 @@ public class FeishuChannelServiceTests
         }
     }
 
+    [Fact]
+    public async Task HandleIncomingMessageAsync_ShowsRetryAction_WhenCachedSuperpowersCapabilityIsUnavailable()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-superpowers-unavailable-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(Path.Combine(workspacePath, "docs", "superpowers", "plans"));
+        await File.WriteAllTextAsync(
+            Path.Combine(workspacePath, "docs", "superpowers", "plans", "approved-plan.md"),
+            "# approved");
+
+        const string sessionId = "33333333-unavailable";
+        repositoryProxy.Store(new ChatSessionEntity
+        {
+            SessionId = sessionId,
+            Username = "luhaiyan",
+            WorkspacePath = workspacePath,
+            ToolId = "codex",
+            FeishuChatKey = "oc_low_interrupt_chat",
+            IsFeishuActive = true,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath)
+        {
+            FinalContent = "计划已完成\n"
+        };
+        var capabilityService = new StubSuperpowersCapabilityService
+        {
+            CachedState = SuperpowersCapabilityState.Unavailable,
+            CachedMessage = SuperpowersQuickActionDefaults.CapabilityUnavailableText
+        };
+
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService(),
+            capabilityService);
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            chatSessionService.Messages[sessionId] =
+            [
+                new ChatMessage
+                {
+                    Role = "assistant",
+                    Content = "可以继续用superpowers技能推进",
+                    IsCompleted = true
+                }
+            ];
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_low_interrupt_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-low-unavailable",
+                Content = "继续"
+            });
+
+            var handle = Assert.Single(cardKit.Handles);
+            var chrome = Assert.IsType<FeishuStreamingCardChrome>(handle.Chrome);
+            Assert.Null(chrome.BottomPrompt);
+            var retryAction = Assert.Single(chrome.BottomActions);
+            Assert.Equal(SuperpowersQuickActionDefaults.CapabilityRetryButtonText, retryAction.Text);
+            Assert.Contains(SuperpowersQuickActionDefaults.CapabilityUnavailableText, chrome.StatusMarkdown, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
     private static FeishuChannelService CreateService(IFeishuCardKitClient? cardKit = null)
     {
         var repository = CreateRepository(out _);
@@ -999,8 +1090,11 @@ public class FeishuChannelServiceTests
         ISessionDirectoryService sessionDirectoryService,
         IFeishuUserBindingService feishuUserBindingService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
-        IUserContextService userContextService) : IServiceProvider, IServiceScopeFactory, IServiceScope
+        IUserContextService userContextService,
+        ISuperpowersCapabilityService? superpowersCapabilityService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
+        private readonly ISuperpowersCapabilityService _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
+
         public object? GetService(Type serviceType)
         {
             if (serviceType == typeof(IServiceScopeFactory))
@@ -1033,6 +1127,11 @@ public class FeishuChannelServiceTests
                 return userContextService;
             }
 
+            if (serviceType == typeof(ISuperpowersCapabilityService))
+            {
+                return _superpowersCapabilityService;
+            }
+
             return null;
         }
 
@@ -1042,6 +1141,44 @@ public class FeishuChannelServiceTests
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class StubSuperpowersCapabilityService : ISuperpowersCapabilityService
+    {
+        public SuperpowersCapabilityState CachedState { get; set; } = SuperpowersCapabilityState.Unknown;
+
+        public string? CachedMessage { get; set; }
+
+        public Task<SuperpowersCapabilitySnapshot> GetStateAsync(
+            SuperpowersCapabilityContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<SuperpowersCapabilitySnapshot>(new SuperpowersCapabilitySnapshot
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId}",
+                State = CachedState,
+                Message = CachedMessage
+            });
+        }
+
+        public Task<SuperpowersCapabilityProbeResult> ProbeAsync(
+            SuperpowersCapabilityContext context,
+            bool forceRefresh = false,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new SuperpowersCapabilityProbeResult
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId}",
+                State = SuperpowersCapabilityState.Available,
+                Outcome = SuperpowersCapabilityProbeOutcome.Available
+            });
         }
     }
 
