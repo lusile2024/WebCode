@@ -30,6 +30,8 @@ public class UserFeishuBotConfigServiceTests
 
         Assert.True(result.Success);
         Assert.NotNull(stored);
+        Assert.Equal(1, repository.InsertCallCount);
+        Assert.Equal(0, repository.UpdateCallCount);
         Assert.True(stored!.ReplyTtsEnabled);
         Assert.Equal("voice-1", stored.ReplyTtsVoiceId);
     }
@@ -64,8 +66,46 @@ public class UserFeishuBotConfigServiceTests
 
         Assert.True(result.Success);
         Assert.NotNull(stored);
+        Assert.Equal(0, repository.InsertCallCount);
+        Assert.Equal(1, repository.UpdateCallCount);
         Assert.False(stored!.ReplyTtsEnabled);
         Assert.Equal("new-voice", stored.ReplyTtsVoiceId);
+    }
+
+    [Fact]
+    public async Task SaveAsync_UpdateWithBlankReplyTtsVoiceId_ClearsPreviousVoice()
+    {
+        var repository = new InMemoryUserFeishuBotConfigRepository();
+        repository.Store(new UserFeishuBotConfigEntity
+        {
+            Username = "alice",
+            IsEnabled = true,
+            AppId = "cli_alice",
+            AppSecret = "secret",
+            ReplyTtsEnabled = true,
+            ReplyTtsVoiceId = "old-voice"
+        });
+
+        var service = CreateService(repository);
+
+        var result = await service.SaveAsync(new UserFeishuBotConfigEntity
+        {
+            Username = "alice",
+            IsEnabled = true,
+            AppId = "cli_alice",
+            AppSecret = "secret",
+            ReplyTtsEnabled = true,
+            ReplyTtsVoiceId = "   "
+        });
+
+        var stored = await service.GetByUsernameAsync("alice");
+
+        Assert.True(result.Success);
+        Assert.NotNull(stored);
+        Assert.Equal(0, repository.InsertCallCount);
+        Assert.Equal(1, repository.UpdateCallCount);
+        Assert.True(stored!.ReplyTtsEnabled);
+        Assert.Null(stored.ReplyTtsVoiceId);
     }
 
     [Fact]
@@ -101,6 +141,9 @@ public class UserFeishuBotConfigServiceTests
     {
         private readonly Dictionary<string, UserFeishuBotConfigEntity> _configs = new(StringComparer.OrdinalIgnoreCase);
 
+        public int InsertCallCount { get; private set; }
+        public int UpdateCallCount { get; private set; }
+
         public void Store(UserFeishuBotConfigEntity entity)
         {
             _configs[entity.Username] = Clone(entity);
@@ -119,12 +162,24 @@ public class UserFeishuBotConfigServiceTests
 
         public Task<bool> InsertAsync(UserFeishuBotConfigEntity obj)
         {
+            if (_configs.ContainsKey(obj.Username))
+            {
+                return Task.FromResult(false);
+            }
+
+            InsertCallCount++;
             Store(obj);
             return Task.FromResult(true);
         }
 
         public Task<bool> UpdateAsync(UserFeishuBotConfigEntity obj)
         {
+            if (!_configs.ContainsKey(obj.Username))
+            {
+                return Task.FromResult(false);
+            }
+
+            UpdateCallCount++;
             Store(obj);
             return Task.FromResult(true);
         }

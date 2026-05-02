@@ -17,12 +17,15 @@ public sealed class AdminControllerReplyTtsTests
     {
         var configService = new StubUserFeishuBotConfigService
         {
-            ConfigByUsername = new UserFeishuBotConfigEntity
+            ConfigsByUsername =
             {
-                Username = "alice",
-                IsEnabled = true,
-                ReplyTtsEnabled = true,
-                ReplyTtsVoiceId = "voice-1"
+                ["alice"] = new UserFeishuBotConfigEntity
+                {
+                    Username = "alice",
+                    IsEnabled = true,
+                    ReplyTtsEnabled = true,
+                    ReplyTtsVoiceId = "voice-1"
+                }
             }
         };
 
@@ -34,6 +37,34 @@ public sealed class AdminControllerReplyTtsTests
         var dto = Assert.IsType<UserFeishuBotConfigDto>(ok.Value);
         Assert.True(dto.ReplyTtsEnabled);
         Assert.Equal("voice-1", dto.ReplyTtsVoiceId);
+    }
+
+    [Fact]
+    public async Task GetFeishuBotConfig_WithoutConfig_ReturnsDefaultReplyTtsFields()
+    {
+        var configService = new StubUserFeishuBotConfigService
+        {
+            ConfigsByUsername =
+            {
+                ["alice"] = new UserFeishuBotConfigEntity
+                {
+                    Username = "alice",
+                    IsEnabled = true,
+                    ReplyTtsEnabled = true,
+                    ReplyTtsVoiceId = "voice-1"
+                }
+            }
+        };
+
+        var controller = CreateController(configService: configService);
+
+        var result = await controller.GetFeishuBotConfig("bob");
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<UserFeishuBotConfigDto>(ok.Value);
+        Assert.Equal("bob", dto.Username);
+        Assert.False(dto.ReplyTtsEnabled);
+        Assert.Null(dto.ReplyTtsVoiceId);
     }
 
     [Fact]
@@ -71,12 +102,15 @@ public sealed class AdminControllerReplyTtsTests
 
     private sealed class StubUserFeishuBotConfigService : IUserFeishuBotConfigService
     {
-        public UserFeishuBotConfigEntity? ConfigByUsername { get; set; }
+        public Dictionary<string, UserFeishuBotConfigEntity> ConfigsByUsername { get; } = new(StringComparer.OrdinalIgnoreCase);
         public UserFeishuBotConfigEntity? LastSavedConfig { get; private set; }
 
         public Task<UserFeishuBotConfigEntity?> GetByUsernameAsync(string username)
         {
-            return Task.FromResult(ConfigByUsername);
+            return Task.FromResult(
+                ConfigsByUsername.TryGetValue(username, out var config)
+                    ? Clone(config)
+                    : null);
         }
 
         public Task<UserFeishuBotConfigEntity?> GetByAppIdAsync(string appId)
@@ -86,7 +120,7 @@ public sealed class AdminControllerReplyTtsTests
 
         public Task<UserFeishuBotConfigSaveResult> SaveAsync(UserFeishuBotConfigEntity config)
         {
-            LastSavedConfig = config;
+            LastSavedConfig = Clone(config);
             return Task.FromResult(UserFeishuBotConfigSaveResult.Saved());
         }
 
@@ -123,6 +157,30 @@ public sealed class AdminControllerReplyTtsTests
         public Task<FeishuOptions?> GetEffectiveOptionsByAppIdAsync(string? appId)
         {
             throw new NotSupportedException();
+        }
+
+        private static UserFeishuBotConfigEntity Clone(UserFeishuBotConfigEntity entity)
+        {
+            return new UserFeishuBotConfigEntity
+            {
+                Id = entity.Id,
+                Username = entity.Username,
+                IsEnabled = entity.IsEnabled,
+                AutoStartEnabled = entity.AutoStartEnabled,
+                AppId = entity.AppId,
+                AppSecret = entity.AppSecret,
+                EncryptKey = entity.EncryptKey,
+                VerificationToken = entity.VerificationToken,
+                DefaultCardTitle = entity.DefaultCardTitle,
+                ThinkingMessage = entity.ThinkingMessage,
+                HttpTimeoutSeconds = entity.HttpTimeoutSeconds,
+                StreamingThrottleMs = entity.StreamingThrottleMs,
+                ReplyTtsEnabled = entity.ReplyTtsEnabled,
+                ReplyTtsVoiceId = entity.ReplyTtsVoiceId,
+                LastStartedAt = entity.LastStartedAt,
+                CreatedAt = entity.CreatedAt,
+                UpdatedAt = entity.UpdatedAt
+            };
         }
     }
 
