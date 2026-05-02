@@ -38,7 +38,7 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
             var serviceHealth = await _meloTtsClient.GetHealthAsync(cancellationToken);
             return MergeHealth(storageHealth, serviceHealth);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsCancellation(ex))
         {
             return MergeHealth(
                 storageHealth,
@@ -63,7 +63,7 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
         {
             return await _meloTtsClient.GetVoicesAsync(cancellationToken);
         }
-        catch
+        catch (Exception ex) when (!IsCancellation(ex))
         {
             return [];
         }
@@ -190,5 +190,10 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
     private string? ResolveEffectiveDefaultVoiceId(string? serviceDefaultVoiceId)
     {
         return Normalize(_options.TtsDefaultVoiceId) ?? Normalize(serviceDefaultVoiceId);
+    }
+
+    private static bool IsCancellation(Exception exception)
+    {
+        return exception is OperationCanceledException;
     }
 }

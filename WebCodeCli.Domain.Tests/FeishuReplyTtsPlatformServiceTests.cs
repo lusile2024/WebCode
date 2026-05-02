@@ -69,6 +69,20 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     }
 
     [Fact]
+    public async Task GetHealthAsync_WhenCanceled_PropagatesCancellation()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                HealthException = new OperationCanceledException("canceled")
+            });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.GetHealthAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task GetVoicesAsync_ReturnsRuntimeVoiceList()
     {
         var resolver = CreateAvailableResolver();
@@ -111,6 +125,20 @@ public sealed class FeishuReplyTtsPlatformServiceTests
         var result = await service.GetVoicesAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetVoicesAsync_WhenCanceled_PropagatesCancellation()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                VoicesException = new OperationCanceledException("canceled")
+            });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.GetVoicesAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -225,6 +253,20 @@ public sealed class FeishuReplyTtsPlatformServiceTests
         Assert.False(result.Success);
         Assert.Null(result.VoiceId);
         Assert.Equal("Feishu reply TTS voices are currently unavailable.", result.Message);
+    }
+
+    [Fact]
+    public async Task ResolveVoiceOrFallbackAsync_WhenCanceled_PropagatesCancellation()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                VoicesException = new OperationCanceledException("canceled")
+            });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.ResolveVoiceOrFallbackAsync("saved-voice", TestContext.Current.CancellationToken));
     }
 
     private static FeishuReplyTtsPlatformService CreateService(
