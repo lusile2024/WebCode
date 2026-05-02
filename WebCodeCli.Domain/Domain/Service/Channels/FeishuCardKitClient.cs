@@ -133,6 +133,79 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return ExtractMessageId(result, "send text message");
     }
 
+    public async Task<string> UploadAudioFileAsync(
+        string filePath,
+        int durationMs,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new ArgumentException("Audio file path is required.", nameof(filePath));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+
+        using var fileStream = File.OpenRead(filePath);
+        using var payload = new MultipartFormDataContent
+        {
+            { new StringContent("opus"), "file_type" },
+            { new StringContent(durationMs.ToString()), "duration" }
+        };
+        payload.Add(new StreamContent(fileStream), "file", Path.GetFileName(filePath));
+
+        var response = await PostMultipartAsync(
+            "/open-apis/im/v1/files",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Upload Feishu audio file");
+
+        if (result.TryGetProperty("data", out var data) &&
+            data.TryGetProperty("file_key", out var fileKeyProp))
+        {
+            return fileKeyProp.GetString() ?? string.Empty;
+        }
+
+        throw new InvalidOperationException("Failed to upload audio file: invalid response");
+    }
+
+    public async Task<string> SendAudioMessageAsync(
+        string chatId,
+        string fileKey,
+        int durationMs,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+
+        var payload = new
+        {
+            receive_id = chatId,
+            msg_type = "audio",
+            content = JsonSerializer.Serialize(new
+            {
+                file_key = fileKey
+            })
+        };
+
+        var response = await PostAsync(
+            "/open-apis/im/v1/messages?receive_id_type=chat_id",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Send Feishu audio message");
+        return ExtractMessageId(result, "send audio message");
+    }
+
     public async Task<string> ReplyCardMessageAsync(
         string replyMessageId,
         string cardId,
@@ -749,6 +822,26 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             JsonSerializer.Serialize(payload),
             Encoding.UTF8,
             "application/json");
+
+        if (!string.IsNullOrEmpty(token))
+        {
+            request.Headers.Add("Authorization", $"Bearer {token}");
+        }
+
+        return await SendAsync(request, options, cancellationToken);
+    }
+
+    private async Task<HttpResponseMessage> PostMultipartAsync(
+        string path,
+        string token,
+        HttpContent payload,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{path}")
+        {
+            Content = payload
+        };
 
         if (!string.IsNullOrEmpty(token))
         {

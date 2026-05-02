@@ -13,6 +13,70 @@ namespace WebCodeCli.Domain.Tests;
 public class FeishuCardKitClientTests
 {
     [Fact]
+    public async Task UploadAudioFileAsync_PostsMultipartFormDataWithDuration()
+    {
+        var tempFile = Path.GetTempFileName();
+        await File.WriteAllTextAsync(tempFile, "opus", TestContext.Current.CancellationToken);
+
+        try
+        {
+            var handler = new StubHttpMessageHandler(
+            [
+                CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+                CreateJsonResponse("""{"code":0,"data":{"file_key":"file_v2_123"}}""")
+            ]);
+
+            var client = CreateClient(handler);
+
+            var fileKey = await client.UploadAudioFileAsync(tempFile, 3200, TestContext.Current.CancellationToken);
+
+            Assert.Equal("file_v2_123", fileKey);
+            Assert.Equal(
+            [
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                "/open-apis/im/v1/files"
+            ], handler.RequestPaths);
+            Assert.Contains("multipart/form-data", handler.RequestContentTypes[1], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("name=file_type", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("opus", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("name=duration", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("3200", handler.RequestBodies[1], StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task SendAudioMessageAsync_SendsAudioPayload()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_audio_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var messageId = await client.SendAudioMessageAsync("oc_audio_chat", "file_v2_123", 3200, TestContext.Current.CancellationToken);
+
+        Assert.Equal("om_audio_success", messageId);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/im/v1/messages"
+        ], handler.RequestPaths);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("audio", requestDoc.RootElement.GetProperty("msg_type").GetString());
+        Assert.Equal("oc_audio_chat", requestDoc.RootElement.GetProperty("receive_id").GetString());
+
+        using var contentDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("content").GetString()!);
+        Assert.Equal("file_v2_123", contentDoc.RootElement.GetProperty("file_key").GetString());
+    }
+
+    [Fact]
     public async Task SendTextMessageAsync_SendsTextPayload()
     {
         var handler = new StubHttpMessageHandler(
@@ -515,10 +579,12 @@ public class FeishuCardKitClientTests
 
         public List<string> RequestPaths { get; } = [];
         public List<string> RequestBodies { get; } = [];
+        public List<string?> RequestContentTypes { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestContentTypes.Add(request.Content?.Headers.ContentType?.MediaType);
             RequestBodies.Add(request.Content == null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken));
