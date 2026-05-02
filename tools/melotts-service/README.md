@@ -44,6 +44,7 @@ The startup scripts redirect these environment variables under the storage root:
 ## Requirements
 
 - Python with `fastapi`, `uvicorn`, and `melotts`
+- `pytest` if you want to run the local verification steps from this README
 - `ffmpeg` installed under the approved storage root, for example:
   - Windows: `<storage-root>\ffmpeg\bin\ffmpeg.exe`
   - non-Windows: `<storage-root>/ffmpeg/bin/ffmpeg`
@@ -52,6 +53,12 @@ Install the Python dependencies with:
 
 ```powershell
 python -m pip install -r requirements.txt
+```
+
+Install the test dependency for local verification:
+
+```powershell
+python -m pip install pytest
 ```
 
 If `MeloTTS` is not installed or cannot initialize, the service still starts and `GET /health` reports `status = "unavailable"`. Once the runtime is installed correctly, startup prefers GPU and falls back to CPU automatically if GPU initialization fails.

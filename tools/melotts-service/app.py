@@ -291,24 +291,42 @@ def build_device_candidates(preferred_device: str | None) -> list[str]:
     return unique_candidates
 
 
+def adapter_has_voice(adapter: EngineAdapter, voice_id: str) -> bool:
+    for voice in adapter.list_voices():
+        if normalize_voice(voice)["voiceId"] == voice_id:
+            return True
+
+    return False
+
+
 def initialize_runtime(
     adapter_factory: Callable[[str], EngineAdapter],
     preferred_device: str | None,
+    default_voice_id: str,
 ) -> EngineRuntime:
-    last_error: Exception | None = None
+    failure_messages: list[str] = []
 
     for candidate in build_device_candidates(preferred_device):
         try:
             adapter = adapter_factory(candidate)
+            if not adapter_has_voice(adapter, default_voice_id):
+                raise RuntimeError(
+                    f"Initialized {adapter.device} but default voice "
+                    f"'{default_voice_id}' is not available on that device."
+                )
+
             LOGGER.info("Initialized MeloTTS adapter on %s", adapter.device)
             return EngineRuntime(adapter=adapter, status="ok", device=adapter.device)
         except Exception as exc:
-            last_error = exc
             LOGGER.warning("Failed to initialize MeloTTS on %s: %s", candidate, exc)
+            failure_messages.append(f"{candidate}: {exc}")
 
-    message = "Unable to initialize MeloTTS engine."
-    if last_error is not None:
-        message = f"{message} {last_error}"
+    message = (
+        "Unable to initialize MeloTTS engine with a usable default voice "
+        f"'{default_voice_id}'."
+    )
+    if failure_messages:
+        message = f"{message} {'; '.join(failure_messages)}"
 
     LOGGER.error(message)
     return EngineRuntime(
@@ -335,7 +353,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.runtime = initialize_runtime(adapter_factory, preferred_device)
+        app.state.runtime = initialize_runtime(
+            adapter_factory,
+            preferred_device,
+            default_voice_id,
+        )
         yield
 
     app = FastAPI(title="MeloTTS Local Service", version="0.1.0", lifespan=lifespan)

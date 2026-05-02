@@ -176,3 +176,51 @@ def test_health_reports_cpu_after_gpu_initialization_fallback():
         "device": "cpu",
         "defaultVoiceId": "zh_female_default",
     }
+
+
+def test_health_falls_back_when_gpu_missing_default_voice():
+    app_module = load_app_module()
+    attempts: list[str] = []
+
+    def factory(device: str):
+        attempts.append(device)
+        if device == "cuda":
+            return FakeEngineAdapter(
+                device="cuda",
+                voices=[
+                    {
+                        "id": "en_male_demo",
+                        "name": "English Male",
+                        "language": "en",
+                        "gender": "male",
+                    }
+                ],
+            )
+
+        return FakeEngineAdapter(
+            device="cpu",
+            voices=[
+                {
+                    "id": "zh_female_default",
+                    "name": "Chinese Female",
+                    "language": "zh",
+                    "gender": "female",
+                }
+            ],
+        )
+
+    app = app_module.create_app(
+        adapter_factory=factory,
+        default_voice_id="zh_female_default",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert attempts == ["cuda", "cpu"]
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "device": "cpu",
+        "defaultVoiceId": "zh_female_default",
+    }
