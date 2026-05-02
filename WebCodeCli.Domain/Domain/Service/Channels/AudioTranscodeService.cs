@@ -96,8 +96,12 @@ public sealed class AudioTranscodeService : IAudioTranscodeService
 
     private static string SanitizePathSegment(string value)
     {
-        var invalidCharacters = Path.GetInvalidFileNameChars();
-        var sanitized = new string(value.Trim().Select(character => invalidCharacters.Contains(character) ? '_' : character).ToArray());
+        var sanitized = new string(value
+            .Trim()
+            .Select(static character => char.IsLetterOrDigit(character) || character is '-' or '_'
+                ? character
+                : '_')
+            .ToArray());
         return string.IsNullOrWhiteSpace(sanitized) ? "reply-tts-job" : sanitized;
     }
 }

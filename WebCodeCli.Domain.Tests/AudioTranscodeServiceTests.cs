@@ -27,6 +27,35 @@ public sealed class AudioTranscodeServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task TranscodeChunkAsync_WhenTempRootIsUnavailable_Throws()
+    {
+        Directory.CreateDirectory(_sandboxRoot);
+        var options = new FeishuReplyTtsOptions
+        {
+            AllowSystemDriveInstall = false,
+            FfmpegExecutablePath = Path.Combine(_sandboxRoot, "ffmpeg.exe")
+        };
+        var service = new AudioTranscodeService(
+            Options.Create(options),
+            new ReplyTtsStorageRootResolver(
+                new MutableOptionsMonitor<FeishuReplyTtsOptions>(options),
+                new FakeReplyTtsHostEnvironment(
+                    isWindows: true,
+                    systemDriveRoot: @"C:\",
+                    drives:
+                    [
+                        new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true)
+                    ])),
+            new RecordingExternalProcessRunner());
+        var inputPath = CreateInputFile();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.TranscodeChunkAsync("job-1", inputPath, chunkIndex: 1, TestContext.Current.CancellationToken));
+
+        Assert.Contains("unavailable", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task TranscodeChunkAsync_WritesUnderResolvedTempRoot_AndInvokesExpectedFfmpegArguments()
     {
         Directory.CreateDirectory(_sandboxRoot);
@@ -53,6 +82,50 @@ public sealed class AudioTranscodeServiceTests : IDisposable
         Assert.Contains("-ar 16000", runner.Arguments, StringComparison.Ordinal);
         Assert.Equal(Path.Combine(_sandboxRoot, "reply-tts", "temp", "job-42"), runner.WorkingDirectory);
         Assert.Equal(Path.Combine(_sandboxRoot, "reply-tts", "temp", "job-42", "chunk-001.opus"), outputPath);
+    }
+
+    [Fact]
+    public async Task TranscodeChunkAsync_WhenRunnerReturnsNonZeroExit_Throws()
+    {
+        Directory.CreateDirectory(_sandboxRoot);
+        var service = CreateService(
+            new FeishuReplyTtsOptions
+            {
+                TtsStorageRoot = Path.Combine(_sandboxRoot, "reply-tts"),
+                FfmpegExecutablePath = Path.Combine(_sandboxRoot, "ffmpeg.exe")
+            },
+            new RecordingExternalProcessRunner
+            {
+                Result = new ExternalProcessResult(1, string.Empty, "ffmpeg failed")
+            });
+        var inputPath = CreateInputFile();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.TranscodeChunkAsync("job-42", inputPath, chunkIndex: 1, TestContext.Current.CancellationToken));
+
+        Assert.Contains("exit code 1", error.Message, StringComparison.Ordinal);
+        Assert.Contains("ffmpeg failed", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TranscodeChunkAsync_SanitizesJobIdToStayUnderTempRoot()
+    {
+        Directory.CreateDirectory(_sandboxRoot);
+        var runner = new RecordingExternalProcessRunner();
+        var service = CreateService(
+            new FeishuReplyTtsOptions
+            {
+                TtsStorageRoot = Path.Combine(_sandboxRoot, "reply-tts"),
+                FfmpegExecutablePath = Path.Combine(_sandboxRoot, "ffmpeg.exe")
+            },
+            runner);
+        var inputPath = CreateInputFile();
+
+        var outputPath = await service.TranscodeChunkAsync("..", inputPath, chunkIndex: 1, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.Combine(_sandboxRoot, "reply-tts", "temp", "__", "chunk-001.opus"), outputPath);
+        Assert.StartsWith(Path.Combine(_sandboxRoot, "reply-tts", "temp"), outputPath, StringComparison.Ordinal);
+        Assert.Equal(Path.Combine(_sandboxRoot, "reply-tts", "temp", "__"), runner.WorkingDirectory);
     }
 
     public void Dispose()
@@ -88,6 +161,8 @@ public sealed class AudioTranscodeServiceTests : IDisposable
 
     private sealed class RecordingExternalProcessRunner : IExternalProcessRunner
     {
+        public ExternalProcessResult Result { get; set; } = new(0, string.Empty, string.Empty);
+
         public string? FileName { get; private set; }
 
         public string? Arguments { get; private set; }
@@ -103,7 +178,7 @@ public sealed class AudioTranscodeServiceTests : IDisposable
             FileName = fileName;
             Arguments = arguments;
             WorkingDirectory = workingDirectory;
-            return Task.FromResult(new ExternalProcessResult(0, string.Empty, string.Empty));
+            return Task.FromResult(Result);
         }
     }
 
