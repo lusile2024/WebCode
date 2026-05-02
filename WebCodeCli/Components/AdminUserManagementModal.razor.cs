@@ -63,7 +63,11 @@ public partial class AdminUserManagementModal : ComponentBase
         _userSearch = string.Empty;
         _allTools = CliExecutorService.GetAvailableTools();
         await RefreshReplyTtsPlatformAsync();
-        await LoadUsersAsync();
+        var usersLoaded = await LoadUsersAsync();
+        if (!usersLoaded)
+        {
+            return;
+        }
 
         if (_users.Count == 0)
         {
@@ -94,7 +98,11 @@ public partial class AdminUserManagementModal : ComponentBase
     {
         _allTools = CliExecutorService.GetAvailableTools();
         await RefreshReplyTtsPlatformAsync();
-        await LoadUsersAsync();
+        var usersLoaded = await LoadUsersAsync();
+        if (!usersLoaded)
+        {
+            return;
+        }
 
         if (!string.IsNullOrWhiteSpace(_selectedUsername) && _users.Any(x => string.Equals(x.Username, _selectedUsername, StringComparison.OrdinalIgnoreCase)))
         {
@@ -110,7 +118,7 @@ public partial class AdminUserManagementModal : ComponentBase
         }
     }
 
-    private async Task LoadUsersAsync()
+    private async Task<bool> LoadUsersAsync()
     {
         _isLoadingUsers = true;
         _errorMessage = string.Empty;
@@ -123,10 +131,10 @@ public partial class AdminUserManagementModal : ComponentBase
                 .ThenByDescending(static x => IsEnabled(x.Status))
                 .ThenBy(static x => x.Username, StringComparer.OrdinalIgnoreCase)
                 .ToList() ?? new List<UserSummaryDto>();
+            return true;
         }
         catch (Exception ex)
         {
-            _users = new List<UserSummaryDto>();
             _errorMessage = Tx("adminUserManagement.loadUsersFailed", "加载用户列表失败", "Failed to load users") + $": {ex.Message}";
         }
         finally
@@ -134,6 +142,8 @@ public partial class AdminUserManagementModal : ComponentBase
             _isLoadingUsers = false;
             StateHasChanged();
         }
+
+        return false;
     }
 
     private void PrepareNewUser()
@@ -162,34 +172,73 @@ public partial class AdminUserManagementModal : ComponentBase
         }
 
         _selectedUsername = selectedUser.Username;
-        _editor = EditableUserModel.FromSummary(selectedUser);
         _errorMessage = string.Empty;
         _successMessage = string.Empty;
         _isLoadingDetail = true;
         StateHasChanged();
 
+        var nextEditor = EditableUserModel.FromSummary(selectedUser);
+        var nextFeishuStatus = new UserFeishuBotRuntimeStatusModel();
+        var detailErrors = new List<string>();
+
         try
         {
-            var toolMapTask = Http.GetFromJsonAsync<Dictionary<string, bool>>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/tools");
-            var directoriesTask = Http.GetFromJsonAsync<List<string>>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/workspace-policies");
-            var feishuTask = Http.GetFromJsonAsync<UserFeishuBotConfigModel>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/feishu-bot");
-            var feishuStatusTask = Http.GetFromJsonAsync<UserFeishuBotRuntimeStatusModel>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/feishu-bot/status");
+            try
+            {
+                var toolMap = await Http.GetFromJsonAsync<Dictionary<string, bool>>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/tools");
+                nextEditor.AllowedToolIds = AdminUserManagementFormHelper.GetAllowedToolIds(toolMap ?? new Dictionary<string, bool>());
+            }
+            catch (Exception ex)
+            {
+                detailErrors.Add($"tools: {ex.Message}");
+            }
 
-            _editor.AllowedToolIds = AdminUserManagementFormHelper.GetAllowedToolIds(await toolMapTask ?? new Dictionary<string, bool>());
-            _editor.AllowedDirectoriesText = AdminUserManagementFormHelper.FormatAllowedDirectories(await directoriesTask ?? new List<string>());
+            try
+            {
+                var directories = await Http.GetFromJsonAsync<List<string>>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/workspace-policies");
+                nextEditor.AllowedDirectoriesText = AdminUserManagementFormHelper.FormatAllowedDirectories(directories ?? new List<string>());
+            }
+            catch (Exception ex)
+            {
+                detailErrors.Add($"workspace policies: {ex.Message}");
+            }
 
-            var feishuConfig = await feishuTask ?? new UserFeishuBotConfigModel();
-            _editor.FeishuBot = EditableFeishuBotConfigModel.From(feishuConfig);
-            _editor.HasStoredFeishuConfig = HasCustomFeishuConfig(_editor.FeishuBot);
-            _feishuBotStatus = await feishuStatusTask ?? new UserFeishuBotRuntimeStatusModel();
+            try
+            {
+                var feishuConfig = await Http.GetFromJsonAsync<UserFeishuBotConfigModel>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/feishu-bot")
+                    ?? new UserFeishuBotConfigModel();
+                nextEditor.FeishuBot = EditableFeishuBotConfigModel.From(feishuConfig);
+                nextEditor.HasStoredFeishuConfig = HasCustomFeishuConfig(nextEditor.FeishuBot);
+            }
+            catch (Exception ex)
+            {
+                detailErrors.Add($"feishu config: {ex.Message}");
+            }
+
+            try
+            {
+                nextFeishuStatus = await Http.GetFromJsonAsync<UserFeishuBotRuntimeStatusModel>($"/api/admin/users/{Uri.EscapeDataString(selectedUser.Username)}/feishu-bot/status")
+                    ?? new UserFeishuBotRuntimeStatusModel();
+            }
+            catch (Exception ex)
+            {
+                detailErrors.Add($"feishu status: {ex.Message}");
+            }
+
+            _editor = nextEditor;
+            _feishuBotStatus = nextFeishuStatus;
         }
         catch (Exception ex)
         {
             _errorMessage = Tx("adminUserManagement.loadUserDetailFailed", "加载用户详情失败", "Failed to load user details") + $": {ex.Message}";
-            _feishuBotStatus = new UserFeishuBotRuntimeStatusModel();
         }
         finally
         {
+            if (detailErrors.Count > 0)
+            {
+                _errorMessage = Tx("adminUserManagement.loadUserDetailFailed", "鍔犺浇鐢ㄦ埛璇︽儏澶辫触", "Failed to load user details") + $": {string.Join("; ", detailErrors)}";
+            }
+
             _isLoadingDetail = false;
             StateHasChanged();
         }
@@ -236,8 +285,15 @@ public partial class AdminUserManagementModal : ComponentBase
         {
             await SaveUserCoreAsync(username);
             _selectedUsername = username;
-            await LoadUsersAsync();
-            await SelectUserAsync(username);
+            var usersLoaded = await LoadUsersAsync();
+            if (usersLoaded && _users.Any(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)))
+            {
+                await SelectUserAsync(username);
+            }
+            else
+            {
+                _editor.IsExistingUser = true;
+            }
             _editor.Password = string.Empty;
             _successMessage = Tx("adminUserManagement.saveSuccess", "已保存用户配置。飞书机器人需要手动启动。", "User settings saved. Start the Feishu bot manually when ready.");
             await OnSaved.InvokeAsync();

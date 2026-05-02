@@ -18,6 +18,7 @@ public static class AdminUserManagementReplyTtsUiState
         {
             IsVoiceSelectorDisabled = !replyTtsEnabled || !platformIsAvailable,
             WarningMessage = BuildWarningMessage(
+                replyTtsEnabled,
                 normalizedSavedVoiceId,
                 platformIsAvailable,
                 platformMessage,
@@ -28,6 +29,7 @@ public static class AdminUserManagementReplyTtsUiState
     }
 
     private static string? BuildWarningMessage(
+        bool replyTtsEnabled,
         string? normalizedSavedVoiceId,
         bool platformIsAvailable,
         string? platformMessage,
@@ -39,6 +41,11 @@ public static class AdminUserManagementReplyTtsUiState
             return string.IsNullOrWhiteSpace(platformMessage)
                 ? "Feishu reply TTS is currently unavailable."
                 : platformMessage.Trim();
+        }
+
+        if (!replyTtsEnabled)
+        {
+            return null;
         }
 
         if (!string.IsNullOrWhiteSpace(normalizedSavedVoiceId) && !savedVoiceExistsInRuntimeList)
