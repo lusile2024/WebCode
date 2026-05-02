@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using System.Reflection;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -201,6 +202,28 @@ public class ReplyTtsStorageRootResolverTests
 
         Assert.Equal(@"D:\webcode\melotts", initialResult.StorageRoot);
         Assert.Equal(@"E:\override-root", updatedResult.StorageRoot);
+    }
+
+    [Fact]
+    public void ProbeTargetDirectory_UsesDisposableSandboxInsteadOfRealInstallTree()
+    {
+        var systemEnvironmentType = typeof(ReplyTtsStorageRootResolver)
+            .GetNestedType("SystemReplyTtsHostEnvironment", BindingFlags.NonPublic);
+
+        Assert.NotNull(systemEnvironmentType);
+
+        var method = systemEnvironmentType!
+            .GetMethod("BuildProbeTargetDirectory", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+
+        var probeTargetDirectory = (string)method!.Invoke(null, [@"D:\", "probe-token"])!;
+
+        Assert.Equal(
+            @"D:\.webcode-feishu-reply-tts-probe-probe-token\webcode\melotts",
+            probeTargetDirectory);
+        Assert.False(
+            probeTargetDirectory.StartsWith(@"D:\webcode\melotts", StringComparison.OrdinalIgnoreCase));
     }
 
     private static MutableOptionsMonitor<FeishuReplyTtsOptions> CreateMonitor(FeishuReplyTtsOptions options)

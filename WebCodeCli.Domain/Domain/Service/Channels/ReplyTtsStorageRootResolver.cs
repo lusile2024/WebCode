@@ -230,8 +230,9 @@ public sealed class ReplyTtsStorageRootResolver
                 return false;
             }
 
-            var storageRoot = BuildWindowsStorageRoot(drive.RootDirectory.FullName);
-            var probeDirectory = Path.Combine(storageRoot, ".write-probe", Guid.NewGuid().ToString("N"));
+            var probeToken = Guid.NewGuid().ToString("N");
+            var probeSandboxRoot = BuildProbeSandboxRoot(drive.RootDirectory.FullName, probeToken);
+            var probeDirectory = BuildProbeTargetDirectory(drive.RootDirectory.FullName, probeToken);
             var probeFilePath = Path.Combine(probeDirectory, "probe.tmp");
 
             try
@@ -255,8 +256,23 @@ public sealed class ReplyTtsStorageRootResolver
             finally
             {
                 TryDeleteProbePath(probeFilePath);
-                TryDeleteProbeDirectory(probeDirectory);
+                TryDeleteProbeDirectory(probeSandboxRoot);
             }
+        }
+
+        private static string BuildProbeSandboxRoot(string driveRoot, string probeToken)
+        {
+            return Path.Combine(
+                NormalizeDriveRoot(driveRoot),
+                $".webcode-feishu-reply-tts-probe-{probeToken}");
+        }
+
+        private static string BuildProbeTargetDirectory(string driveRoot, string probeToken)
+        {
+            return Path.Combine(
+                BuildProbeSandboxRoot(driveRoot, probeToken),
+                "webcode",
+                "melotts");
         }
 
         private static void TryDeleteProbePath(string probeFilePath)
