@@ -151,6 +151,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         using var payload = new MultipartFormDataContent
         {
             { new StringContent("opus"), "file_type" },
+            { new StringContent(Path.GetFileName(filePath)), "file_name" },
             { new StringContent(durationMs.ToString()), "duration" }
         };
         payload.Add(new StreamContent(fileStream), "file", Path.GetFileName(filePath));

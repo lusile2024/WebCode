@@ -39,6 +39,7 @@ public class FeishuCardKitClientTests
             Assert.Contains("multipart/form-data", handler.RequestContentTypes[1], StringComparison.OrdinalIgnoreCase);
             Assert.Contains("name=file_type", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
             Assert.Contains("opus", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("name=file_name", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
             Assert.Contains("name=duration", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
             Assert.Contains("3200", handler.RequestBodies[1], StringComparison.Ordinal);
         }
