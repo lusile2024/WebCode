@@ -12,6 +12,8 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IMeloTtsClient), ServiceLifetime.Scoped)]
 public sealed class MeloTtsClient : IMeloTtsClient
 {
+    private const string HttpClientName = "MeloTtsClient";
+
     private readonly FeishuReplyTtsOptions _options;
     private readonly ILogger<MeloTtsClient> _logger;
     private readonly HttpClient _httpClient;
@@ -24,7 +26,7 @@ public sealed class MeloTtsClient : IMeloTtsClient
     {
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _httpClient = httpClientFactory?.CreateClient("FeishuClient") ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _httpClient = httpClientFactory?.CreateClient(HttpClientName) ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _httpClient.Timeout = Timeout.InfiniteTimeSpan;
         _baseUri = CreateBaseUri(_options.TtsServiceBaseUrl);
     }

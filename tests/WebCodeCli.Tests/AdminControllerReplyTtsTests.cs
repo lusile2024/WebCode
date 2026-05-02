@@ -147,6 +147,21 @@ public sealed class AdminControllerReplyTtsTests
             voice => Assert.Equal("voice-b", voice.VoiceId));
     }
 
+    [Fact]
+    public async Task GetFeishuTtsVoices_WhenPlatformReturnsEmptyList_ReturnsOkEmptyList()
+    {
+        var controller = CreateController(platformService: new StubFeishuReplyTtsPlatformService
+        {
+            VoicesResult = []
+        });
+
+        var result = await controller.GetFeishuTtsVoices();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<List<FeishuReplyTtsVoiceOption>>(ok.Value);
+        Assert.Empty(dto);
+    }
+
     private static AdminController CreateController(
         StubUserFeishuBotConfigService? configService = null,
         StubUserFeishuBotRuntimeService? runtimeService = null,

@@ -79,7 +79,22 @@ public sealed class MeloTtsClientTests
         Assert.Equal("/voices", Assert.Single(handler.RequestPaths));
     }
 
-    private static MeloTtsClient CreateClient(StubHttpMessageHandler handler)
+    [Fact]
+    public async Task GetHealthAsync_UsesDedicatedHttpClientName()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"status":"ok"}""")
+        ]);
+        var factory = new StubHttpClientFactory(new HttpClient(handler));
+        var client = CreateClient(handler, factory);
+
+        await client.GetHealthAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("MeloTtsClient", factory.CreatedClientName);
+    }
+
+    private static MeloTtsClient CreateClient(StubHttpMessageHandler handler, StubHttpClientFactory? factory = null)
     {
         return new MeloTtsClient(
             Options.Create(new FeishuReplyTtsOptions
@@ -88,7 +103,7 @@ public sealed class MeloTtsClientTests
                 TtsServiceTimeoutSeconds = 15
             }),
             NullLogger<MeloTtsClient>.Instance,
-            new StubHttpClientFactory(new HttpClient(handler)));
+            factory ?? new StubHttpClientFactory(new HttpClient(handler)));
     }
 
     private static HttpResponseMessage CreateJsonResponse(string json, HttpStatusCode statusCode = HttpStatusCode.OK)
@@ -101,7 +116,13 @@ public sealed class MeloTtsClientTests
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => client;
+        public string? CreatedClientName { get; private set; }
+
+        public HttpClient CreateClient(string name)
+        {
+            CreatedClientName = name;
+            return client;
+        }
     }
 
     private sealed class StubHttpMessageHandler(IEnumerable<HttpResponseMessage> responses) : HttpMessageHandler

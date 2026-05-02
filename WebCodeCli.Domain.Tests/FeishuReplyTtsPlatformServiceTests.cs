@@ -48,6 +48,27 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     }
 
     [Fact]
+    public async Task GetHealthAsync_WhenConfiguredDefaultVoiceExists_PrefersConfiguredDefault()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok",
+                    DefaultVoiceId = "service-default"
+                }
+            },
+            defaultVoiceId: "configured-default");
+
+        var result = await service.GetHealthAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("configured-default", result.DefaultVoiceId);
+    }
+
+    [Fact]
     public async Task GetVoicesAsync_ReturnsRuntimeVoiceList()
     {
         var resolver = CreateAvailableResolver();
@@ -75,6 +96,21 @@ public sealed class FeishuReplyTtsPlatformServiceTests
             result,
             voice => Assert.Equal("voice-a", voice.VoiceId),
             voice => Assert.Equal("voice-b", voice.VoiceId));
+    }
+
+    [Fact]
+    public async Task GetVoicesAsync_WhenLocalServiceIsUnreachable_ReturnsEmptyList()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                VoicesException = new HttpRequestException("connection refused")
+            });
+
+        var result = await service.GetVoicesAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -106,6 +142,12 @@ public sealed class FeishuReplyTtsPlatformServiceTests
             CreateAvailableResolver(),
             new StubMeloTtsClient
             {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok",
+                    DefaultVoiceId = "service-default"
+                },
                 VoicesResult =
                 [
                     new FeishuReplyTtsVoiceOption { VoiceId = "default-zh", DisplayName = "Default" }
@@ -117,6 +159,32 @@ public sealed class FeishuReplyTtsPlatformServiceTests
 
         Assert.True(result.Success);
         Assert.Equal("default-zh", result.VoiceId);
+        Assert.True(result.UsedFallback);
+    }
+
+    [Fact]
+    public async Task ResolveVoiceOrFallbackAsync_WhenConfiguredDefaultIsBlank_UsesServiceDefaultVoice()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok",
+                    DefaultVoiceId = "service-default"
+                },
+                VoicesResult =
+                [
+                    new FeishuReplyTtsVoiceOption { VoiceId = "service-default", DisplayName = "Service Default" }
+                ]
+            });
+
+        var result = await service.ResolveVoiceOrFallbackAsync("missing-voice", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal("service-default", result.VoiceId);
         Assert.True(result.UsedFallback);
     }
 
@@ -139,6 +207,24 @@ public sealed class FeishuReplyTtsPlatformServiceTests
         Assert.False(result.Success);
         Assert.Null(result.VoiceId);
         Assert.Contains("No Feishu reply TTS voice", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ResolveVoiceOrFallbackAsync_WhenLocalServiceIsUnreachable_FailsCleanly()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubMeloTtsClient
+            {
+                VoicesException = new HttpRequestException("connection refused")
+            },
+            defaultVoiceId: "configured-default");
+
+        var result = await service.ResolveVoiceOrFallbackAsync("saved-voice", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Null(result.VoiceId);
+        Assert.Equal("Feishu reply TTS voices are currently unavailable.", result.Message);
     }
 
     private static FeishuReplyTtsPlatformService CreateService(
@@ -195,14 +281,28 @@ public sealed class FeishuReplyTtsPlatformServiceTests
 
         public IReadOnlyList<FeishuReplyTtsVoiceOption> VoicesResult { get; set; } = [];
 
+        public Exception? HealthException { get; set; }
+
+        public Exception? VoicesException { get; set; }
+
         public Task<FeishuReplyTtsHealthStatus> GetHealthAsync(CancellationToken cancellationToken = default)
         {
             HealthCallCount++;
+            if (HealthException is not null)
+            {
+                throw HealthException;
+            }
+
             return Task.FromResult(HealthResult);
         }
 
         public Task<IReadOnlyList<FeishuReplyTtsVoiceOption>> GetVoicesAsync(CancellationToken cancellationToken = default)
         {
+            if (VoicesException is not null)
+            {
+                throw VoicesException;
+            }
+
             return Task.FromResult(VoicesResult);
         }
 

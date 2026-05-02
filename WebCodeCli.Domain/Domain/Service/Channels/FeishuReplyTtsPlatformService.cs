@@ -9,6 +9,8 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IFeishuReplyTtsPlatformService), ServiceLifetime.Scoped)]
 public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformService
 {
+    private const string VoicesUnavailableMessage = "Feishu reply TTS voices are currently unavailable.";
+
     private readonly ReplyTtsStorageRootResolver _storageRootResolver;
     private readonly FeishuReplyTtsOptions _options;
     private readonly IMeloTtsClient _meloTtsClient;
@@ -57,14 +59,31 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
             return [];
         }
 
-        return await _meloTtsClient.GetVoicesAsync(cancellationToken);
+        try
+        {
+            return await _meloTtsClient.GetVoicesAsync(cancellationToken);
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     public async Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default)
     {
         var voices = await GetVoicesAsync(cancellationToken);
+        if (voices.Count == 0)
+        {
+            return new FeishuReplyTtsVoiceResolutionResult
+            {
+                Success = false,
+                UsedFallback = false,
+                Message = VoicesUnavailableMessage
+            };
+        }
+
         var normalizedSavedVoiceId = Normalize(savedVoiceId);
-        var normalizedDefaultVoiceId = Normalize(_options.TtsDefaultVoiceId);
+        var normalizedDefaultVoiceId = await GetEffectiveDefaultVoiceIdAsync(cancellationToken);
 
         var savedVoice = FindVoice(voices, normalizedSavedVoiceId);
         if (savedVoice is not null)
@@ -105,7 +124,7 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
         FeishuReplyTtsHealthStatus storageHealth,
         FeishuReplyTtsHealthStatus serviceHealth)
     {
-        var defaultVoiceId = Normalize(serviceHealth.DefaultVoiceId) ?? Normalize(_options.TtsDefaultVoiceId);
+        var defaultVoiceId = ResolveEffectiveDefaultVoiceId(serviceHealth.DefaultVoiceId);
         return new FeishuReplyTtsHealthStatus
         {
             IsAvailable = storageHealth.IsAvailable && serviceHealth.IsAvailable,
@@ -154,5 +173,22 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
         return string.IsNullOrWhiteSpace(value)
             ? null
             : value.Trim();
+    }
+
+    private async Task<string?> GetEffectiveDefaultVoiceIdAsync(CancellationToken cancellationToken)
+    {
+        var configuredDefaultVoiceId = Normalize(_options.TtsDefaultVoiceId);
+        if (!string.IsNullOrWhiteSpace(configuredDefaultVoiceId))
+        {
+            return configuredDefaultVoiceId;
+        }
+
+        var health = await GetHealthAsync(cancellationToken);
+        return Normalize(health.DefaultVoiceId);
+    }
+
+    private string? ResolveEffectiveDefaultVoiceId(string? serviceDefaultVoiceId)
+    {
+        return Normalize(_options.TtsDefaultVoiceId) ?? Normalize(serviceDefaultVoiceId);
     }
 }
