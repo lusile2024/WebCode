@@ -825,6 +825,7 @@ public class FeishuCardActionServiceTests
             appId: appId);
 
         var queued = await replyTtsOrchestrator.WhenQueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await replyTtsOrchestrator.WhenCallbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(chatId, queued.ChatId);
         Assert.Equal("luhaiyan", queued.Username);
@@ -871,6 +872,7 @@ public class FeishuCardActionServiceTests
             appId: appId);
 
         var queued = await replyTtsOrchestrator.WhenQueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await replyTtsOrchestrator.WhenCallbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(chatId, queued.ChatId);
         Assert.Equal("luhaiyan", queued.Username);
@@ -903,6 +905,35 @@ public class FeishuCardActionServiceTests
             inputValues: "continue");
 
         await cliExecutor.WaitForExecutionCompletionAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(replyTtsOrchestrator.Requests);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_LowInterruptionContinue_DoesNotQueueReplyTtsWhenExecutionErrors()
+    {
+        const string sessionId = "session-reply-tts-low-interruption-error";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            SupportsLowInterruption = true,
+            LowInterruptionExecutionIsError = true,
+            LowInterruptionExecutionErrorMessage = "low interruption failed"
+        };
+        cliExecutor.SetCliThreadId(sessionId, "thread-reply-tts-low-interruption-error");
+        cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
+
+        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var service = CreateService(
+            cliExecutor,
+            new StubFeishuChannelService(sessionId),
+            new TestServiceProvider(replyTtsOrchestrator: replyTtsOrchestrator));
+
+        await service.HandleCardActionAsync(
+            """{"action":"low_interruption_continue","session_id":"session-reply-tts-low-interruption-error","chat_key":"oc_reply_tts_low_interruption_error_chat","tool_id":"codex"}""",
+            chatId: "oc_reply_tts_low_interruption_error_chat");
+
+        await cliExecutor.WaitForLowInterruptionExecutionCompletionAsync(TimeSpan.FromSeconds(5));
 
         Assert.Empty(replyTtsOrchestrator.Requests);
     }
@@ -3164,15 +3195,29 @@ public class FeishuCardActionServiceTests
 
         public TaskCompletionSource<FeishuCompletedReplyTtsRequest> WhenQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource<FeishuCompletedReplyTtsRequest> WhenCallbackCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Func<FeishuCompletedReplyTtsRequest, Task>? OnQueued { get; set; }
 
         public async Task QueueCompletedReplyAsync(FeishuCompletedReplyTtsRequest request)
         {
             Requests.Add(request);
             WhenQueued.TrySetResult(request);
-            if (OnQueued != null)
+            if (OnQueued == null)
+            {
+                WhenCallbackCompleted.TrySetResult(request);
+                return;
+            }
+
+            try
             {
                 await OnQueued(request);
+                WhenCallbackCompleted.TrySetResult(request);
+            }
+            catch (Exception ex)
+            {
+                WhenCallbackCompleted.TrySetException(ex);
+                throw;
             }
         }
     }
