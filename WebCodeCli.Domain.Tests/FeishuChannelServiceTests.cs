@@ -407,7 +407,10 @@ public class FeishuChannelServiceTests
             });
 
             var call = Assert.Single(cliExecutor.ExecuteCalls);
-            Assert.Equal(expectedPrompt.Replace("\n", Environment.NewLine, StringComparison.Ordinal), call.Prompt);
+            var normalizedExpectedPrompt = expectedPrompt
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace("\n", Environment.NewLine, StringComparison.Ordinal);
+            Assert.Equal(normalizedExpectedPrompt, call.Prompt);
             Assert.Contains(chatSessionService.Messages[sessionId], message => message.Role == "user" && message.Content == call.Prompt);
         }
         finally
