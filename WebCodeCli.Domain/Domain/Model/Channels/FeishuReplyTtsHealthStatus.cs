@@ -17,4 +17,10 @@ public sealed class FeishuReplyTtsHealthStatus
     public string? LogsRoot { get; set; }
 
     public string? VenvRoot { get; set; }
+
+    public string? ServiceStatus { get; set; }
+
+    public string? Device { get; set; }
+
+    public string? DefaultVoiceId { get; set; }
 }

@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Model;
+using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
+using WebCodeCli.Domain.Domain.Service.Channels;
 using WebCodeCli.Domain.Repositories.Base.UserAccount;
 using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 
@@ -18,6 +20,7 @@ public class AdminController : ControllerBase
     private readonly IUserFeishuBotConfigService _userFeishuBotConfigService;
     private readonly IUserFeishuBotRuntimeService _userFeishuBotRuntimeService;
     private readonly ICliExecutorService _cliExecutorService;
+    private readonly IFeishuReplyTtsPlatformService _feishuReplyTtsPlatformService;
 
     public AdminController(
         IUserAccountService userAccountService,
@@ -25,7 +28,8 @@ public class AdminController : ControllerBase
         IUserWorkspacePolicyService userWorkspacePolicyService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
         IUserFeishuBotRuntimeService userFeishuBotRuntimeService,
-        ICliExecutorService cliExecutorService)
+        ICliExecutorService cliExecutorService,
+        IFeishuReplyTtsPlatformService feishuReplyTtsPlatformService)
     {
         _userAccountService = userAccountService;
         _userToolPolicyService = userToolPolicyService;
@@ -33,6 +37,7 @@ public class AdminController : ControllerBase
         _userFeishuBotConfigService = userFeishuBotConfigService;
         _userFeishuBotRuntimeService = userFeishuBotRuntimeService;
         _cliExecutorService = cliExecutorService;
+        _feishuReplyTtsPlatformService = feishuReplyTtsPlatformService;
     }
 
     [HttpGet("users")]
@@ -220,6 +225,20 @@ public class AdminController : ControllerBase
     {
         var status = await _userFeishuBotRuntimeService.StopAsync(username);
         return Ok(MapFeishuRuntimeStatus(status));
+    }
+
+    [HttpGet("feishu-tts/health")]
+    public async Task<ActionResult<FeishuReplyTtsHealthStatus>> GetFeishuTtsHealth()
+    {
+        var health = await _feishuReplyTtsPlatformService.GetHealthAsync(HttpContext?.RequestAborted ?? CancellationToken.None);
+        return Ok(health);
+    }
+
+    [HttpGet("feishu-tts/voices")]
+    public async Task<ActionResult<List<FeishuReplyTtsVoiceOption>>> GetFeishuTtsVoices()
+    {
+        var voices = await _feishuReplyTtsPlatformService.GetVoicesAsync(HttpContext?.RequestAborted ?? CancellationToken.None);
+        return Ok(voices.ToList());
     }
 
     private static UserAccountResponseDto MapUser(UserAccountEntity account)

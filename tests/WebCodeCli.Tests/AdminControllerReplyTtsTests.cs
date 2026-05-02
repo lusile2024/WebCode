@@ -2,8 +2,10 @@ using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Controllers;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
+using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
+using WebCodeCli.Domain.Domain.Service.Channels;
 using WebCodeCli.Domain.Repositories.Base.UserAccount;
 using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 using Xunit;
@@ -87,9 +89,68 @@ public sealed class AdminControllerReplyTtsTests
         Assert.Equal("voice-9", configService.LastSavedConfig.ReplyTtsVoiceId);
     }
 
+    [Fact]
+    public async Task GetFeishuTtsHealth_ReturnsPlatformHealthDto()
+    {
+        var platformService = new StubFeishuReplyTtsPlatformService
+        {
+            HealthResult = new FeishuReplyTtsHealthStatus
+            {
+                IsAvailable = true,
+                StorageRoot = @"D:\reply-tts",
+                ServiceStatus = "ok",
+                Device = "cpu",
+                DefaultVoiceId = "voice-default"
+            }
+        };
+        var controller = CreateController(platformService: platformService);
+
+        var result = await controller.GetFeishuTtsHealth();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<FeishuReplyTtsHealthStatus>(ok.Value);
+        Assert.True(dto.IsAvailable);
+        Assert.Equal(@"D:\reply-tts", dto.StorageRoot);
+        Assert.Equal("ok", dto.ServiceStatus);
+        Assert.Equal("cpu", dto.Device);
+        Assert.Equal("voice-default", dto.DefaultVoiceId);
+    }
+
+    [Fact]
+    public async Task GetFeishuTtsVoices_ReturnsPlatformVoiceDtos()
+    {
+        var platformService = new StubFeishuReplyTtsPlatformService
+        {
+            VoicesResult =
+            [
+                new FeishuReplyTtsVoiceOption
+                {
+                    VoiceId = "voice-a",
+                    DisplayName = "Voice A"
+                },
+                new FeishuReplyTtsVoiceOption
+                {
+                    VoiceId = "voice-b",
+                    DisplayName = "Voice B"
+                }
+            ]
+        };
+        var controller = CreateController(platformService: platformService);
+
+        var result = await controller.GetFeishuTtsVoices();
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<List<FeishuReplyTtsVoiceOption>>(ok.Value);
+        Assert.Collection(
+            dto,
+            voice => Assert.Equal("voice-a", voice.VoiceId),
+            voice => Assert.Equal("voice-b", voice.VoiceId));
+    }
+
     private static AdminController CreateController(
         StubUserFeishuBotConfigService? configService = null,
-        StubUserFeishuBotRuntimeService? runtimeService = null)
+        StubUserFeishuBotRuntimeService? runtimeService = null,
+        StubFeishuReplyTtsPlatformService? platformService = null)
     {
         return new AdminController(
             new StubUserAccountService(),
@@ -97,7 +158,8 @@ public sealed class AdminControllerReplyTtsTests
             new StubUserWorkspacePolicyService(),
             configService ?? new StubUserFeishuBotConfigService(),
             runtimeService ?? new StubUserFeishuBotRuntimeService(),
-            new StubCliExecutorService());
+            new StubCliExecutorService(),
+            platformService ?? new StubFeishuReplyTtsPlatformService());
     }
 
     private sealed class StubUserFeishuBotConfigService : IUserFeishuBotConfigService
@@ -269,5 +331,27 @@ public sealed class AdminControllerReplyTtsTests
         public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
         public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
         public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
+    }
+
+    private sealed class StubFeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformService
+    {
+        public FeishuReplyTtsHealthStatus HealthResult { get; set; } = new();
+
+        public IReadOnlyList<FeishuReplyTtsVoiceOption> VoicesResult { get; set; } = [];
+
+        public Task<FeishuReplyTtsHealthStatus> GetHealthAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(HealthResult);
+        }
+
+        public Task<IReadOnlyList<FeishuReplyTtsVoiceOption>> GetVoicesAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(VoicesResult);
+        }
+
+        public Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
     }
 }
