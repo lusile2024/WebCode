@@ -9,7 +9,7 @@ public class ReplyTtsStorageRootResolverTests
     [Fact]
     public void Resolve_WhenExplicitStorageRootIsSet_AlwaysUsesConfiguredRoot()
     {
-        var options = CreateOptions(new FeishuReplyTtsOptions
+        var options = CreateMonitor(new FeishuReplyTtsOptions
         {
             TtsStorageRoot = @"E:\custom-melotts",
             AllowSystemDriveInstall = false
@@ -36,10 +36,37 @@ public class ReplyTtsStorageRootResolverTests
     }
 
     [Fact]
+    public void Resolve_WhenExplicitStorageRootIsWindowsDriveOnly_NormalizesToDriveRoot()
+    {
+        var resolver = new ReplyTtsStorageRootResolver(
+            CreateMonitor(new FeishuReplyTtsOptions
+            {
+                TtsStorageRoot = "C:"
+            }),
+            new FakeReplyTtsHostEnvironment(
+                isWindows: true,
+                systemDriveRoot: @"C:\",
+                drives:
+                [
+                    new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true)
+                ]));
+
+        var result = resolver.Resolve();
+
+        Assert.True(result.IsAvailable);
+        Assert.Equal(@"C:\", result.StorageRoot);
+        Assert.Equal(@"C:\models", result.ModelsRoot);
+        Assert.Equal(@"C:\cache", result.CacheRoot);
+        Assert.Equal(@"C:\temp", result.TempRoot);
+        Assert.Equal(@"C:\logs", result.LogsRoot);
+        Assert.Equal(@"C:\venv", result.VenvRoot);
+    }
+
+    [Fact]
     public void Resolve_WhenWindowsAndNoExplicitRoot_PicksFirstWritableNonSystemDrive()
     {
         var resolver = new ReplyTtsStorageRootResolver(
-            CreateOptions(new FeishuReplyTtsOptions()),
+            CreateMonitor(new FeishuReplyTtsOptions()),
             new FakeReplyTtsHostEnvironment(
                 isWindows: true,
                 systemDriveRoot: @"C:\",
@@ -60,7 +87,7 @@ public class ReplyTtsStorageRootResolverTests
     public void Resolve_WhenWindowsOnlyHasSystemDriveAndSystemDriveInstallIsDisallowed_ReturnsUnavailable()
     {
         var resolver = new ReplyTtsStorageRootResolver(
-            CreateOptions(new FeishuReplyTtsOptions
+            CreateMonitor(new FeishuReplyTtsOptions
             {
                 AllowSystemDriveInstall = false
             }),
@@ -85,7 +112,7 @@ public class ReplyTtsStorageRootResolverTests
     public void Resolve_WhenWindowsOnlyHasSystemDriveAndSystemDriveInstallIsAllowed_UsesSystemDrive()
     {
         var resolver = new ReplyTtsStorageRootResolver(
-            CreateOptions(new FeishuReplyTtsOptions
+            CreateMonitor(new FeishuReplyTtsOptions
             {
                 AllowSystemDriveInstall = true
             }),
@@ -107,7 +134,7 @@ public class ReplyTtsStorageRootResolverTests
     public void Resolve_WhenNonWindowsAndNoExplicitRoot_UsesDefaultDataPath()
     {
         var resolver = new ReplyTtsStorageRootResolver(
-            CreateOptions(new FeishuReplyTtsOptions()),
+            CreateMonitor(new FeishuReplyTtsOptions()),
             new FakeReplyTtsHostEnvironment(
                 isWindows: false,
                 systemDriveRoot: null,
@@ -123,7 +150,7 @@ public class ReplyTtsStorageRootResolverTests
     public void Resolve_WhenStorageRootIsResolved_HelperSubpathsStayUnderStorageRoot()
     {
         var resolver = new ReplyTtsStorageRootResolver(
-            CreateOptions(new FeishuReplyTtsOptions
+            CreateMonitor(new FeishuReplyTtsOptions
             {
                 TtsStorageRoot = @"D:\tts-root"
             }),
@@ -150,9 +177,35 @@ public class ReplyTtsStorageRootResolverTests
             path => Assert.StartsWith(result.StorageRoot!, path, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static IOptions<FeishuReplyTtsOptions> CreateOptions(FeishuReplyTtsOptions options)
+    [Fact]
+    public void Resolve_WhenOptionsChangeAfterConstruction_UsesUpdatedValues()
     {
-        return Options.Create(options);
+        var optionsMonitor = CreateMonitor(new FeishuReplyTtsOptions());
+        var resolver = new ReplyTtsStorageRootResolver(
+            optionsMonitor,
+            new FakeReplyTtsHostEnvironment(
+                isWindows: true,
+                systemDriveRoot: @"C:\",
+                drives:
+                [
+                    new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true),
+                    new ReplyTtsDriveDescriptor(@"D:\", isReady: true, isWritable: true)
+                ]));
+
+        var initialResult = resolver.Resolve();
+        optionsMonitor.Set(new FeishuReplyTtsOptions
+        {
+            TtsStorageRoot = @"E:\override-root"
+        });
+        var updatedResult = resolver.Resolve();
+
+        Assert.Equal(@"D:\webcode\melotts", initialResult.StorageRoot);
+        Assert.Equal(@"E:\override-root", updatedResult.StorageRoot);
+    }
+
+    private static MutableOptionsMonitor<FeishuReplyTtsOptions> CreateMonitor(FeishuReplyTtsOptions options)
+    {
+        return new MutableOptionsMonitor<FeishuReplyTtsOptions>(options);
     }
 
     private sealed class FakeReplyTtsHostEnvironment : IReplyTtsHostEnvironment
@@ -176,6 +229,30 @@ public class ReplyTtsStorageRootResolverTests
         public IReadOnlyList<ReplyTtsDriveDescriptor> GetFixedDrives()
         {
             return _drives;
+        }
+    }
+
+    private sealed class MutableOptionsMonitor<TOptions> : IOptionsMonitor<TOptions>
+    {
+        private TOptions _currentValue;
+
+        public MutableOptionsMonitor(TOptions currentValue)
+        {
+            _currentValue = currentValue;
+        }
+
+        public TOptions CurrentValue => _currentValue;
+
+        public TOptions Get(string? name) => _currentValue;
+
+        public IDisposable? OnChange(Action<TOptions, string?> listener)
+        {
+            return null;
+        }
+
+        public void Set(TOptions options)
+        {
+            _currentValue = options;
         }
     }
 }

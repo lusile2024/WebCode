@@ -8,20 +8,21 @@ public sealed class ReplyTtsStorageRootResolver
 {
     private const string NonWindowsDefaultRoot = "/data/webcode/melotts";
 
-    private readonly FeishuReplyTtsOptions _options;
+    private readonly IOptionsMonitor<FeishuReplyTtsOptions> _optionsMonitor;
     private readonly IReplyTtsHostEnvironment _hostEnvironment;
 
     public ReplyTtsStorageRootResolver(
-        IOptions<FeishuReplyTtsOptions> options,
+        IOptionsMonitor<FeishuReplyTtsOptions> optionsMonitor,
         IReplyTtsHostEnvironment? hostEnvironment = null)
     {
-        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
         _hostEnvironment = hostEnvironment ?? new SystemReplyTtsHostEnvironment();
     }
 
     public FeishuReplyTtsHealthStatus Resolve()
     {
-        var explicitRoot = _options.TtsStorageRoot?.Trim();
+        var options = _optionsMonitor.CurrentValue ?? new FeishuReplyTtsOptions();
+        var explicitRoot = options.TtsStorageRoot?.Trim();
         if (!string.IsNullOrWhiteSpace(explicitRoot))
         {
             var useWindowsPaths = UsesWindowsSeparators(explicitRoot) || _hostEnvironment.IsWindows;
@@ -55,7 +56,7 @@ public sealed class ReplyTtsStorageRootResolver
         }
 
         var systemDrive = writableDrives.FirstOrDefault(d => IsSameDrive(d.RootPath, systemDriveRoot));
-        if (systemDrive is not null && _options.AllowSystemDriveInstall)
+        if (systemDrive is not null && options.AllowSystemDriveInstall)
         {
             var resolvedRoot = BuildWindowsStorageRoot(systemDrive.RootPath);
             return CreateAvailable(
@@ -162,6 +163,11 @@ public sealed class ReplyTtsStorageRootResolver
         var alternateSeparator = useWindowsPaths ? '/' : '\\';
         var normalized = path.Trim().Replace(alternateSeparator, separator);
 
+        if (useWindowsPaths && IsWindowsDriveDesignator(normalized))
+        {
+            return normalized + "\\";
+        }
+
         while (normalized.Length > 1 && normalized.EndsWith(separator))
         {
             if (!useWindowsPaths && normalized == "/")
@@ -178,6 +184,11 @@ public sealed class ReplyTtsStorageRootResolver
         }
 
         return normalized;
+    }
+
+    private static bool IsWindowsDriveDesignator(string path)
+    {
+        return path.Length == 2 && char.IsLetter(path[0]) && path[1] == ':';
     }
 
     private sealed class SystemReplyTtsHostEnvironment : IReplyTtsHostEnvironment
@@ -219,11 +230,13 @@ public sealed class ReplyTtsStorageRootResolver
                 return false;
             }
 
+            var storageRoot = BuildWindowsStorageRoot(drive.RootDirectory.FullName);
+            var probeDirectory = Path.Combine(storageRoot, ".write-probe", Guid.NewGuid().ToString("N"));
+            var probeFilePath = Path.Combine(probeDirectory, "probe.tmp");
+
             try
             {
-                var probeFilePath = Path.Combine(
-                    drive.RootDirectory.FullName,
-                    $".webcode-feishu-reply-tts-{Guid.NewGuid():N}.tmp");
+                Directory.CreateDirectory(probeDirectory);
 
                 using var stream = new FileStream(
                     probeFilePath,
@@ -238,6 +251,39 @@ public sealed class ReplyTtsStorageRootResolver
             catch
             {
                 return false;
+            }
+            finally
+            {
+                TryDeleteProbePath(probeFilePath);
+                TryDeleteProbeDirectory(probeDirectory);
+            }
+        }
+
+        private static void TryDeleteProbePath(string probeFilePath)
+        {
+            try
+            {
+                if (File.Exists(probeFilePath))
+                {
+                    File.Delete(probeFilePath);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TryDeleteProbeDirectory(string probeDirectory)
+        {
+            try
+            {
+                if (Directory.Exists(probeDirectory))
+                {
+                    Directory.Delete(probeDirectory, recursive: true);
+                }
+            }
+            catch
+            {
             }
         }
     }
