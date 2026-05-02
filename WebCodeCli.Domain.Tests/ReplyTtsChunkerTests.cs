@@ -17,6 +17,19 @@ public sealed class ReplyTtsChunkerTests
     }
 
     [Fact]
+    public void Split_WhenParagraphBoundaryFitsBetter_PrefersParagraphChunksBeforeSentenceFallback()
+    {
+        var chunker = new ReplyTtsChunker(maxChars: 10);
+
+        var chunks = chunker.Split("第一段很短。\n\n第二段也短。");
+
+        Assert.Collection(
+            chunks,
+            chunk => Assert.Equal("第一段很短。", chunk),
+            chunk => Assert.Equal("第二段也短。", chunk));
+    }
+
+    [Fact]
     public void Split_WhenParagraphExceedsLimit_SplitsOnSentenceBoundariesFirst()
     {
         var chunker = new ReplyTtsChunker(maxChars: 10);
