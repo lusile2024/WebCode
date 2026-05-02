@@ -157,7 +157,9 @@ public class AdminController : ControllerBase
             DefaultCardTitle = request.DefaultCardTitle,
             ThinkingMessage = request.ThinkingMessage,
             HttpTimeoutSeconds = request.HttpTimeoutSeconds,
-            StreamingThrottleMs = request.StreamingThrottleMs
+            StreamingThrottleMs = request.StreamingThrottleMs,
+            ReplyTtsEnabled = request.ReplyTtsEnabled,
+            ReplyTtsVoiceId = request.ReplyTtsVoiceId
         });
 
         if (!result.Success)
@@ -247,7 +249,9 @@ public class AdminController : ControllerBase
             DefaultCardTitle = config.DefaultCardTitle,
             ThinkingMessage = config.ThinkingMessage,
             HttpTimeoutSeconds = config.HttpTimeoutSeconds,
-            StreamingThrottleMs = config.StreamingThrottleMs
+            StreamingThrottleMs = config.StreamingThrottleMs,
+            ReplyTtsEnabled = config.ReplyTtsEnabled,
+            ReplyTtsVoiceId = config.ReplyTtsVoiceId
         };
     }
 
@@ -316,6 +320,8 @@ public sealed class UserFeishuBotConfigDto
     public string? ThinkingMessage { get; set; }
     public int? HttpTimeoutSeconds { get; set; }
     public int? StreamingThrottleMs { get; set; }
+    public bool ReplyTtsEnabled { get; set; }
+    public string? ReplyTtsVoiceId { get; set; }
 }
 
 public sealed class UserFeishuBotRuntimeStatusDto
