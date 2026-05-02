@@ -4,6 +4,8 @@ public sealed class FeishuCompletedReplyTtsRequest
 {
     public string ChatId { get; set; } = string.Empty;
 
+    public string? SessionId { get; set; }
+
     public string Output { get; set; } = string.Empty;
 
     public string? Username { get; set; }

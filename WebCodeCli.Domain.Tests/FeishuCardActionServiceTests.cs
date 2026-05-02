@@ -789,6 +789,125 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_QueuesReplyTtsAfterSuccessfulCompletion()
+    {
+        const string chatId = "oc_reply_tts_card_chat";
+        const string sessionId = "session-reply-tts-card";
+        const string appId = "cli_reply_tts_bot";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "card action completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
+
+        var chatSessionService = new StubChatSessionService();
+        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        replyTtsOrchestrator.OnQueued = request =>
+        {
+            Assert.Contains(
+                chatSessionService.Messages[sessionId],
+                message => message.Role == "assistant" && message.Content == "card action completed" && message.IsCompleted);
+            Assert.Equal("card action completed", request.Output);
+            return Task.CompletedTask;
+        };
+
+        var service = CreateService(
+            cliExecutor,
+            new StubFeishuChannelService(sessionId),
+            new TestServiceProvider(replyTtsOrchestrator: replyTtsOrchestrator),
+            chatSessionService: chatSessionService);
+
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "continue",
+            appId: appId);
+
+        var queued = await replyTtsOrchestrator.WhenQueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(chatId, queued.ChatId);
+        Assert.Equal("luhaiyan", queued.Username);
+        Assert.Equal(appId, queued.AppId);
+        Assert.Equal(sessionId, queued.SessionId);
+        Assert.Equal("card action completed", queued.Output);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_LowInterruptionContinue_QueuesReplyTtsAfterSuccessfulCompletion()
+    {
+        const string chatId = "oc_reply_tts_low_interruption_chat";
+        const string sessionId = "session-reply-tts-low-interruption";
+        const string appId = "cli_reply_tts_bot";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            SupportsLowInterruption = true,
+            LowInterruptionExecutionContent = "low interruption completed"
+        };
+        cliExecutor.SetCliThreadId(sessionId, "thread-reply-tts-low-interruption");
+        cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
+
+        var chatSessionService = new StubChatSessionService();
+        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        replyTtsOrchestrator.OnQueued = request =>
+        {
+            Assert.Contains(
+                chatSessionService.Messages[sessionId],
+                message => message.Role == "assistant" && message.Content == "low interruption completed" && message.IsCompleted);
+            Assert.Equal("low interruption completed", request.Output);
+            return Task.CompletedTask;
+        };
+
+        var service = CreateService(
+            cliExecutor,
+            new StubFeishuChannelService(sessionId),
+            new TestServiceProvider(replyTtsOrchestrator: replyTtsOrchestrator),
+            chatSessionService: chatSessionService);
+
+        await service.HandleCardActionAsync(
+            """{"action":"low_interruption_continue","session_id":"session-reply-tts-low-interruption","chat_key":"oc_reply_tts_low_interruption_chat","tool_id":"codex"}""",
+            chatId: chatId,
+            appId: appId);
+
+        var queued = await replyTtsOrchestrator.WhenQueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(chatId, queued.ChatId);
+        Assert.Equal("luhaiyan", queued.Username);
+        Assert.Equal(appId, queued.AppId);
+        Assert.Equal(sessionId, queued.SessionId);
+        Assert.Equal("low interruption completed", queued.Output);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_DoesNotQueueReplyTtsWhenExecutionErrors()
+    {
+        const string sessionId = "session-reply-tts-error";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionIsError = true,
+            StandardExecutionErrorMessage = "execution failed"
+        };
+        cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
+
+        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var service = CreateService(
+            cliExecutor,
+            new StubFeishuChannelService(sessionId),
+            new TestServiceProvider(replyTtsOrchestrator: replyTtsOrchestrator));
+
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: "oc_reply_tts_error_chat",
+            inputValues: "continue");
+
+        await cliExecutor.WaitForExecutionCompletionAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(replyTtsOrchestrator.Requests);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_LowInterruptionContinue_WhenThreadMissing_ReturnsWarning()
     {
         var cliExecutor = new RecordingCliExecutorService
@@ -2733,7 +2852,9 @@ public class FeishuCardActionServiceTests
     private sealed class RecordingCliExecutorService : ICliExecutorService
     {
         private readonly TaskCompletionSource<string> _executionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _executionCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<string> _lowInterruptionExecutionStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _lowInterruptionExecutionCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Dictionary<string, CliToolConfig> _tools = new(StringComparer.OrdinalIgnoreCase)
         {
             ["claude-code"] = new CliToolConfig { Id = "claude-code", Name = "Claude Code" },
@@ -2752,7 +2873,15 @@ public class FeishuCardActionServiceTests
 
         public string StandardExecutionCompletionContent { get; set; } = string.Empty;
 
+        public bool StandardExecutionIsError { get; set; }
+
+        public string StandardExecutionErrorMessage { get; set; } = "执行失败";
+
         public string LowInterruptionExecutionContent { get; set; } = "continued";
+
+        public bool LowInterruptionExecutionIsError { get; set; }
+
+        public string LowInterruptionExecutionErrorMessage { get; set; } = "执行失败";
 
         public List<string> ExecutedPrompts { get; } = new();
 
@@ -2785,11 +2914,25 @@ public class FeishuCardActionServiceTests
             return await _executionStarted.Task;
         }
 
+        public async Task<string> WaitForExecutionCompletionAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _executionCompleted.TrySetCanceled(cts.Token));
+            return await _executionCompleted.Task;
+        }
+
         public async Task<string> WaitForLowInterruptionExecutionAsync(TimeSpan timeout)
         {
             using var cts = new CancellationTokenSource(timeout);
             using var _ = cts.Token.Register(() => _lowInterruptionExecutionStarted.TrySetCanceled(cts.Token));
             return await _lowInterruptionExecutionStarted.Task;
+        }
+
+        public async Task<string> WaitForLowInterruptionExecutionCompletionAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _lowInterruptionExecutionCompleted.TrySetCanceled(cts.Token));
+            return await _lowInterruptionExecutionCompleted.Task;
         }
 
         public ICliToolAdapter? GetAdapter(CliToolConfig tool) => null;
@@ -2829,27 +2972,44 @@ public class FeishuCardActionServiceTests
             ExecutedPrompts.Add(userPrompt);
             StandardExecutionRequests.Add((sessionId, toolId, userPrompt));
             _executionStarted.TrySetResult(sessionId);
-
-            var hasTrailingCompletionChunk = StandardExecutionCompletionDelay > TimeSpan.Zero
-                || !string.IsNullOrEmpty(StandardExecutionCompletionContent);
-            yield return new StreamOutputChunk
+            try
             {
-                Content = StandardExecutionContent,
-                IsCompleted = !hasTrailingCompletionChunk
-            };
-
-            if (hasTrailingCompletionChunk)
-            {
-                if (StandardExecutionCompletionDelay > TimeSpan.Zero)
+                if (StandardExecutionIsError)
                 {
-                    await Task.Delay(StandardExecutionCompletionDelay, cancellationToken);
+                    yield return new StreamOutputChunk
+                    {
+                        IsError = true,
+                        IsCompleted = true,
+                        ErrorMessage = StandardExecutionErrorMessage
+                    };
+                    yield break;
                 }
 
+                var hasTrailingCompletionChunk = StandardExecutionCompletionDelay > TimeSpan.Zero
+                    || !string.IsNullOrEmpty(StandardExecutionCompletionContent);
                 yield return new StreamOutputChunk
                 {
-                    Content = StandardExecutionCompletionContent,
-                    IsCompleted = true
+                    Content = StandardExecutionContent,
+                    IsCompleted = !hasTrailingCompletionChunk
                 };
+
+                if (hasTrailingCompletionChunk)
+                {
+                    if (StandardExecutionCompletionDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(StandardExecutionCompletionDelay, cancellationToken);
+                    }
+
+                    yield return new StreamOutputChunk
+                    {
+                        Content = StandardExecutionCompletionContent,
+                        IsCompleted = true
+                    };
+                }
+            }
+            finally
+            {
+                _executionCompleted.TrySetResult(sessionId);
             }
 
             await Task.CompletedTask;
@@ -2870,11 +3030,29 @@ public class FeishuCardActionServiceTests
             LowInterruptionSessionIds.Add(sessionId);
             LowInterruptionPrompts.Add(prompt);
             _lowInterruptionExecutionStarted.TrySetResult(sessionId);
-            yield return new StreamOutputChunk
+            try
             {
-                Content = LowInterruptionExecutionContent,
-                IsCompleted = true
-            };
+                if (LowInterruptionExecutionIsError)
+                {
+                    yield return new StreamOutputChunk
+                    {
+                        IsError = true,
+                        IsCompleted = true,
+                        ErrorMessage = LowInterruptionExecutionErrorMessage
+                    };
+                    yield break;
+                }
+
+                yield return new StreamOutputChunk
+                {
+                    Content = LowInterruptionExecutionContent,
+                    IsCompleted = true
+                };
+            }
+            finally
+            {
+                _lowInterruptionExecutionCompleted.TrySetResult(sessionId);
+            }
 
             await Task.CompletedTask;
         }
@@ -2978,6 +3156,25 @@ public class FeishuCardActionServiceTests
                 : [];
 
         public void UpdateMessage(string sessionId, string messageId, Action<ChatMessage> updateAction) { }
+    }
+
+    private sealed class RecordingReplyTtsOrchestrator : IReplyTtsOrchestrator
+    {
+        public List<FeishuCompletedReplyTtsRequest> Requests { get; } = new();
+
+        public TaskCompletionSource<FeishuCompletedReplyTtsRequest> WhenQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Func<FeishuCompletedReplyTtsRequest, Task>? OnQueued { get; set; }
+
+        public async Task QueueCompletedReplyAsync(FeishuCompletedReplyTtsRequest request)
+        {
+            Requests.Add(request);
+            WhenQueued.TrySetResult(request);
+            if (OnQueued != null)
+            {
+                await OnQueued(request);
+            }
+        }
     }
 
     private sealed class StubFeishuCardKitClient : IFeishuCardKitClient
@@ -3350,6 +3547,7 @@ public class FeishuCardActionServiceTests
         private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService;
         private readonly IExternalCliSessionService _externalCliSessionService;
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService;
+        private readonly IReplyTtsOrchestrator? _replyTtsOrchestrator;
 
         public TestServiceProvider(
             TestUserContextService? userContextService = null,
@@ -3358,7 +3556,8 @@ public class FeishuCardActionServiceTests
             ICcSwitchService? ccSwitchService = null,
             IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
             IExternalCliSessionService? externalCliSessionService = null,
-            ISuperpowersCapabilityService? superpowersCapabilityService = null)
+            ISuperpowersCapabilityService? superpowersCapabilityService = null,
+            IReplyTtsOrchestrator? replyTtsOrchestrator = null)
         {
             _userContextService = userContextService ?? new TestUserContextService();
             _projectService = projectService ?? new TestProjectService(_userContextService);
@@ -3367,6 +3566,7 @@ public class FeishuCardActionServiceTests
             _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
             _externalCliSessionService = externalCliSessionService ?? new StubExternalCliSessionService([]);
             _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
+            _replyTtsOrchestrator = replyTtsOrchestrator;
         }
 
         public object? GetService(Type serviceType)
@@ -3424,6 +3624,11 @@ public class FeishuCardActionServiceTests
             if (serviceType == typeof(ISuperpowersCapabilityService))
             {
                 return _superpowersCapabilityService;
+            }
+
+            if (serviceType == typeof(IReplyTtsOrchestrator))
+            {
+                return _replyTtsOrchestrator;
             }
 
             return null;

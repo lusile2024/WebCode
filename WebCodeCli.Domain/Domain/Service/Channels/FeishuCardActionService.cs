@@ -458,7 +458,9 @@ public class FeishuCardActionService
                     toolId,
                     cliPrompt,
                     chatId,
-                    effectiveOptions.ThinkingMessage);
+                    effectiveOptions.ThinkingMessage,
+                    username,
+                    appId);
             }
             catch (Exception ex)
             {
@@ -626,7 +628,9 @@ public class FeishuCardActionService
                     effectiveToolId,
                     prompt,
                     actualChatKey,
-                    effectiveOptions.ThinkingMessage);
+                    effectiveOptions.ThinkingMessage,
+                    username,
+                    appId);
             }
             catch (Exception ex)
             {
@@ -745,7 +749,9 @@ public class FeishuCardActionService
         string toolId,
         string userPrompt,
         string chatId,
-        string thinkingMessage)
+        string thinkingMessage,
+        string? username,
+        string? appId)
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
@@ -878,6 +884,8 @@ public class FeishuCardActionService
                 CreatedAt = DateTime.Now
             });
 
+            await TryQueueCompletedReplyTtsAsync(chatId, username, appId, sessionId, finalOutput);
+
             _logger.LogInformation(
                 "CLI execution completed for session: {SessionId}",
                 sessionId);
@@ -910,7 +918,9 @@ public class FeishuCardActionService
         string toolId,
         string? prompt,
         string chatId,
-        string thinkingMessage)
+        string thinkingMessage,
+        string? username,
+        string? appId)
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
@@ -1033,6 +1043,8 @@ public class FeishuCardActionService
                 CreatedAt = DateTime.Now
             });
 
+            await TryQueueCompletedReplyTtsAsync(chatId, username, appId, sessionId, finalOutput);
+
             _logger.LogInformation(
                 "Low interruption continue completed for session: {SessionId}",
                 sessionId);
@@ -1113,6 +1125,41 @@ public class FeishuCardActionService
         {
             _logger.LogDebug(ex, "检查 Superpowers 计划文件失败: SessionId={SessionId}", sessionId);
             return false;
+        }
+    }
+
+    private async Task TryQueueCompletedReplyTtsAsync(
+        string chatId,
+        string? username,
+        string? appId,
+        string sessionId,
+        string finalOutput)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var replyTtsOrchestrator = scope.ServiceProvider.GetService<IReplyTtsOrchestrator>();
+            if (replyTtsOrchestrator == null)
+            {
+                return;
+            }
+
+            await replyTtsOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
+            {
+                ChatId = chatId,
+                SessionId = sessionId,
+                Username = username,
+                AppId = appId,
+                Output = finalOutput
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to queue reply TTS after Feishu card action completion: SessionId={SessionId}, ChatId={ChatId}",
+                sessionId,
+                chatId);
         }
     }
 
