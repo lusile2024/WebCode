@@ -21,15 +21,17 @@ public sealed class ReplyTtsSpeechTextNormalizerTests
             ```
             """);
 
-        Assert.Equal(
-            """
+        var expected = """
             Heading
             Bold item with docs
             Visit this link for more.
 
             Code snippet omitted.
-            """,
-            result);
+            """
+            .ReplaceLineEndings("\n")
+            .Trim();
+
+        Assert.Equal(expected, result);
     }
 
     [Fact]
