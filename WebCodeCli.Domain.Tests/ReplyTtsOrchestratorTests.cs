@@ -31,7 +31,7 @@ public sealed class ReplyTtsOrchestratorTests
 
         await WaitUntilAsync(() => harness.ConfigService.UsernameLookupCount == 1);
 
-        Assert.Empty(harness.MeloClient.Calls);
+        Assert.Empty(harness.KokoroClient.Calls);
         Assert.Empty(harness.TranscodeService.Calls);
         Assert.Empty(harness.AudioService.Calls);
         Assert.Equal(0, harness.CardKit.SendTextCallCount);
@@ -58,9 +58,10 @@ public sealed class ReplyTtsOrchestratorTests
 
         await WaitUntilAsync(() => harness.ConfigService.UsernameLookupCount == 1);
 
-        Assert.Empty(harness.MeloClient.Calls);
+        Assert.Empty(harness.KokoroClient.Calls);
         Assert.Empty(harness.TranscodeService.Calls);
         Assert.Empty(harness.AudioService.Calls);
+        Assert.Equal(0, harness.CardKit.SendTextCallCount);
     }
 
     [Fact]
@@ -73,7 +74,7 @@ public sealed class ReplyTtsOrchestratorTests
                 ReplyTtsEnabled = true,
                 ReplyTtsVoiceId = "missing-voice"
             },
-            chunkMaxChars: 8);
+            chunkMaxChars: 20);
 
         harness.PlatformService.Resolution = new FeishuReplyTtsVoiceResolutionResult
         {
@@ -91,7 +92,7 @@ public sealed class ReplyTtsOrchestratorTests
         {
             ChatId = "oc-order-chat",
             Username = "luhaiyan",
-            Output = "第一段。\n\n第二段。"
+            Output = "first paragraph.\n\nsecond paragraph."
         });
 
         await WaitUntilAsync(() => harness.AudioService.Calls.Count == 2);
@@ -99,19 +100,49 @@ public sealed class ReplyTtsOrchestratorTests
 
         Assert.Collection(
             harness.Sequence,
-            item => Assert.Equal("synthesize:1:platform-default:第一段。", item),
+            item => Assert.Equal("synthesize:1:platform-default:first paragraph.", item),
             item => Assert.Equal("transcode:1", item),
             item => Assert.Equal("send:1", item),
-            item => Assert.Equal("synthesize:2:platform-default:第二段。", item),
+            item => Assert.Equal("synthesize:2:platform-default:second paragraph.", item),
             item => Assert.Equal("transcode:2", item),
             item => Assert.Equal("send:2", item));
 
-        Assert.All(harness.MeloClient.Calls, call => Assert.Equal("platform-default", call.VoiceId));
+        Assert.All(harness.KokoroClient.Calls, call => Assert.Equal("platform-default", call.VoiceId));
         Assert.All(harness.AudioService.Calls, call => Assert.True(call.DurationMs > 0));
+        Assert.Equal(0, harness.CardKit.SendTextCallCount);
     }
 
     [Fact]
-    public async Task QueueCompletedReplyAsync_StopsAfterFailedChunkAndSendsOneFailureNotice()
+    public async Task QueueCompletedReplyAsync_WhenSynthesisFails_StopsAudioWithoutRetryAndSendsTextFallback()
+    {
+        using var harness = new ReplyTtsOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                ReplyTtsEnabled = true
+            });
+
+        harness.KokoroClient.FailureCondition = static _ => true;
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
+        {
+            ChatId = "oc-synth-failure-chat",
+            Username = "luhaiyan",
+            Output = "first line.\nsecond line.\nthird line."
+        });
+
+        await WaitUntilAsync(() => harness.KokoroClient.Calls.Count >= 1);
+        await Task.Delay(150, TestContext.Current.CancellationToken);
+
+        Assert.Single(harness.KokoroClient.Calls);
+        Assert.Empty(harness.TranscodeService.Calls);
+        Assert.Empty(harness.AudioService.Calls);
+        Assert.Equal(1, harness.CardKit.SendTextCallCount);
+        Assert.Equal("回复语音发送失败，已停止后续音频。", harness.CardKit.TextMessages.Single());
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenAudioSendPipelineFails_StopsRemainingAudioAndSendsTextFallback()
     {
         using var harness = new ReplyTtsOrchestratorHarness(
             new UserFeishuBotConfigEntity
@@ -119,24 +150,69 @@ public sealed class ReplyTtsOrchestratorTests
                 Username = "luhaiyan",
                 ReplyTtsEnabled = true
             },
-            chunkMaxChars: 8);
+            chunkMaxChars: 20);
 
         harness.TranscodeService.FailChunkIndex = 2;
 
         await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
         {
-            ChatId = "oc-failure-chat",
+            ChatId = "oc-pipeline-failure-chat",
             Username = "luhaiyan",
-            Output = "第一段。\n\n第二段。\n\n第三段。"
+            Output = "first paragraph.\n\nsecond paragraph.\n\nthird paragraph."
         });
 
-        await WaitUntilAsync(() => harness.CardKit.SendTextCallCount == 1);
+        await WaitUntilAsync(() => harness.TranscodeService.Calls.Count == 2);
+        await Task.Delay(150, TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, harness.MeloClient.Calls.Count);
+        Assert.Equal(2, harness.KokoroClient.Calls.Count);
         Assert.Equal(2, harness.TranscodeService.Calls.Count);
         Assert.Single(harness.AudioService.Calls);
         Assert.Equal(1, harness.CardKit.SendTextCallCount);
-        Assert.DoesNotContain(harness.Sequence, item => item == "synthesize:3:default-voice:第三段。");
+        Assert.Equal("回复语音发送失败，已停止后续音频。", harness.CardKit.TextMessages.Single());
+        Assert.DoesNotContain(harness.Sequence, item => item == "synthesize:3:default-voice:third paragraph.");
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenSynthesisTimesOut_RetriesWithSmallerChunksBeforeFallback()
+    {
+        using var harness = new ReplyTtsOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                ReplyTtsEnabled = true
+            },
+            chunkMaxChars: 120);
+
+        harness.KokoroClient.FailureFactory = static text =>
+            text.Length > 20
+                ? new TaskCanceledException("simulated synth timeout")
+                : null;
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
+        {
+            ChatId = "oc-timeout-retry-chat",
+            Username = "luhaiyan",
+            Output =
+                """
+                顶部区域只放公共字段：
+                条码
+                托盘号
+                当前库位
+                分区（可改，下拉）
+                """
+        });
+
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, harness.KokoroClient.Calls.Count);
+        Assert.Equal(2, harness.TranscodeService.Calls.Count);
+        Assert.Equal(2, harness.AudioService.Calls.Count);
+        Assert.Equal(0, harness.CardKit.SendTextCallCount);
+        Assert.Collection(
+            harness.KokoroClient.Calls.Select(static call => call.Text),
+            call => Assert.Equal("顶部区域只放公共字段：\n条码托盘号当前库位分区（可改，下拉）", call),
+            call => Assert.Equal("顶部区域只放公共字段：", call),
+            call => Assert.Equal("条码托盘号当前库位分区（可改，下拉）", call));
     }
 
     [Fact]
@@ -155,30 +231,30 @@ public sealed class ReplyTtsOrchestratorTests
         {
             ChatId = "oc-serialized-chat",
             Username = "luhaiyan",
-            Output = "第一条"
+            Output = "first reply"
         });
 
-        await harness.AudioService.FirstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await harness.AudioService.FirstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
         {
             ChatId = "oc-serialized-chat",
             Username = "luhaiyan",
-            Output = "第二条"
+            Output = "second reply"
         });
 
-        await Task.Delay(150);
+        await Task.Delay(150, TestContext.Current.CancellationToken);
 
-        Assert.Single(harness.MeloClient.Calls);
+        Assert.Single(harness.KokoroClient.Calls);
 
         harness.AudioService.ReleaseFirstSend();
 
         await WaitUntilAsync(() => harness.AudioService.Calls.Count == 2);
 
         Assert.Collection(
-            harness.MeloClient.Calls,
-            first => Assert.Equal("第一条", first.Text),
-            second => Assert.Equal("第二条", second.Text));
+            harness.KokoroClient.Calls,
+            first => Assert.Equal("first reply", first.Text),
+            second => Assert.Equal("second reply", second.Text));
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
@@ -191,7 +267,7 @@ public sealed class ReplyTtsOrchestratorTests
                 return;
             }
 
-            await Task.Delay(25);
+            await Task.Delay(25, TestContext.Current.CancellationToken);
         }
 
         Assert.True(condition(), "Timed out waiting for the expected condition.");
@@ -208,7 +284,7 @@ public sealed class ReplyTtsOrchestratorTests
 
             ConfigService = new TrackingUserFeishuBotConfigService(config);
             PlatformService = new TrackingReplyTtsPlatformService();
-            MeloClient = new TrackingMeloTtsClient(Sequence);
+            KokoroClient = new TrackingSherpaKokoroTtsClient(Sequence);
             TranscodeService = new TrackingAudioTranscodeService(Sequence);
             AudioService = new TrackingFeishuAudioMessageService(Sequence);
             CardKit = new TrackingFeishuCardKitClient();
@@ -218,11 +294,15 @@ public sealed class ReplyTtsOrchestratorTests
                 new StaticOptionsMonitor<FeishuReplyTtsOptions>(new FeishuReplyTtsOptions
                 {
                     TtsStorageRoot = TempRoot
-                })));
+                }),
+                new FakeReplyTtsHostEnvironment(
+                    isWindows: false,
+                    systemDriveRoot: null,
+                    drives: [])));
             services.AddSingleton<ReplyTtsSpeechTextNormalizer>();
             services.AddScoped(_ => new ReplyTtsChunker(chunkMaxChars));
             services.AddScoped<IFeishuReplyTtsPlatformService>(_ => PlatformService);
-            services.AddScoped<IMeloTtsClient>(_ => MeloClient);
+            services.AddScoped<ISherpaKokoroTtsClient>(_ => KokoroClient);
             services.AddScoped<IAudioTranscodeService>(_ => TranscodeService);
             services.AddScoped<IFeishuAudioMessageService>(_ => AudioService);
             services.AddScoped<IUserFeishuBotConfigService>(_ => ConfigService);
@@ -246,7 +326,7 @@ public sealed class ReplyTtsOrchestratorTests
 
         public TrackingReplyTtsPlatformService PlatformService { get; }
 
-        public TrackingMeloTtsClient MeloClient { get; }
+        public TrackingSherpaKokoroTtsClient KokoroClient { get; }
 
         public TrackingAudioTranscodeService TranscodeService { get; }
 
@@ -308,6 +388,22 @@ public sealed class ReplyTtsOrchestratorTests
             => Task.FromResult<FeishuOptions?>(null);
     }
 
+    private sealed class FakeReplyTtsHostEnvironment(
+        bool isWindows,
+        string? systemDriveRoot,
+        IReadOnlyList<ReplyTtsDriveDescriptor> drives) : IReplyTtsHostEnvironment
+    {
+        public bool IsWindows { get; } = isWindows;
+
+        public string? SystemDriveRoot { get; } = systemDriveRoot;
+
+        public IReadOnlyList<ReplyTtsDriveDescriptor> GetFixedDrives() => drives;
+
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+
+        public bool FileExists(string path) => File.Exists(path);
+    }
+
     private sealed class TrackingReplyTtsPlatformService : IFeishuReplyTtsPlatformService
     {
         public FeishuReplyTtsVoiceResolutionResult Resolution { get; set; } = new()
@@ -329,11 +425,18 @@ public sealed class ReplyTtsOrchestratorTests
 
         public Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default)
             => Task.FromResult(Resolution);
+
+        public Task<FeishuReplyTtsHealthStatus> EnsureServiceStartedAsync(CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
-    private sealed class TrackingMeloTtsClient(ConcurrentQueue<string> sequence) : IMeloTtsClient
+    private sealed class TrackingSherpaKokoroTtsClient(ConcurrentQueue<string> sequence) : ISherpaKokoroTtsClient
     {
         public List<SynthesizeCall> Calls { get; } = new();
+
+        public Func<string, bool>? FailureCondition { get; set; }
+
+        public Func<string, Exception?>? FailureFactory { get; set; }
 
         public Task<FeishuReplyTtsHealthStatus> GetHealthAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
@@ -346,6 +449,18 @@ public sealed class ReplyTtsOrchestratorTests
             var call = new SynthesizeCall(text, voiceId);
             Calls.Add(call);
             sequence.Enqueue($"synthesize:{Calls.Count}:{voiceId}:{text}");
+
+            var failure = FailureFactory?.Invoke(text);
+            if (failure != null)
+            {
+                throw failure;
+            }
+
+            if (FailureCondition?.Invoke(text) == true)
+            {
+                throw new HttpRequestException("simulated synth failure");
+            }
+
             return Task.FromResult<Stream>(new MemoryStream(CreateWaveBytes(durationMs: 1000)));
         }
     }

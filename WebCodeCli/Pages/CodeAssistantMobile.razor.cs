@@ -1249,12 +1249,18 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             }
             else
             {
-                var historyMessages = await ExternalCliSessionHistoryService.GetRecentMessagesAsync(
+                var history = await ExternalCliSessionHistoryService.GetRecentHistoryAsync(
                     toolId,
                     cliThreadId,
                     maxCount: historyLimit,
                     workspacePath: workspacePath);
-                assistantMessage.Content = BuildExternalCliHistoryText(historyMessages, toolLabel, workspacePath);
+                assistantMessage.Content = ExternalCliHistoryTextBuilder.Build(
+                    "当前 CLI 会话历史",
+                    history.Messages,
+                    toolLabel,
+                    workspacePath,
+                    cliThreadId,
+                    history.SourcePath);
             }
         }
         catch (Exception ex)
@@ -1323,55 +1329,6 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             : defaultLimit;
     }
 
-    private static string BuildExternalCliHistoryText(
-        IReadOnlyList<ExternalCliHistoryMessage> messages,
-        string toolLabel,
-        string? workspacePath)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("当前 CLI 会话历史");
-        builder.AppendLine($"CLI 工具: {toolLabel}");
-        builder.AppendLine($"工作目录: {workspacePath ?? "(工作区未初始化或已失效)"}");
-        builder.AppendLine();
-
-        if (messages.Count == 0)
-        {
-            builder.AppendLine("该 CLI 会话暂无可解析的历史消息。");
-            return builder.ToString().TrimEnd();
-        }
-
-        builder.AppendLine($"显示条数: 最近 {messages.Count} 条");
-        builder.AppendLine();
-
-        foreach (var message in messages)
-        {
-            var roleLabel = string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase) ? "用户" : "助手";
-            if (message.CreatedAt.HasValue)
-            {
-                builder.AppendLine($"[{roleLabel}] {message.CreatedAt:HH:mm}");
-            }
-            else
-            {
-                builder.AppendLine($"[{roleLabel}]");
-            }
-
-            builder.AppendLine(NormalizeHistoryContent(message.Content));
-            builder.AppendLine();
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private static string NormalizeHistoryContent(string? content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            return string.Empty;
-        }
-
-        return content.Replace("\r\n", "\n").Trim();
-    }
-    
     private async Task ScrollToBottom()
     {
         try

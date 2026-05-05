@@ -12,8 +12,7 @@ public class ReplyTtsStorageRootResolverTests
     {
         var options = CreateMonitor(new FeishuReplyTtsOptions
         {
-            TtsStorageRoot = @"E:\custom-melotts",
-            AllowSystemDriveInstall = false
+            TtsStorageRoot = @"E:\custom-kokoro"
         });
         var resolver = new ReplyTtsStorageRootResolver(
             options,
@@ -28,16 +27,16 @@ public class ReplyTtsStorageRootResolverTests
         var result = resolver.Resolve();
 
         Assert.True(result.IsAvailable);
-        Assert.Equal(@"E:\custom-melotts", result.StorageRoot);
-        Assert.Equal(@"E:\custom-melotts\models", result.ModelsRoot);
-        Assert.Equal(@"E:\custom-melotts\cache", result.CacheRoot);
-        Assert.Equal(@"E:\custom-melotts\temp", result.TempRoot);
-        Assert.Equal(@"E:\custom-melotts\logs", result.LogsRoot);
-        Assert.Equal(@"E:\custom-melotts\venv", result.VenvRoot);
+        Assert.Equal(@"E:\custom-kokoro", result.StorageRoot);
+        Assert.Equal(@"E:\custom-kokoro\models", result.ModelsRoot);
+        Assert.Equal(@"E:\custom-kokoro\cache", result.CacheRoot);
+        Assert.Equal(@"E:\custom-kokoro\temp", result.TempRoot);
+        Assert.Equal(@"E:\custom-kokoro\logs", result.LogsRoot);
+        Assert.Equal(@"E:\custom-kokoro\venv", result.VenvRoot);
     }
 
     [Fact]
-    public void Resolve_WhenExplicitStorageRootIsWindowsDriveOnly_NormalizesToDriveRoot()
+    public void Resolve_WhenExplicitStorageRootIsWindowsSystemDrive_ReturnsUnavailable()
     {
         var resolver = new ReplyTtsStorageRootResolver(
             CreateMonitor(new FeishuReplyTtsOptions
@@ -54,13 +53,32 @@ public class ReplyTtsStorageRootResolverTests
 
         var result = resolver.Resolve();
 
-        Assert.True(result.IsAvailable);
-        Assert.Equal(@"C:\", result.StorageRoot);
-        Assert.Equal(@"C:\models", result.ModelsRoot);
-        Assert.Equal(@"C:\cache", result.CacheRoot);
-        Assert.Equal(@"C:\temp", result.TempRoot);
-        Assert.Equal(@"C:\logs", result.LogsRoot);
-        Assert.Equal(@"C:\venv", result.VenvRoot);
+        Assert.False(result.IsAvailable);
+        Assert.Null(result.StorageRoot);
+        Assert.Contains("non-system drive", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolve_WhenExplicitStorageRootIsUnderWindowsSystemDrive_ReturnsUnavailable()
+    {
+        var resolver = new ReplyTtsStorageRootResolver(
+            CreateMonitor(new FeishuReplyTtsOptions
+            {
+                TtsStorageRoot = @"C:\WebCodeData\Kokoro"
+            }),
+            new FakeReplyTtsHostEnvironment(
+                isWindows: true,
+                systemDriveRoot: @"C:\",
+                drives:
+                [
+                    new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true)
+                ]));
+
+        var result = resolver.Resolve();
+
+        Assert.False(result.IsAvailable);
+        Assert.Null(result.StorageRoot);
+        Assert.Contains("non-system drive", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -81,17 +99,69 @@ public class ReplyTtsStorageRootResolverTests
         var result = resolver.Resolve();
 
         Assert.True(result.IsAvailable);
-        Assert.Equal(@"D:\webcode\melotts", result.StorageRoot);
+        Assert.Equal(@"D:\WebCodeData\Kokoro", result.StorageRoot);
     }
 
     [Fact]
-    public void Resolve_WhenWindowsOnlyHasSystemDriveAndSystemDriveInstallIsDisallowed_ReturnsUnavailable()
+    public void Resolve_WhenWindowsAndExistingKokoroRootIsPresent_PrefersThatDrive()
     {
         var resolver = new ReplyTtsStorageRootResolver(
-            CreateMonitor(new FeishuReplyTtsOptions
-            {
-                AllowSystemDriveInstall = false
-            }),
+            CreateMonitor(new FeishuReplyTtsOptions()),
+            new FakeReplyTtsHostEnvironment(
+                isWindows: true,
+                systemDriveRoot: @"C:\",
+                drives:
+                [
+                    new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true),
+                    new ReplyTtsDriveDescriptor(@"D:\", isReady: true, isWritable: true),
+                    new ReplyTtsDriveDescriptor(@"E:\", isReady: true, isWritable: true)
+                ],
+                existingDirectories:
+                [
+                    @"E:\WebCodeData\Kokoro",
+                    @"E:\WebCodeData\Kokoro\models"
+                ]));
+
+        var result = resolver.Resolve();
+
+        Assert.True(result.IsAvailable);
+        Assert.Equal(@"E:\WebCodeData\Kokoro", result.StorageRoot);
+        Assert.Contains(@"E:\", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolve_WhenDriveOnlyHasTempResidue_DoesNotTreatItAsInstalledKokoroRoot()
+    {
+        var resolver = new ReplyTtsStorageRootResolver(
+            CreateMonitor(new FeishuReplyTtsOptions()),
+            new FakeReplyTtsHostEnvironment(
+                isWindows: true,
+                systemDriveRoot: @"C:\",
+                drives:
+                [
+                    new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true),
+                    new ReplyTtsDriveDescriptor(@"D:\", isReady: true, isWritable: true),
+                    new ReplyTtsDriveDescriptor(@"E:\", isReady: true, isWritable: true)
+                ],
+                existingDirectories:
+                [
+                    @"D:\WebCodeData\Kokoro",
+                    @"D:\WebCodeData\Kokoro\temp",
+                    @"E:\WebCodeData\Kokoro",
+                    @"E:\WebCodeData\Kokoro\models"
+                ]));
+
+        var result = resolver.Resolve();
+
+        Assert.True(result.IsAvailable);
+        Assert.Equal(@"E:\WebCodeData\Kokoro", result.StorageRoot);
+    }
+
+    [Fact]
+    public void Resolve_WhenWindowsOnlyHasSystemDrive_ReturnsUnavailable()
+    {
+        var resolver = new ReplyTtsStorageRootResolver(
+            CreateMonitor(new FeishuReplyTtsOptions()),
             new FakeReplyTtsHostEnvironment(
                 isWindows: true,
                 systemDriveRoot: @"C:\",
@@ -105,30 +175,8 @@ public class ReplyTtsStorageRootResolverTests
         Assert.False(result.IsAvailable);
         Assert.Null(result.StorageRoot);
         Assert.Contains("C:\\", result.Message, StringComparison.Ordinal);
-        Assert.Contains("AllowSystemDriveInstall", result.Message, StringComparison.Ordinal);
+        Assert.Contains("non-system drive", result.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("D:\\", result.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Resolve_WhenWindowsOnlyHasSystemDriveAndSystemDriveInstallIsAllowed_UsesSystemDrive()
-    {
-        var resolver = new ReplyTtsStorageRootResolver(
-            CreateMonitor(new FeishuReplyTtsOptions
-            {
-                AllowSystemDriveInstall = true
-            }),
-            new FakeReplyTtsHostEnvironment(
-                isWindows: true,
-                systemDriveRoot: @"C:\",
-                drives:
-                [
-                    new ReplyTtsDriveDescriptor(@"C:\", isReady: true, isWritable: true)
-                ]));
-
-        var result = resolver.Resolve();
-
-        Assert.True(result.IsAvailable);
-        Assert.Equal(@"C:\webcode\melotts", result.StorageRoot);
     }
 
     [Fact]
@@ -144,7 +192,7 @@ public class ReplyTtsStorageRootResolverTests
         var result = resolver.Resolve();
 
         Assert.True(result.IsAvailable);
-        Assert.Equal("/data/webcode/melotts", result.StorageRoot);
+        Assert.Equal("/data/webcode/kokoro", result.StorageRoot);
     }
 
     [Fact]
@@ -200,7 +248,7 @@ public class ReplyTtsStorageRootResolverTests
         });
         var updatedResult = resolver.Resolve();
 
-        Assert.Equal(@"D:\webcode\melotts", initialResult.StorageRoot);
+        Assert.Equal(@"D:\WebCodeData\Kokoro", initialResult.StorageRoot);
         Assert.Equal(@"E:\override-root", updatedResult.StorageRoot);
     }
 
@@ -220,10 +268,10 @@ public class ReplyTtsStorageRootResolverTests
         var probeTargetDirectory = (string)method!.Invoke(null, [@"D:\", "probe-token"])!;
 
         Assert.Equal(
-            @"D:\.webcode-feishu-reply-tts-probe-probe-token\webcode\melotts",
+            @"D:\.webcode-feishu-reply-tts-probe-probe-token\webcode\kokoro",
             probeTargetDirectory);
         Assert.False(
-            probeTargetDirectory.StartsWith(@"D:\webcode\melotts", StringComparison.OrdinalIgnoreCase));
+            probeTargetDirectory.StartsWith(@"D:\webcode\kokoro", StringComparison.OrdinalIgnoreCase));
     }
 
     private static MutableOptionsMonitor<FeishuReplyTtsOptions> CreateMonitor(FeishuReplyTtsOptions options)
@@ -234,15 +282,25 @@ public class ReplyTtsStorageRootResolverTests
     private sealed class FakeReplyTtsHostEnvironment : IReplyTtsHostEnvironment
     {
         private readonly IReadOnlyList<ReplyTtsDriveDescriptor> _drives;
+        private readonly HashSet<string> _existingDirectories;
+        private readonly HashSet<string> _existingFiles;
 
         public FakeReplyTtsHostEnvironment(
             bool isWindows,
             string? systemDriveRoot,
-            IReadOnlyList<ReplyTtsDriveDescriptor> drives)
+            IReadOnlyList<ReplyTtsDriveDescriptor> drives,
+            IReadOnlyList<string>? existingDirectories = null,
+            IReadOnlyList<string>? existingFiles = null)
         {
             IsWindows = isWindows;
             SystemDriveRoot = systemDriveRoot;
             _drives = drives;
+            _existingDirectories = new HashSet<string>(
+                (existingDirectories ?? []).Select(path => path.TrimEnd('\\', '/')),
+                StringComparer.OrdinalIgnoreCase);
+            _existingFiles = new HashSet<string>(
+                (existingFiles ?? []).Select(path => path.TrimEnd('\\', '/')),
+                StringComparer.OrdinalIgnoreCase);
         }
 
         public bool IsWindows { get; }
@@ -252,6 +310,16 @@ public class ReplyTtsStorageRootResolverTests
         public IReadOnlyList<ReplyTtsDriveDescriptor> GetFixedDrives()
         {
             return _drives;
+        }
+
+        public bool DirectoryExists(string path)
+        {
+            return _existingDirectories.Contains(path.TrimEnd('\\', '/'));
+        }
+
+        public bool FileExists(string path)
+        {
+            return _existingFiles.Contains(path.TrimEnd('\\', '/'));
         }
     }
 

@@ -13,16 +13,19 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
 
     private readonly ReplyTtsStorageRootResolver _storageRootResolver;
     private readonly FeishuReplyTtsOptions _options;
-    private readonly IMeloTtsClient _meloTtsClient;
+    private readonly ISherpaKokoroTtsClient _ttsClient;
+    private readonly IReplyTtsLocalServiceManager _localServiceManager;
 
     public FeishuReplyTtsPlatformService(
         ReplyTtsStorageRootResolver storageRootResolver,
         IOptions<FeishuReplyTtsOptions> options,
-        IMeloTtsClient meloTtsClient)
+        ISherpaKokoroTtsClient ttsClient,
+        IReplyTtsLocalServiceManager localServiceManager)
     {
         _storageRootResolver = storageRootResolver ?? throw new ArgumentNullException(nameof(storageRootResolver));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
-        _meloTtsClient = meloTtsClient ?? throw new ArgumentNullException(nameof(meloTtsClient));
+        _ttsClient = ttsClient ?? throw new ArgumentNullException(nameof(ttsClient));
+        _localServiceManager = localServiceManager ?? throw new ArgumentNullException(nameof(localServiceManager));
     }
 
     public async Task<FeishuReplyTtsHealthStatus> GetHealthAsync(CancellationToken cancellationToken = default)
@@ -33,9 +36,22 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
             return storageHealth;
         }
 
+        var ffmpegResolution = ReplyTtsFfmpegPathResolver.Resolve(_options, storageHealth);
+        if (!ffmpegResolution.IsAvailable)
+        {
+            return MergeHealth(
+                storageHealth,
+                new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = false,
+                    Message = ffmpegResolution.Message,
+                    ServiceStatus = "ffmpeg-unavailable"
+                });
+        }
+
         try
         {
-            var serviceHealth = await _meloTtsClient.GetHealthAsync(cancellationToken);
+            var serviceHealth = await _ttsClient.GetHealthAsync(cancellationToken);
             return MergeHealth(storageHealth, serviceHealth);
         }
         catch (Exception ex) when (!IsCancellation(ex))
@@ -45,7 +61,7 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
                 new FeishuReplyTtsHealthStatus
                 {
                     IsAvailable = false,
-                    Message = $"Local MeloTTS service is unavailable: {ex.Message}",
+                    Message = $"Local Kokoro/sherpa-onnx service is unavailable: {ex.Message}",
                     ServiceStatus = "unreachable"
                 });
         }
@@ -61,7 +77,7 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
 
         try
         {
-            return await _meloTtsClient.GetVoicesAsync(cancellationToken);
+            return await _ttsClient.GetVoicesAsync(cancellationToken);
         }
         catch (Exception ex) when (!IsCancellation(ex))
         {
@@ -71,6 +87,19 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
 
     public async Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default)
     {
+        var health = await GetHealthAsync(cancellationToken);
+        if (!health.IsAvailable)
+        {
+            return new FeishuReplyTtsVoiceResolutionResult
+            {
+                Success = false,
+                UsedFallback = false,
+                Message = string.IsNullOrWhiteSpace(health.Message)
+                    ? VoicesUnavailableMessage
+                    : health.Message
+            };
+        }
+
         var voices = await GetVoicesAsync(cancellationToken);
         if (voices.Count == 0)
         {
@@ -118,6 +147,36 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
             UsedFallback = false,
             Message = "No Feishu reply TTS voice is available. Save a valid voice or configure a default voice."
         };
+    }
+
+    public async Task<FeishuReplyTtsHealthStatus> EnsureServiceStartedAsync(CancellationToken cancellationToken = default)
+    {
+        var storageHealth = _storageRootResolver.Resolve();
+        if (!storageHealth.IsAvailable)
+        {
+            return storageHealth;
+        }
+
+        var ffmpegResolution = ReplyTtsFfmpegPathResolver.Resolve(_options, storageHealth);
+        if (!ffmpegResolution.IsAvailable)
+        {
+            return MergeHealth(
+                storageHealth,
+                new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = false,
+                    Message = ffmpegResolution.Message,
+                    ServiceStatus = "ffmpeg-unavailable"
+                });
+        }
+
+        var startHealth = await _localServiceManager.EnsureStartedAsync(storageHealth, cancellationToken);
+        if (!startHealth.IsAvailable)
+        {
+            return MergeHealth(storageHealth, startHealth);
+        }
+
+        return await GetHealthAsync(cancellationToken);
     }
 
     private FeishuReplyTtsHealthStatus MergeHealth(

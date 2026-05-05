@@ -6,7 +6,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 
 public sealed class ReplyTtsStorageRootResolver
 {
-    private const string NonWindowsDefaultRoot = "/data/webcode/melotts";
+    private const string NonWindowsDefaultRoot = "/data/webcode/kokoro";
 
     private readonly IOptionsMonitor<FeishuReplyTtsOptions> _optionsMonitor;
     private readonly IReplyTtsHostEnvironment _hostEnvironment;
@@ -26,6 +26,15 @@ public sealed class ReplyTtsStorageRootResolver
         if (!string.IsNullOrWhiteSpace(explicitRoot))
         {
             var useWindowsPaths = UsesWindowsSeparators(explicitRoot) || _hostEnvironment.IsWindows;
+            if (useWindowsPaths && IsSameDrive(explicitRoot, _hostEnvironment.SystemDriveRoot))
+            {
+                return new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = false,
+                    Message = "Feishu reply TTS storage is unavailable because Kokoro/sherpa-onnx must be installed on a non-system drive. Set FeishuReplyTts:TtsStorageRoot to a non-C drive."
+                };
+            }
+
             return CreateAvailable(
                 NormalizeStorageRoot(explicitRoot, useWindowsPaths),
                 "Using configured Feishu reply TTS storage root.",
@@ -45,6 +54,24 @@ public sealed class ReplyTtsStorageRootResolver
             .Where(d => d.IsReady && d.IsWritable)
             .ToList();
 
+        var existingNonSystemDrive = writableDrives.FirstOrDefault(d =>
+        {
+            if (IsSameDrive(d.RootPath, systemDriveRoot))
+            {
+                return false;
+            }
+
+            return HasWindowsInstallEvidence(BuildWindowsStorageRoot(d.RootPath));
+        });
+        if (existingNonSystemDrive is not null)
+        {
+            var resolvedRoot = BuildWindowsStorageRoot(existingNonSystemDrive.RootPath);
+            return CreateAvailable(
+                resolvedRoot,
+                $"Using existing Feishu reply TTS storage root on writable non-system drive '{NormalizeDriveRoot(existingNonSystemDrive.RootPath)}'.",
+                useWindowsPaths: true);
+        }
+
         var nonSystemDrive = writableDrives.FirstOrDefault(d => !IsSameDrive(d.RootPath, systemDriveRoot));
         if (nonSystemDrive is not null)
         {
@@ -56,22 +83,13 @@ public sealed class ReplyTtsStorageRootResolver
         }
 
         var systemDrive = writableDrives.FirstOrDefault(d => IsSameDrive(d.RootPath, systemDriveRoot));
-        if (systemDrive is not null && options.AllowSystemDriveInstall)
-        {
-            var resolvedRoot = BuildWindowsStorageRoot(systemDrive.RootPath);
-            return CreateAvailable(
-                resolvedRoot,
-                $"Using Windows system drive '{NormalizeDriveRoot(systemDrive.RootPath)}' for Feishu reply TTS storage because AllowSystemDriveInstall is enabled.",
-                useWindowsPaths: true);
-        }
-
         if (systemDrive is not null)
         {
             var driveLabel = NormalizeDriveRoot(systemDrive.RootPath);
             return new FeishuReplyTtsHealthStatus
             {
                 IsAvailable = false,
-                Message = $"Feishu reply TTS storage is unavailable because only the Windows system drive '{driveLabel}' is writable. Set FeishuReplyTts:TtsStorageRoot explicitly or enable AllowSystemDriveInstall."
+                Message = $"Feishu reply TTS storage is unavailable because only the Windows system drive '{driveLabel}' is writable. Attach a writable non-system drive and set FeishuReplyTts:TtsStorageRoot to that drive."
             };
         }
 
@@ -99,7 +117,36 @@ public sealed class ReplyTtsStorageRootResolver
 
     private static string BuildWindowsStorageRoot(string driveRoot)
     {
-        return AppendSegment(AppendSegment(NormalizeDriveRoot(driveRoot), "webcode", useWindowsPaths: true), "melotts", useWindowsPaths: true);
+        return AppendSegment(AppendSegment(NormalizeDriveRoot(driveRoot), "WebCodeData", useWindowsPaths: true), "Kokoro", useWindowsPaths: true);
+    }
+
+    private bool HasWindowsInstallEvidence(string storageRoot)
+    {
+        if (string.IsNullOrWhiteSpace(storageRoot) || !_hostEnvironment.DirectoryExists(storageRoot))
+        {
+            return false;
+        }
+
+        var ffmpegPath = AppendSegment(AppendSegment(AppendSegment(storageRoot, "ffmpeg", useWindowsPaths: true), "bin", useWindowsPaths: true), "ffmpeg.exe", useWindowsPaths: true);
+        if (_hostEnvironment.FileExists(ffmpegPath))
+        {
+            return true;
+        }
+
+        var modelsRoot = AppendSegment(storageRoot, "models", useWindowsPaths: true);
+        if (_hostEnvironment.DirectoryExists(modelsRoot))
+        {
+            return true;
+        }
+
+        var venvRoot = AppendSegment(storageRoot, "venv", useWindowsPaths: true);
+        if (_hostEnvironment.DirectoryExists(venvRoot))
+        {
+            return true;
+        }
+
+        var serviceRoot = AppendSegment(storageRoot, "service", useWindowsPaths: true);
+        return _hostEnvironment.DirectoryExists(serviceRoot);
     }
 
     private static string AppendSegment(string root, string segment, bool useWindowsPaths)
@@ -125,9 +172,25 @@ public sealed class ReplyTtsStorageRootResolver
     private static bool IsSameDrive(string driveRoot, string systemDriveRoot)
     {
         return string.Equals(
-            NormalizeDriveRoot(driveRoot),
-            NormalizeDriveRoot(systemDriveRoot),
+            NormalizeDriveRootForComparison(driveRoot),
+            NormalizeDriveRootForComparison(systemDriveRoot),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeDriveRootForComparison(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var normalized = path.Trim().Replace('/', '\\');
+        if (normalized.Length >= 2 && char.IsLetter(normalized[0]) && normalized[1] == ':')
+        {
+            return $"{char.ToUpperInvariant(normalized[0])}:\\";
+        }
+
+        return NormalizeDriveRoot(normalized);
     }
 
     private static string NormalizeDriveRoot(string? root)
@@ -223,6 +286,16 @@ public sealed class ReplyTtsStorageRootResolver
                 .ToArray();
         }
 
+        public bool DirectoryExists(string path)
+        {
+            return Directory.Exists(path);
+        }
+
+        public bool FileExists(string path)
+        {
+            return File.Exists(path);
+        }
+
         private static bool CanWriteToDrive(DriveInfo drive)
         {
             if (!drive.IsReady)
@@ -272,7 +345,7 @@ public sealed class ReplyTtsStorageRootResolver
             return Path.Combine(
                 BuildProbeSandboxRoot(driveRoot, probeToken),
                 "webcode",
-                "melotts");
+                "kokoro");
         }
 
         private static void TryDeleteProbePath(string probeFilePath)
@@ -312,6 +385,10 @@ public interface IReplyTtsHostEnvironment
     string? SystemDriveRoot { get; }
 
     IReadOnlyList<ReplyTtsDriveDescriptor> GetFixedDrives();
+
+    bool DirectoryExists(string path);
+
+    bool FileExists(string path);
 }
 
 public sealed class ReplyTtsDriveDescriptor

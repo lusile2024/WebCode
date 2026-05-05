@@ -90,6 +90,39 @@ public sealed class AdminControllerReplyTtsTests
     }
 
     [Fact]
+    public async Task SaveFeishuBotConfig_WhenReplyTtsEnabled_EnsuresTtsServiceStarted()
+    {
+        var platformService = new StubFeishuReplyTtsPlatformService();
+        var controller = CreateController(platformService: platformService);
+
+        var result = await controller.SaveFeishuBotConfig("alice", new UserFeishuBotConfigDto
+        {
+            IsEnabled = true,
+            ReplyTtsEnabled = true,
+            ReplyTtsVoiceId = "voice-9"
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(1, platformService.EnsureStartedCallCount);
+    }
+
+    [Fact]
+    public async Task SaveFeishuBotConfig_WhenReplyTtsDisabled_DoesNotStartTtsService()
+    {
+        var platformService = new StubFeishuReplyTtsPlatformService();
+        var controller = CreateController(platformService: platformService);
+
+        var result = await controller.SaveFeishuBotConfig("alice", new UserFeishuBotConfigDto
+        {
+            IsEnabled = true,
+            ReplyTtsEnabled = false
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(0, platformService.EnsureStartedCallCount);
+    }
+
+    [Fact]
     public async Task GetFeishuTtsHealth_ReturnsPlatformHealthDto()
     {
         var platformService = new StubFeishuReplyTtsPlatformService
@@ -354,6 +387,8 @@ public sealed class AdminControllerReplyTtsTests
 
         public IReadOnlyList<FeishuReplyTtsVoiceOption> VoicesResult { get; set; } = [];
 
+        public int EnsureStartedCallCount { get; private set; }
+
         public Task<FeishuReplyTtsHealthStatus> GetHealthAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult(HealthResult);
@@ -367,6 +402,12 @@ public sealed class AdminControllerReplyTtsTests
         public Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
+        }
+
+        public Task<FeishuReplyTtsHealthStatus> EnsureServiceStartedAsync(CancellationToken cancellationToken = default)
+        {
+            EnsureStartedCallCount++;
+            return Task.FromResult(HealthResult);
         }
     }
 }

@@ -177,8 +177,15 @@ public class AdminController : ControllerBase
             return StatusCode(500, new { error = result.ErrorMessage ?? "保存飞书机器人配置失败。" });
         }
 
+        FeishuReplyTtsHealthStatus? ttsHealth = null;
+        if (request.ReplyTtsEnabled)
+        {
+            ttsHealth = await _feishuReplyTtsPlatformService.EnsureServiceStartedAsync(
+                HttpContext?.RequestAborted ?? CancellationToken.None);
+        }
+
         var status = await _userFeishuBotRuntimeService.StopAsync(username);
-        return Ok(new { success = true, status = MapFeishuRuntimeStatus(status) });
+        return Ok(new { success = true, status = MapFeishuRuntimeStatus(status), ttsHealth });
     }
 
     [HttpDelete("users/{username}/feishu-bot")]

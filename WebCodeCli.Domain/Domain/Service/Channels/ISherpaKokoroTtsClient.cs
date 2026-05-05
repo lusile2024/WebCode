@@ -2,7 +2,7 @@ using WebCodeCli.Domain.Domain.Model.Channels;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
-public interface IMeloTtsClient
+public interface ISherpaKokoroTtsClient
 {
     Task<FeishuReplyTtsHealthStatus> GetHealthAsync(CancellationToken cancellationToken = default);
 

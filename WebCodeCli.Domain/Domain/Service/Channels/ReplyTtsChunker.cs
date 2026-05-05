@@ -9,7 +9,11 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(ReplyTtsChunker), ServiceLifetime.Scoped)]
 public sealed class ReplyTtsChunker
 {
+    private static readonly char[] SentenceDelimiters = ['。', '！', '？', '!', '?', ';', '；'];
+    private static readonly char[] ClauseDelimiters = ['，', ',', '、', ':', '：'];
+
     private readonly int _maxChars;
+    private readonly int _retryMaxChars;
 
     [ActivatorUtilitiesConstructor]
     public ReplyTtsChunker(IOptions<FeishuReplyTtsOptions> options)
@@ -25,6 +29,7 @@ public sealed class ReplyTtsChunker
         }
 
         _maxChars = maxChars;
+        _retryMaxChars = ResolveRetryMaxChars(maxChars);
     }
 
     public IReadOnlyList<string> Split(string? text)
@@ -44,7 +49,7 @@ public sealed class ReplyTtsChunker
             if (paragraph.Length > _maxChars)
             {
                 FlushCurrentChunk(chunks, current);
-                foreach (var paragraphChunk in SplitLongSegment(paragraph))
+                foreach (var paragraphChunk in SplitLongSegment(paragraph, _maxChars))
                 {
                     chunks.Add(paragraphChunk);
                 }
@@ -73,24 +78,135 @@ public sealed class ReplyTtsChunker
         return chunks;
     }
 
-    private IEnumerable<string> SplitLongSegment(string segment)
+    public IReadOnlyList<string> SplitForRetry(string? text)
     {
-        var sentenceChunks = CombineWithinLimit(SplitByDelimiters(segment, ['。', '！', '？', '!', '?', ';', '；']));
-        if (sentenceChunks.Count > 1 || sentenceChunks[0].Length <= _maxChars)
+        var normalized = NormalizeInput(text);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return [];
+        }
+
+        var structuredLines = normalized
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (structuredLines.Length > 1)
+        {
+            return SplitStructuredLines(structuredLines, _retryMaxChars);
+        }
+
+        return SplitRetryLongSegment(normalized, _retryMaxChars);
+    }
+
+    private IReadOnlyList<string> SplitStructuredLines(IReadOnlyList<string> structuredLines, int maxChars)
+    {
+        var lineSegments = new List<string>(structuredLines.Count);
+        foreach (var line in structuredLines)
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            if (trimmed.Length <= maxChars)
+            {
+                lineSegments.Add(trimmed);
+                continue;
+            }
+
+            lineSegments.AddRange(SplitRetryLongSegment(trimmed, maxChars));
+        }
+
+        if (lineSegments.Count <= 2)
+        {
+            return lineSegments;
+        }
+
+        var chunks = new List<string>((lineSegments.Count + 1) / 2);
+        var current = new StringBuilder();
+        var lineCount = 0;
+
+        foreach (var segment in lineSegments)
+        {
+            if (current.Length == 0)
+            {
+                current.Append(segment);
+                lineCount = 1;
+                continue;
+            }
+
+            if (lineCount < 2 && current.Length + 1 + segment.Length <= maxChars)
+            {
+                current.Append('\n');
+                current.Append(segment);
+                lineCount++;
+                continue;
+            }
+
+            FlushCurrentChunk(chunks, current);
+            current.Append(segment);
+            lineCount = 1;
+        }
+
+        FlushCurrentChunk(chunks, current);
+        return chunks;
+    }
+
+    private IReadOnlyList<string> SplitRetryLongSegment(string segment, int maxChars)
+    {
+        var sentencePieces = SplitByDelimiters(segment, SentenceDelimiters);
+        if (sentencePieces.Count > 1)
+        {
+            return sentencePieces
+                .SelectMany(piece => SplitRetryPiece(piece, maxChars))
+                .ToList();
+        }
+
+        return SplitRetryPiece(segment, maxChars);
+    }
+
+    private IEnumerable<string> SplitLongSegment(string segment, int maxChars)
+    {
+        var sentenceChunks = CombineWithinLimit(SplitByDelimiters(segment, SentenceDelimiters), maxChars);
+        if (sentenceChunks.Count > 1 || sentenceChunks[0].Length <= maxChars)
         {
             return sentenceChunks;
         }
 
-        var clauseChunks = CombineWithinLimit(SplitByDelimiters(segment, ['，', ',', '、', ':', '：']));
-        if (clauseChunks.Count > 1 || clauseChunks[0].Length <= _maxChars)
+        var clauseChunks = CombineWithinLimit(SplitByDelimiters(segment, ClauseDelimiters), maxChars);
+        if (clauseChunks.Count > 1 || clauseChunks[0].Length <= maxChars)
         {
             return clauseChunks;
         }
 
-        return HardBreak(segment);
+        return HardBreak(segment, maxChars);
     }
 
-    private List<string> CombineWithinLimit(IReadOnlyList<string> pieces)
+    private static IReadOnlyList<string> SplitRetryPiece(string piece, int maxChars)
+    {
+        var trimmed = piece.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return [];
+        }
+
+        if (trimmed.Length <= maxChars)
+        {
+            return [trimmed];
+        }
+
+        var clausePieces = SplitByDelimiters(trimmed, ClauseDelimiters);
+        if (clausePieces.Count > 1)
+        {
+            return clausePieces
+                .SelectMany(clause => clause.Length <= maxChars ? [clause.Trim()] : HardBreak(clause, maxChars))
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToList();
+        }
+
+        return HardBreak(trimmed, maxChars);
+    }
+
+    private static List<string> CombineWithinLimit(IReadOnlyList<string> pieces, int maxChars)
     {
         var chunks = new List<string>();
         var current = new StringBuilder();
@@ -98,10 +214,10 @@ public sealed class ReplyTtsChunker
         foreach (var piece in pieces.Where(static value => !string.IsNullOrWhiteSpace(value)))
         {
             var trimmed = piece.Trim();
-            if (trimmed.Length > _maxChars)
+            if (trimmed.Length > maxChars)
             {
                 FlushCurrentChunk(chunks, current);
-                chunks.AddRange(HardBreak(trimmed));
+                chunks.AddRange(HardBreak(trimmed, maxChars));
                 continue;
             }
 
@@ -111,7 +227,7 @@ public sealed class ReplyTtsChunker
                 continue;
             }
 
-            if (current.Length + 1 + trimmed.Length <= _maxChars)
+            if (current.Length + 1 + trimmed.Length <= maxChars)
             {
                 current.Append(' ');
                 current.Append(trimmed);
@@ -126,17 +242,17 @@ public sealed class ReplyTtsChunker
         return chunks;
     }
 
-    private List<string> HardBreak(string segment)
+    private static List<string> HardBreak(string segment, int maxChars)
     {
         var chunks = new List<string>();
         var remaining = segment.Trim();
 
-        while (remaining.Length > _maxChars)
+        while (remaining.Length > maxChars)
         {
-            var breakIndex = remaining.LastIndexOf(' ', _maxChars);
+            var breakIndex = remaining.LastIndexOf(' ', maxChars);
             if (breakIndex <= 0)
             {
-                breakIndex = _maxChars;
+                breakIndex = maxChars;
             }
 
             chunks.Add(remaining[..breakIndex].Trim());
@@ -202,5 +318,10 @@ public sealed class ReplyTtsChunker
             .ToArray();
 
         return string.Join("\n", lines).Trim();
+    }
+
+    private static int ResolveRetryMaxChars(int maxChars)
+    {
+        return Math.Min(maxChars, Math.Max(40, Math.Min(maxChars / 2, 160)));
     }
 }

@@ -1710,7 +1710,7 @@ public class FeishuCardActionService
             cliThreadId);
 
         var historyLimit = ResolveHistoryCommandLimit(commandInput);
-        var messages = await historyService.GetRecentMessagesAsync(
+        var history = await historyService.GetRecentHistoryAsync(
             normalizedToolId,
             cliThreadId,
             maxCount: historyLimit,
@@ -1719,8 +1719,10 @@ public class FeishuCardActionService
             sessionId,
             toolLabel ?? GetToolDisplayName(sessionEntity.ToolId),
             workspacePath ?? GetSessionWorkspaceDisplay(sessionId),
+            cliThreadId,
             lastActiveTime ?? _feishuChannel.GetSessionLastActiveTime(sessionId),
-            messages);
+            history.Messages,
+            history.SourcePath);
 
         var messageId = await _feishuChannel.SendMessageAsync(chatId, content, username, appId);
         _logger.LogInformation(
@@ -1728,66 +1730,26 @@ public class FeishuCardActionService
             sessionId,
             chatId,
             messageId,
-            messages.Count);
+            history.Messages.Count);
     }
 
     private static string BuildExternalCliHistoryText(
         string sessionId,
         string toolLabel,
         string workspacePath,
+        string? cliThreadId,
         DateTime? lastActiveTime,
-        IReadOnlyList<ExternalCliHistoryMessage> messages)
+        IReadOnlyList<ExternalCliHistoryMessage> messages,
+        string? sourcePath)
     {
-        var builder = new StringBuilder();
-        builder.AppendLine($"当前 CLI 会话历史 {sessionId[..Math.Min(8, sessionId.Length)]}");
-        builder.AppendLine($"CLI 工具: {toolLabel}");
-        builder.AppendLine($"工作目录: {workspacePath}");
-        if (lastActiveTime.HasValue)
-        {
-            builder.AppendLine($"最后活跃: {lastActiveTime:yyyy-MM-dd HH:mm}");
-        }
-
-        builder.AppendLine();
-
-        if (messages.Count == 0)
-        {
-            builder.AppendLine("该 CLI 会话暂无可解析的历史消息。");
-            return builder.ToString().TrimEnd();
-        }
-
-        builder.AppendLine($"显示条数: 最近 {messages.Count} 条");
-        builder.AppendLine();
-
-        foreach (var message in messages)
-        {
-            var roleLabel = string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase)
-                ? "用户"
-                : "助手";
-
-            if (message.CreatedAt.HasValue)
-            {
-                builder.AppendLine($"[{roleLabel}] {message.CreatedAt:HH:mm}");
-            }
-            else
-            {
-                builder.AppendLine($"[{roleLabel}]");
-            }
-
-            builder.AppendLine(NormalizeHistoryContent(message.Content));
-            builder.AppendLine();
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private static string NormalizeHistoryContent(string? content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            return string.Empty;
-        }
-
-        return content.Replace("\r\n", "\n").Trim();
+        return ExternalCliHistoryTextBuilder.Build(
+            $"当前 CLI 会话历史 {sessionId[..Math.Min(8, sessionId.Length)]}",
+            messages,
+            toolLabel,
+            workspacePath,
+            cliThreadId,
+            sourcePath,
+            lastActiveTime);
     }
 
     private static bool IsHistoryCommand(string? commandInput)

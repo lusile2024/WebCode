@@ -11,21 +11,21 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     public async Task GetHealthAsync_WhenStorageRootResolutionFails_ReturnsUnavailable()
     {
         var resolver = CreateUnavailableResolver();
-        var meloClient = new StubMeloTtsClient();
-        var service = CreateService(resolver, meloClient);
+        var ttsClient = new StubSherpaKokoroTtsClient();
+        var service = CreateService(resolver, ttsClient);
 
         var result = await service.GetHealthAsync(TestContext.Current.CancellationToken);
 
         Assert.False(result.IsAvailable);
-        Assert.Contains("AllowSystemDriveInstall", result.Message, StringComparison.Ordinal);
-        Assert.Equal(0, meloClient.HealthCallCount);
+        Assert.Contains("non-system drive", result.Message, StringComparison.Ordinal);
+        Assert.Equal(0, ttsClient.HealthCallCount);
     }
 
     [Fact]
     public async Task GetHealthAsync_MergesResolverAvailabilityWithLocalServiceHealth()
     {
         var resolver = CreateAvailableResolver();
-        var meloClient = new StubMeloTtsClient
+        var ttsClient = new StubSherpaKokoroTtsClient
         {
             HealthResult = new FeishuReplyTtsHealthStatus
             {
@@ -35,7 +35,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
                 DefaultVoiceId = "service-default"
             }
         };
-        var service = CreateService(resolver, meloClient);
+        var service = CreateService(resolver, ttsClient);
 
         var result = await service.GetHealthAsync(TestContext.Current.CancellationToken);
 
@@ -48,11 +48,33 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     }
 
     [Fact]
+    public async Task GetHealthAsync_WhenFfmpegCannotBeResolved_ReturnsUnavailable()
+    {
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubSherpaKokoroTtsClient
+            {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok"
+                }
+            },
+            ffmpegExecutablePath: string.Empty);
+
+        var result = await service.GetHealthAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsAvailable);
+        Assert.Equal("ffmpeg-unavailable", result.ServiceStatus);
+        Assert.Contains("ffmpeg executable is unavailable", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetHealthAsync_WhenConfiguredDefaultVoiceExists_PrefersConfiguredDefault()
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
                 HealthResult = new FeishuReplyTtsHealthStatus
                 {
@@ -73,7 +95,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
                 HealthException = new OperationCanceledException("canceled")
             });
@@ -83,10 +105,59 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     }
 
     [Fact]
+    public async Task EnsureServiceStartedAsync_WhenStorageAndFfmpegAreAvailable_StartsLocalServiceAndReturnsHealth()
+    {
+        var ttsClient = new StubSherpaKokoroTtsClient
+        {
+            HealthResult = new FeishuReplyTtsHealthStatus
+            {
+                IsAvailable = true,
+                ServiceStatus = "ok",
+                Device = "cpu",
+                DefaultVoiceId = "service-default"
+            }
+        };
+        var localServiceManager = new StubReplyTtsLocalServiceManager
+        {
+            Result = new FeishuReplyTtsHealthStatus
+            {
+                IsAvailable = true,
+                ServiceStatus = "ok"
+            }
+        };
+        var service = CreateService(CreateAvailableResolver(), ttsClient, localServiceManager: localServiceManager);
+
+        var result = await service.EnsureServiceStartedAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, localServiceManager.EnsureStartedCallCount);
+        Assert.NotNull(localServiceManager.LastStorageHealth);
+        Assert.True(result.IsAvailable);
+        Assert.Equal("ok", result.ServiceStatus);
+        Assert.Equal("cpu", result.Device);
+    }
+
+    [Fact]
+    public async Task EnsureServiceStartedAsync_WhenFfmpegCannotBeResolved_DoesNotStartLocalService()
+    {
+        var localServiceManager = new StubReplyTtsLocalServiceManager();
+        var service = CreateService(
+            CreateAvailableResolver(),
+            new StubSherpaKokoroTtsClient(),
+            ffmpegExecutablePath: string.Empty,
+            localServiceManager: localServiceManager);
+
+        var result = await service.EnsureServiceStartedAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsAvailable);
+        Assert.Equal("ffmpeg-unavailable", result.ServiceStatus);
+        Assert.Equal(0, localServiceManager.EnsureStartedCallCount);
+    }
+
+    [Fact]
     public async Task GetVoicesAsync_ReturnsRuntimeVoiceList()
     {
         var resolver = CreateAvailableResolver();
-        var meloClient = new StubMeloTtsClient
+        var ttsClient = new StubSherpaKokoroTtsClient
         {
             VoicesResult =
             [
@@ -102,7 +173,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
                 }
             ]
         };
-        var service = CreateService(resolver, meloClient);
+        var service = CreateService(resolver, ttsClient);
 
         var result = await service.GetVoicesAsync(TestContext.Current.CancellationToken);
 
@@ -117,7 +188,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
                 VoicesException = new HttpRequestException("connection refused")
             });
@@ -132,7 +203,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
                 VoicesException = new OperationCanceledException("canceled")
             });
@@ -146,8 +217,13 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok"
+                },
                 VoicesResult =
                 [
                     new FeishuReplyTtsVoiceOption { VoiceId = "saved-voice", DisplayName = "Saved" },
@@ -168,7 +244,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
                 HealthResult = new FeishuReplyTtsHealthStatus
                 {
@@ -195,7 +271,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
                 HealthResult = new FeishuReplyTtsHealthStatus
                 {
@@ -221,8 +297,13 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok"
+                },
                 VoicesResult =
                 [
                     new FeishuReplyTtsVoiceOption { VoiceId = "voice-a", DisplayName = "Voice A" }
@@ -242,8 +323,13 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok"
+                },
                 VoicesException = new HttpRequestException("connection refused")
             },
             defaultVoiceId: "configured-default");
@@ -256,12 +342,39 @@ public sealed class FeishuReplyTtsPlatformServiceTests
     }
 
     [Fact]
+    public async Task ResolveVoiceOrFallbackAsync_WhenFfmpegCannotBeResolved_FailsBeforeSynthesizing()
+    {
+        var ttsClient = new StubSherpaKokoroTtsClient
+        {
+            VoicesResult =
+            [
+                new FeishuReplyTtsVoiceOption { VoiceId = "voice-a", DisplayName = "Voice A" }
+            ]
+        };
+        var service = CreateService(
+            CreateAvailableResolver(),
+            ttsClient,
+            ffmpegExecutablePath: string.Empty);
+
+        var result = await service.ResolveVoiceOrFallbackAsync("voice-a", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal(0, ttsClient.HealthCallCount);
+        Assert.Contains("ffmpeg executable is unavailable", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ResolveVoiceOrFallbackAsync_WhenCanceled_PropagatesCancellation()
     {
         var service = CreateService(
             CreateAvailableResolver(),
-            new StubMeloTtsClient
+            new StubSherpaKokoroTtsClient
             {
+                HealthResult = new FeishuReplyTtsHealthStatus
+                {
+                    IsAvailable = true,
+                    ServiceStatus = "ok"
+                },
                 VoicesException = new OperationCanceledException("canceled")
             });
 
@@ -271,16 +384,20 @@ public sealed class FeishuReplyTtsPlatformServiceTests
 
     private static FeishuReplyTtsPlatformService CreateService(
         ReplyTtsStorageRootResolver resolver,
-        StubMeloTtsClient meloClient,
-        string? defaultVoiceId = null)
+        StubSherpaKokoroTtsClient ttsClient,
+        string? defaultVoiceId = null,
+        string? ffmpegExecutablePath = "ffmpeg",
+        StubReplyTtsLocalServiceManager? localServiceManager = null)
     {
         return new FeishuReplyTtsPlatformService(
             resolver,
             Options.Create(new FeishuReplyTtsOptions
             {
-                TtsDefaultVoiceId = defaultVoiceId
+                TtsDefaultVoiceId = defaultVoiceId,
+                FfmpegExecutablePath = ffmpegExecutablePath
             }),
-            meloClient);
+            ttsClient,
+            localServiceManager ?? new StubReplyTtsLocalServiceManager());
     }
 
     private static ReplyTtsStorageRootResolver CreateAvailableResolver()
@@ -304,7 +421,6 @@ public sealed class FeishuReplyTtsPlatformServiceTests
         return new ReplyTtsStorageRootResolver(
             new MutableOptionsMonitor<FeishuReplyTtsOptions>(new FeishuReplyTtsOptions
             {
-                AllowSystemDriveInstall = false
             }),
             new FakeReplyTtsHostEnvironment(
                 isWindows: true,
@@ -315,7 +431,7 @@ public sealed class FeishuReplyTtsPlatformServiceTests
                 ]));
     }
 
-    private sealed class StubMeloTtsClient : IMeloTtsClient
+    private sealed class StubSherpaKokoroTtsClient : ISherpaKokoroTtsClient
     {
         public int HealthCallCount { get; private set; }
 
@@ -354,6 +470,28 @@ public sealed class FeishuReplyTtsPlatformServiceTests
         }
     }
 
+    private sealed class StubReplyTtsLocalServiceManager : IReplyTtsLocalServiceManager
+    {
+        public int EnsureStartedCallCount { get; private set; }
+
+        public FeishuReplyTtsHealthStatus? LastStorageHealth { get; private set; }
+
+        public FeishuReplyTtsHealthStatus Result { get; set; } = new()
+        {
+            IsAvailable = true,
+            ServiceStatus = "ok"
+        };
+
+        public Task<FeishuReplyTtsHealthStatus> EnsureStartedAsync(
+            FeishuReplyTtsHealthStatus storageHealth,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureStartedCallCount++;
+            LastStorageHealth = storageHealth;
+            return Task.FromResult(Result);
+        }
+    }
+
     private sealed class FakeReplyTtsHostEnvironment : IReplyTtsHostEnvironment
     {
         private readonly IReadOnlyList<ReplyTtsDriveDescriptor> _drives;
@@ -375,6 +513,16 @@ public sealed class FeishuReplyTtsPlatformServiceTests
         public IReadOnlyList<ReplyTtsDriveDescriptor> GetFixedDrives()
         {
             return _drives;
+        }
+
+        public bool DirectoryExists(string path)
+        {
+            return Directory.Exists(path);
+        }
+
+        public bool FileExists(string path)
+        {
+            return File.Exists(path);
         }
     }
 

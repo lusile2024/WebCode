@@ -28,11 +28,6 @@ public sealed class AudioTranscodeService : IAudioTranscodeService
         int chunkIndex,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.FfmpegExecutablePath))
-        {
-            throw new InvalidOperationException("Feishu reply TTS ffmpeg configuration is missing. Set FeishuReplyTts:FfmpegExecutablePath.");
-        }
-
         if (string.IsNullOrWhiteSpace(jobId))
         {
             throw new ArgumentException("Job ID is required.", nameof(jobId));
@@ -57,6 +52,12 @@ public sealed class AudioTranscodeService : IAudioTranscodeService
                     : health.Message);
         }
 
+        var ffmpegResolution = ReplyTtsFfmpegPathResolver.Resolve(_options, health);
+        if (!ffmpegResolution.IsAvailable || string.IsNullOrWhiteSpace(ffmpegResolution.ExecutablePath))
+        {
+            throw new InvalidOperationException(ffmpegResolution.Message);
+        }
+
         var jobDirectory = Path.Combine(health.TempRoot, SanitizePathSegment(jobId));
         Directory.CreateDirectory(jobDirectory);
 
@@ -75,7 +76,7 @@ public sealed class AudioTranscodeService : IAudioTranscodeService
             Quote(outputPath));
 
         var result = await _externalProcessRunner.RunAsync(
-            _options.FfmpegExecutablePath.Trim(),
+            ffmpegResolution.ExecutablePath,
             arguments,
             jobDirectory,
             cancellationToken);

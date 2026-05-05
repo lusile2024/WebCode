@@ -1,21 +1,19 @@
 using System.Net;
-using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Options;
-using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service.Channels;
 
 namespace WebCodeCli.Domain.Tests;
 
-public sealed class MeloTtsClientTests
+public sealed class SherpaKokoroTtsClientTests
 {
     [Fact]
     public async Task GetHealthAsync_ParsesLocalServiceResponse()
     {
         var handler = new StubHttpMessageHandler(
         [
-            CreateJsonResponse("""{"status":"ok","device":"cuda","defaultVoiceId":"zh_female_default"}""")
+            CreateJsonResponse("""{"status":"ok","device":"cpu","defaultVoiceId":"zh_female_1"}""")
         ]);
 
         var client = CreateClient(handler);
@@ -24,8 +22,8 @@ public sealed class MeloTtsClientTests
 
         Assert.True(result.IsAvailable);
         Assert.Equal("ok", result.ServiceStatus);
-        Assert.Equal("cuda", result.Device);
-        Assert.Equal("zh_female_default", result.DefaultVoiceId);
+        Assert.Equal("cpu", result.Device);
+        Assert.Equal("zh_female_1", result.DefaultVoiceId);
         Assert.Equal("/health", Assert.Single(handler.RequestPaths));
     }
 
@@ -39,14 +37,14 @@ public sealed class MeloTtsClientTests
                 {
                   "voices": [
                     {
-                      "voiceId": "zh_female_default",
-                      "displayName": "Chinese Female Default",
+                      "voiceId": "zh_female_1",
+                      "displayName": "Kokoro Chinese Female",
                       "language": "zh",
                       "gender": "female"
                     },
                     {
-                      "voiceId": "en_male_default",
-                      "displayName": "English Male Default",
+                      "voiceId": "en_male_1",
+                      "displayName": "Kokoro English Male",
                       "language": "en",
                       "gender": "male"
                     }
@@ -64,15 +62,15 @@ public sealed class MeloTtsClientTests
             result,
             voice =>
             {
-                Assert.Equal("zh_female_default", voice.VoiceId);
-                Assert.Equal("Chinese Female Default", voice.DisplayName);
+                Assert.Equal("zh_female_1", voice.VoiceId);
+                Assert.Equal("Kokoro Chinese Female", voice.DisplayName);
                 Assert.Equal("zh", voice.Language);
                 Assert.Equal("female", voice.Gender);
             },
             voice =>
             {
-                Assert.Equal("en_male_default", voice.VoiceId);
-                Assert.Equal("English Male Default", voice.DisplayName);
+                Assert.Equal("en_male_1", voice.VoiceId);
+                Assert.Equal("Kokoro English Male", voice.DisplayName);
                 Assert.Equal("en", voice.Language);
                 Assert.Equal("male", voice.Gender);
             });
@@ -91,18 +89,18 @@ public sealed class MeloTtsClientTests
 
         await client.GetHealthAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("MeloTtsClient", factory.CreatedClientName);
+        Assert.Equal("SherpaKokoroTtsClient", factory.CreatedClientName);
     }
 
-    private static MeloTtsClient CreateClient(StubHttpMessageHandler handler, StubHttpClientFactory? factory = null)
+    private static SherpaKokoroTtsClient CreateClient(StubHttpMessageHandler handler, StubHttpClientFactory? factory = null)
     {
-        return new MeloTtsClient(
+        return new SherpaKokoroTtsClient(
             Options.Create(new FeishuReplyTtsOptions
             {
-                TtsServiceBaseUrl = "http://127.0.0.1:5057",
+                TtsServiceBaseUrl = "http://127.0.0.1:5058",
                 TtsServiceTimeoutSeconds = 15
             }),
-            NullLogger<MeloTtsClient>.Instance,
+            NullLogger<SherpaKokoroTtsClient>.Instance,
             factory ?? new StubHttpClientFactory(new HttpClient(handler)));
     }
 

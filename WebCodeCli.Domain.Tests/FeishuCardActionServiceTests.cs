@@ -1837,6 +1837,8 @@ public class FeishuCardActionServiceTests
         Assert.Equal("codex", historyService.LastToolId);
         Assert.Equal("codex-thread-1", historyService.LastCliThreadId);
         Assert.Equal(50, historyService.LastMaxCount);
+        Assert.Contains("原生 Thread ID: codex-thread-1", sent.Content);
+        Assert.Contains(@"历史来源: D:\repo\.codex\sessions\2026\05\04\rollout-history.jsonl", sent.Content);
         Assert.Contains("浣犲ソ", sent.Content);
         Assert.Contains("涓栫晫", sent.Content);
     }
@@ -3489,6 +3491,25 @@ public class FeishuCardActionServiceTests
         public string? LastCliThreadId { get; private set; }
 
         public int LastMaxCount { get; private set; }
+
+        public string SourcePath { get; set; } = @"D:\repo\.codex\sessions\2026\05\04\rollout-history.jsonl";
+
+        public Task<ExternalCliHistoryResult> GetRecentHistoryAsync(
+            string toolId,
+            string cliThreadId,
+            int maxCount = 20,
+            string? workspacePath = null,
+            CancellationToken cancellationToken = default)
+        {
+            LastToolId = toolId;
+            LastCliThreadId = cliThreadId;
+            LastMaxCount = maxCount;
+            return Task.FromResult(new ExternalCliHistoryResult
+            {
+                Messages = _messages.TakeLast(maxCount).ToList(),
+                SourcePath = SourcePath
+            });
+        }
 
         public Task<List<ExternalCliHistoryMessage>> GetRecentMessagesAsync(
             string toolId,

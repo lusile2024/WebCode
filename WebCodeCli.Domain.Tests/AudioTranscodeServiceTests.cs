@@ -32,7 +32,6 @@ public sealed class AudioTranscodeServiceTests : IDisposable
         Directory.CreateDirectory(_sandboxRoot);
         var options = new FeishuReplyTtsOptions
         {
-            AllowSystemDriveInstall = false,
             FfmpegExecutablePath = Path.Combine(_sandboxRoot, "ffmpeg.exe")
         };
         var service = new AudioTranscodeService(
@@ -88,11 +87,13 @@ public sealed class AudioTranscodeServiceTests : IDisposable
     public async Task TranscodeChunkAsync_WhenRunnerReturnsNonZeroExit_Throws()
     {
         Directory.CreateDirectory(_sandboxRoot);
+        var ffmpegPath = Path.Combine(_sandboxRoot, "ffmpeg.exe");
+        File.WriteAllText(ffmpegPath, "stub");
         var service = CreateService(
             new FeishuReplyTtsOptions
             {
                 TtsStorageRoot = Path.Combine(_sandboxRoot, "reply-tts"),
-                FfmpegExecutablePath = Path.Combine(_sandboxRoot, "ffmpeg.exe")
+                FfmpegExecutablePath = ffmpegPath
             },
             new RecordingExternalProcessRunner
             {
@@ -108,15 +109,40 @@ public sealed class AudioTranscodeServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task TranscodeChunkAsync_WhenConfiguredPathIsBlank_UsesBundledStorageRootFfmpeg()
+    {
+        Directory.CreateDirectory(_sandboxRoot);
+        var runner = new RecordingExternalProcessRunner();
+        var storageRoot = Path.Combine(_sandboxRoot, "reply-tts");
+        var bundledFfmpegPath = Path.Combine(storageRoot, "ffmpeg", "bin", OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
+        Directory.CreateDirectory(Path.GetDirectoryName(bundledFfmpegPath)!);
+        File.WriteAllText(bundledFfmpegPath, "stub");
+
+        var service = CreateService(
+            new FeishuReplyTtsOptions
+            {
+                TtsStorageRoot = storageRoot
+            },
+            runner);
+        var inputPath = CreateInputFile();
+
+        await service.TranscodeChunkAsync("job-42", inputPath, chunkIndex: 1, TestContext.Current.CancellationToken);
+
+        Assert.Equal(bundledFfmpegPath, runner.FileName);
+    }
+
+    [Fact]
     public async Task TranscodeChunkAsync_SanitizesJobIdToStayUnderTempRoot()
     {
         Directory.CreateDirectory(_sandboxRoot);
         var runner = new RecordingExternalProcessRunner();
+        var ffmpegPath = Path.Combine(_sandboxRoot, "ffmpeg.exe");
+        File.WriteAllText(ffmpegPath, "stub");
         var service = CreateService(
             new FeishuReplyTtsOptions
             {
                 TtsStorageRoot = Path.Combine(_sandboxRoot, "reply-tts"),
-                FfmpegExecutablePath = Path.Combine(_sandboxRoot, "ffmpeg.exe")
+                FfmpegExecutablePath = ffmpegPath
             },
             runner);
         var inputPath = CreateInputFile();
@@ -201,5 +227,9 @@ public sealed class AudioTranscodeServiceTests : IDisposable
         public string? SystemDriveRoot { get; } = systemDriveRoot;
 
         public IReadOnlyList<ReplyTtsDriveDescriptor> GetFixedDrives() => drives;
+
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+
+        public bool FileExists(string path) => File.Exists(path);
     }
 }

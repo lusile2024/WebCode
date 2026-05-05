@@ -103,6 +103,7 @@ namespace WebCodeCli.Domain.Common.Extensions
             services.AddSingleton<ReplyTtsStorageRootResolver>();
 
             services.AddSingleton<IUserFeishuBotRuntimeService, UserFeishuBotRuntimeService>();
+            services.AddHostedService<ReplyTtsStartupHostedService>();
             services.AddHostedService(sp => (UserFeishuBotRuntimeService)sp.GetRequiredService<IUserFeishuBotRuntimeService>());
 
             return services;

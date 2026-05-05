@@ -9,6 +9,8 @@ public interface IFeishuReplyTtsPlatformService
     Task<IReadOnlyList<FeishuReplyTtsVoiceOption>> GetVoicesAsync(CancellationToken cancellationToken = default);
 
     Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default);
+
+    Task<FeishuReplyTtsHealthStatus> EnsureServiceStartedAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed class FeishuReplyTtsVoiceResolutionResult

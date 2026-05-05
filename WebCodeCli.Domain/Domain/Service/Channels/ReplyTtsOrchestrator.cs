@@ -108,7 +108,7 @@ public sealed class ReplyTtsOrchestrator : IReplyTtsOrchestrator
             return;
         }
 
-        var meloTtsClient = scope.ServiceProvider.GetRequiredService<IMeloTtsClient>();
+        var ttsClient = scope.ServiceProvider.GetRequiredService<ISherpaKokoroTtsClient>();
         var audioTranscodeService = scope.ServiceProvider.GetRequiredService<IAudioTranscodeService>();
         var audioMessageService = scope.ServiceProvider.GetRequiredService<IFeishuAudioMessageService>();
         var cardKitClient = scope.ServiceProvider.GetRequiredService<IFeishuCardKitClient>();
@@ -117,9 +117,9 @@ public sealed class ReplyTtsOrchestrator : IReplyTtsOrchestrator
         var jobDirectory = Path.Combine(storageHealth.TempRoot, jobId);
         Directory.CreateDirectory(jobDirectory);
 
-        var success = false;
         try
         {
+            var sequenceTracker = new ChunkSequenceTracker();
             for (var index = 0; index < chunks.Count; index++)
             {
                 var chunkIndex = index + 1;
@@ -127,18 +127,17 @@ public sealed class ReplyTtsOrchestrator : IReplyTtsOrchestrator
 
                 try
                 {
-                    await using var wavStream = await meloTtsClient.SynthesizeAsync(chunkText, voiceResolution.VoiceId);
-                    var wavPath = Path.Combine(jobDirectory, $"chunk-{chunkIndex:000}.wav");
-                    await WriteStreamToFileAsync(wavStream, wavPath);
-
-                    var durationMs = GetWaveDurationMs(wavPath);
-                    var opusPath = await audioTranscodeService.TranscodeChunkAsync(jobId, wavPath, chunkIndex);
-                    await audioMessageService.SendAudioMessageAsync(
-                        request.ChatId,
-                        opusPath,
-                        durationMs,
-                        request.Username,
-                        request.AppId);
+                    await SendChunkWithRetryAsync(
+                        chunker,
+                        chunkText,
+                        voiceResolution.VoiceId,
+                        jobId,
+                        jobDirectory,
+                        request,
+                        ttsClient,
+                        audioTranscodeService,
+                        audioMessageService,
+                        sequenceTracker);
                 }
                 catch (Exception ex)
                 {
@@ -152,16 +151,126 @@ public sealed class ReplyTtsOrchestrator : IReplyTtsOrchestrator
                     return;
                 }
             }
-
-            success = true;
         }
         finally
         {
-            if (success)
+            TryDeleteDirectory(jobDirectory);
+        }
+    }
+
+    private async Task SendChunkWithRetryAsync(
+        ReplyTtsChunker chunker,
+        string chunkText,
+        string voiceId,
+        string jobId,
+        string jobDirectory,
+        FeishuCompletedReplyTtsRequest request,
+        ISherpaKokoroTtsClient ttsClient,
+        IAudioTranscodeService audioTranscodeService,
+        IFeishuAudioMessageService audioMessageService,
+        ChunkSequenceTracker sequenceTracker)
+    {
+        try
+        {
+            await SendChunkAsync(
+                chunkText,
+                voiceId,
+                jobId,
+                jobDirectory,
+                request,
+                ttsClient,
+                audioTranscodeService,
+                audioMessageService,
+                sequenceTracker);
+        }
+        catch (Exception ex) when (IsRetriableChunkFailure(ex))
+        {
+            var retryChunks = chunker.SplitForRetry(chunkText);
+            if (retryChunks.Count <= 1 ||
+                (retryChunks.Count == 1 && string.Equals(retryChunks[0], chunkText, StringComparison.Ordinal)))
             {
-                TryDeleteDirectory(jobDirectory);
+                throw;
+            }
+
+            _logger.LogInformation(
+                "Reply TTS chunk timed out for chat {ChatId}; retrying as {RetryChunkCount} smaller chunks. OriginalLength={OriginalLength}",
+                request.ChatId,
+                retryChunks.Count,
+                chunkText.Length);
+
+            foreach (var retryChunk in retryChunks)
+            {
+                await SendChunkAsync(
+                    retryChunk,
+                    voiceId,
+                    jobId,
+                    jobDirectory,
+                    request,
+                    ttsClient,
+                    audioTranscodeService,
+                    audioMessageService,
+                    sequenceTracker);
             }
         }
+    }
+
+    private async Task SendChunkAsync(
+        string chunkText,
+        string voiceId,
+        string jobId,
+        string jobDirectory,
+        FeishuCompletedReplyTtsRequest request,
+        ISherpaKokoroTtsClient ttsClient,
+        IAudioTranscodeService audioTranscodeService,
+        IFeishuAudioMessageService audioMessageService,
+        ChunkSequenceTracker sequenceTracker)
+    {
+        var chunkIndex = sequenceTracker.Next();
+        _logger.LogInformation(
+            "Starting reply TTS chunk {ChunkIndex} for chat {ChatId}. VoiceId={VoiceId}, TextLength={TextLength}",
+            chunkIndex,
+            request.ChatId,
+            voiceId,
+            chunkText.Length);
+
+        await using var wavStream = await ttsClient.SynthesizeAsync(chunkText, voiceId);
+        var wavPath = Path.Combine(jobDirectory, $"chunk-{chunkIndex:000}.wav");
+        await WriteStreamToFileAsync(wavStream, wavPath);
+        var wavInfo = new FileInfo(wavPath);
+        _logger.LogInformation(
+            "Reply TTS chunk {ChunkIndex} synthesized for chat {ChatId}. WavePath={WavePath}, WaveBytes={WaveBytes}",
+            chunkIndex,
+            request.ChatId,
+            wavPath,
+            wavInfo.Exists ? wavInfo.Length : 0);
+
+        var durationMs = GetWaveDurationMs(wavPath);
+        var opusPath = await audioTranscodeService.TranscodeChunkAsync(jobId, wavPath, chunkIndex);
+        var opusInfo = new FileInfo(opusPath);
+        _logger.LogInformation(
+            "Reply TTS chunk {ChunkIndex} transcoded for chat {ChatId}. OpusPath={OpusPath}, OpusBytes={OpusBytes}, DurationMs={DurationMs}",
+            chunkIndex,
+            request.ChatId,
+            opusPath,
+            opusInfo.Exists ? opusInfo.Length : 0,
+            durationMs);
+
+        var messageId = await audioMessageService.SendAudioMessageAsync(
+            request.ChatId,
+            opusPath,
+            durationMs,
+            request.Username,
+            request.AppId);
+        _logger.LogInformation(
+            "Reply TTS chunk {ChunkIndex} sent for chat {ChatId}. AudioMessageId={MessageId}",
+            chunkIndex,
+            request.ChatId,
+            messageId);
+    }
+
+    private static bool IsRetriableChunkFailure(Exception exception)
+    {
+        return exception is OperationCanceledException or TimeoutException;
     }
 
     private async Task SendFailureNoticeAsync(
@@ -334,5 +443,16 @@ public sealed class ReplyTtsOrchestrator : IReplyTtsOrchestrator
         }
 
         return configService.GetSharedDefaults();
+    }
+
+    private sealed class ChunkSequenceTracker
+    {
+        private int _nextIndex;
+
+        public int Next()
+        {
+            _nextIndex++;
+            return _nextIndex;
+        }
     }
 }

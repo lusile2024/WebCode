@@ -9,19 +9,19 @@ using WebCodeCli.Domain.Domain.Model.Channels;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
-[ServiceDescription(typeof(IMeloTtsClient), ServiceLifetime.Scoped)]
-public sealed class MeloTtsClient : IMeloTtsClient
+[ServiceDescription(typeof(ISherpaKokoroTtsClient), ServiceLifetime.Scoped)]
+public sealed class SherpaKokoroTtsClient : ISherpaKokoroTtsClient
 {
-    private const string HttpClientName = "MeloTtsClient";
+    private const string HttpClientName = "SherpaKokoroTtsClient";
 
     private readonly FeishuReplyTtsOptions _options;
-    private readonly ILogger<MeloTtsClient> _logger;
+    private readonly ILogger<SherpaKokoroTtsClient> _logger;
     private readonly HttpClient _httpClient;
     private readonly Uri _baseUri;
 
-    public MeloTtsClient(
+    public SherpaKokoroTtsClient(
         IOptions<FeishuReplyTtsOptions> options,
-        ILogger<MeloTtsClient> logger,
+        ILogger<SherpaKokoroTtsClient> logger,
         IHttpClientFactory httpClientFactory)
     {
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
@@ -45,8 +45,8 @@ public sealed class MeloTtsClient : IMeloTtsClient
         {
             IsAvailable = isAvailable,
             Message = isAvailable
-                ? "Local MeloTTS service is healthy."
-                : $"Local MeloTTS service reported status '{status ?? "unknown"}'.",
+                ? "Local Kokoro/sherpa-onnx service is healthy."
+                : $"Local Kokoro/sherpa-onnx service reported status '{status ?? "unknown"}'.",
             ServiceStatus = status,
             Device = GetString(root, "device"),
             DefaultVoiceId = GetString(root, "defaultVoiceId", "default_voice_id")
@@ -116,18 +116,28 @@ public sealed class MeloTtsClient : IMeloTtsClient
                 "application/json")
         };
 
+        _logger.LogInformation(
+            "Starting Kokoro/sherpa-onnx synthesis. VoiceId={VoiceId}, TextLength={TextLength}",
+            voiceId,
+            text.Length);
+
         using var response = await SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
-            _logger.LogError("MeloTTS synthesize request failed: Status={StatusCode}, Content={Content}", response.StatusCode, error);
-            throw new HttpRequestException($"MeloTTS synthesize request failed: {response.StatusCode}");
+            _logger.LogError("Kokoro/sherpa-onnx synthesize request failed: Status={StatusCode}, Content={Content}", response.StatusCode, error);
+            throw new HttpRequestException($"Kokoro/sherpa-onnx synthesize request failed: {response.StatusCode}");
         }
 
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
         var output = new MemoryStream();
         await source.CopyToAsync(output, cancellationToken);
         output.Position = 0;
+        _logger.LogInformation(
+            "Completed Kokoro/sherpa-onnx synthesis. VoiceId={VoiceId}, TextLength={TextLength}, WaveBytes={WaveBytes}",
+            voiceId,
+            text.Length,
+            output.Length);
         return output;
     }
 
@@ -140,7 +150,22 @@ public sealed class MeloTtsClient : IMeloTtsClient
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(_options.TtsServiceTimeoutSeconds));
-        return await _httpClient.SendAsync(request, timeoutCts.Token);
+        try
+        {
+            return await _httpClient.SendAsync(request, timeoutCts.Token);
+        }
+        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                ex,
+                "Kokoro/sherpa-onnx request timed out after {TimeoutSeconds}s. Method={Method}, Url={Url}",
+                _options.TtsServiceTimeoutSeconds,
+                request.Method,
+                request.RequestUri);
+            throw new TimeoutException(
+                $"Kokoro/sherpa-onnx request timed out after {_options.TtsServiceTimeoutSeconds} seconds.",
+                ex);
+        }
     }
 
     private static async Task<JsonDocument> ParseResponseAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -148,7 +173,7 @@ public sealed class MeloTtsClient : IMeloTtsClient
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"MeloTTS request failed: {response.StatusCode}");
+            throw new HttpRequestException($"Kokoro/sherpa-onnx request failed: {response.StatusCode}");
         }
 
         return JsonDocument.Parse(content);
@@ -162,7 +187,7 @@ public sealed class MeloTtsClient : IMeloTtsClient
     private static Uri CreateBaseUri(string? baseUrl)
     {
         var candidate = string.IsNullOrWhiteSpace(baseUrl)
-            ? "http://127.0.0.1:5057/"
+            ? "http://127.0.0.1:5058/"
             : baseUrl.Trim();
 
         if (!candidate.EndsWith("/", StringComparison.Ordinal))
