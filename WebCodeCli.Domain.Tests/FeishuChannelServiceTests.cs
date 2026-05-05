@@ -1067,9 +1067,24 @@ public class FeishuChannelServiceTests
             Assert.Contains("\"chat_key\":\"oc_low_interrupt_chat\"", quickInputJson);
             Assert.Contains("\"tool_id\":\"codex\"", quickInputJson);
 
-            Assert.Equal(2, chrome.BottomActions.Count);
+            var goalPrompt = Assert.Single(chrome.AdditionalBottomPrompts);
+            Assert.Equal(GoalQuickActionDefaults.QuickInputFieldName, goalPrompt.InputName);
+            Assert.Equal(GoalQuickActionDefaults.InstructionText, goalPrompt.InputLabel);
+            var goalInputJson = JsonSerializer.Serialize(goalPrompt.Value);
+            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.SubmitGoalQuickInputAction}\"", goalInputJson);
+            Assert.Contains($"\"session_id\":\"{sessionId}\"", goalInputJson);
+            Assert.Contains("\"chat_key\":\"oc_low_interrupt_chat\"", goalInputJson);
+            Assert.Contains("\"tool_id\":\"codex\"", goalInputJson);
+
+            Assert.Equal(3, chrome.BottomActions.Count);
+            Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
+            Assert.Contains(
+                $"\"action\":\"{FeishuHelpCardAction.ContinueSuperpowersAction}\"",
+                JsonSerializer.Serialize(
+                    Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText).Value),
+                StringComparison.Ordinal);
             Assert.Contains(
                 $"\"action\":\"{FeishuHelpCardAction.ExecuteSuperpowersPlanAction}\"",
                 JsonSerializer.Serialize(
@@ -1088,7 +1103,7 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
-    public async Task HandleIncomingMessageAsync_AttachesQuickInputButHidesPlanActions_WhenWorkspaceHasNoPlanFiles()
+    public async Task HandleIncomingMessageAsync_AttachesQuickInputAndKeepsContinueAction_WhenWorkspaceHasNoPlanFiles()
     {
         var repository = CreateRepository(out var repositoryProxy);
         var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
@@ -1160,7 +1175,8 @@ public class FeishuChannelServiceTests
             Assert.NotNull(handle.Chrome);
             Assert.NotNull(handle.Chrome!.BottomPrompt);
             Assert.Equal(SuperpowersQuickActionDefaults.QuickInputFieldName, handle.Chrome.BottomPrompt!.InputName);
-            Assert.Empty(handle.Chrome.BottomActions);
+            var continueAction = Assert.Single(handle.Chrome.BottomActions);
+            Assert.Equal(SuperpowersQuickActionDefaults.ContinueButtonText, continueAction.Text);
         }
         finally
         {
@@ -1302,9 +1318,11 @@ public class FeishuChannelServiceTests
         IFeishuUserBindingService feishuUserBindingService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
         IUserContextService userContextService,
-        ISuperpowersCapabilityService? superpowersCapabilityService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
+        ISuperpowersCapabilityService? superpowersCapabilityService = null,
+        IGoalCapabilityService? goalCapabilityService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
+        private readonly IGoalCapabilityService _goalCapabilityService = goalCapabilityService ?? new StubGoalCapabilityService();
 
         public object? GetService(Type serviceType)
         {
@@ -1341,6 +1359,11 @@ public class FeishuChannelServiceTests
             if (serviceType == typeof(ISuperpowersCapabilityService))
             {
                 return _superpowersCapabilityService;
+            }
+
+            if (serviceType == typeof(IGoalCapabilityService))
+            {
+                return _goalCapabilityService;
             }
 
             return null;
@@ -1389,6 +1412,44 @@ public class FeishuChannelServiceTests
                 CacheKey = $"{context.ToolId}::{context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId}",
                 State = SuperpowersCapabilityState.Available,
                 Outcome = SuperpowersCapabilityProbeOutcome.Available
+            });
+        }
+    }
+
+    private sealed class StubGoalCapabilityService : IGoalCapabilityService
+    {
+        public GoalCapabilityState CachedState { get; set; } = GoalCapabilityState.Unknown;
+
+        public string? CachedMessage { get; set; }
+
+        public Task<GoalCapabilitySnapshot> GetStateAsync(
+            GoalCapabilityContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<GoalCapabilitySnapshot>(new GoalCapabilitySnapshot
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? GoalCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? GoalCapabilityService.UnscopedProviderId}",
+                State = CachedState,
+                Message = CachedMessage
+            });
+        }
+
+        public Task<GoalCapabilityProbeResult> ProbeAsync(
+            GoalCapabilityContext context,
+            bool forceRefresh = false,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new GoalCapabilityProbeResult
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? GoalCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? GoalCapabilityService.UnscopedProviderId}",
+                State = GoalCapabilityState.Available,
+                Outcome = GoalCapabilityProbeOutcome.Available
             });
         }
     }
@@ -1690,7 +1751,20 @@ public class FeishuChannelServiceTests
                         ButtonText = chrome.BottomPrompt.ButtonText,
                         ButtonType = chrome.BottomPrompt.ButtonType,
                         Value = chrome.BottomPrompt.Value
-                    }
+                    },
+                AdditionalBottomPrompts = chrome.AdditionalBottomPrompts
+                    .Select(prompt => new FeishuStreamingCardBottomPrompt
+                    {
+                        FormName = prompt.FormName,
+                        InputName = prompt.InputName,
+                        InputLabel = prompt.InputLabel,
+                        Placeholder = prompt.Placeholder,
+                        DefaultValue = prompt.DefaultValue,
+                        ButtonText = prompt.ButtonText,
+                        ButtonType = prompt.ButtonType,
+                        Value = prompt.Value
+                    })
+                    .ToList()
             };
         }
     }

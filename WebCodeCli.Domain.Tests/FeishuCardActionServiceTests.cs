@@ -39,6 +39,58 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ToggleReplyTts_DisablesReplyTtsAndRefreshesHelpCard()
+    {
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null)
+        {
+            SessionUsername = "luhaiyan"
+        };
+        var feishuBotConfigService = new StubUserFeishuBotConfigService();
+        feishuBotConfigService.Seed(new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            IsEnabled = true,
+            ReplyTtsEnabled = true,
+            ReplyTtsVoiceId = "voice-a"
+        });
+
+        var serviceProvider = new TestServiceProvider(feishuBotConfigService: feishuBotConfigService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"toggle_reply_tts"}""",
+            chatId: "oc_tts_toggle_chat");
+
+        var savedConfig = await feishuBotConfigService.GetByUsernameAsync("luhaiyan");
+        Assert.NotNull(savedConfig);
+        Assert.False(savedConfig!.ReplyTtsEnabled);
+        Assert.Equal("voice-a", savedConfig.ReplyTtsVoiceId);
+        Assert.Equal("✅ 已关闭飞书语音回复", ExtractToastContent(response));
+        Assert.Contains("语音回复：关", ExtractCardContentStrings(response));
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ToggleReplyTts_ReturnsErrorToast_WhenUserConfigMissing()
+    {
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null)
+        {
+            SessionUsername = "missing-user"
+        };
+        var feishuBotConfigService = new StubUserFeishuBotConfigService();
+        var serviceProvider = new TestServiceProvider(feishuBotConfigService: feishuBotConfigService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"toggle_reply_tts"}""",
+            chatId: "oc_tts_toggle_chat");
+
+        Assert.Equal("❌ 未找到当前飞书用户配置", ExtractToastContent(response));
+        Assert.DoesNotContain("语音回复：", SerializeResponse(response));
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_ForwardsRawPromptWithoutReplyPrefixInstructions()
     {
         const string chatId = "oc_current_chat";
@@ -355,9 +407,24 @@ public class FeishuCardActionServiceTests
             Assert.Contains($"\"session_id\":\"{activeSessionId}\"", quickInputValueJson);
             Assert.Contains($"\"chat_key\":\"{chatId}\"", quickInputValueJson);
 
-            Assert.Equal(2, chrome.BottomActions.Count);
+            var goalPrompt = Assert.Single(chrome.AdditionalBottomPrompts);
+            Assert.Equal(GoalQuickActionDefaults.QuickInputFieldName, goalPrompt.InputName);
+            Assert.Equal(GoalQuickActionDefaults.InstructionText, goalPrompt.InputLabel);
+            Assert.Equal(GoalQuickActionDefaults.QuickInputPlaceholder, goalPrompt.Placeholder);
+
+            var goalInputValueJson = JsonSerializer.Serialize(goalPrompt.Value);
+            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.SubmitGoalQuickInputAction}\"", goalInputValueJson);
+            Assert.Contains($"\"session_id\":\"{activeSessionId}\"", goalInputValueJson);
+            Assert.Contains($"\"chat_key\":\"{chatId}\"", goalInputValueJson);
+
+            Assert.Equal(3, chrome.BottomActions.Count);
+            Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
+
+            var continueValueJson = JsonSerializer.Serialize(
+                Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText).Value);
+            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.ContinueSuperpowersAction}\"", continueValueJson);
 
             var executePlanValueJson = JsonSerializer.Serialize(
                 Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText).Value);
@@ -374,7 +441,7 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_ExecuteCommand_AttachesQuickInputButHidesPlanActions_WhenPlanFilesMissing()
+    public async Task HandleCardActionAsync_ExecuteCommand_AttachesQuickInputAndKeepsContinueAction_WhenPlanFilesMissing()
     {
         const string chatId = "oc_current_chat";
         const string activeSessionId = "session-superpowers-no-plan";
@@ -413,11 +480,12 @@ public class FeishuCardActionServiceTests
         var chrome = cardKit.LastStreamingChrome!;
         Assert.NotNull(chrome.BottomPrompt);
         Assert.Equal(SuperpowersQuickActionDefaults.QuickInputFieldName, chrome.BottomPrompt!.InputName);
-        Assert.Empty(chrome.BottomActions);
+        var continueAction = Assert.Single(chrome.BottomActions);
+        Assert.Equal(SuperpowersQuickActionDefaults.ContinueButtonText, continueAction.Text);
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_ExecuteCommand_AttachesQuickInputButHidesPlanActions_WhenSessionHistoryLacksSuperpowers()
+    public async Task HandleCardActionAsync_ExecuteCommand_AttachesQuickInputAndKeepsContinueAction_WhenSessionHistoryLacksSuperpowers()
     {
         const string chatId = "oc_current_chat";
         const string activeSessionId = "session-superpowers-no-history";
@@ -453,7 +521,8 @@ public class FeishuCardActionServiceTests
             var chrome = cardKit.LastStreamingChrome!;
             Assert.NotNull(chrome.BottomPrompt);
             Assert.Equal(SuperpowersQuickActionDefaults.QuickInputFieldName, chrome.BottomPrompt!.InputName);
-            Assert.Empty(chrome.BottomActions);
+            var continueAction = Assert.Single(chrome.BottomActions);
+            Assert.Equal(SuperpowersQuickActionDefaults.ContinueButtonText, continueAction.Text);
         }
         finally
         {
@@ -516,15 +585,140 @@ public class FeishuCardActionServiceTests
             chatId: chatId,
             formValue: new Dictionary<string, object>
             {
-                [SuperpowersQuickActionDefaults.QuickInputFieldName] = "使用superpowers技能，写一个执行步骤"
+                [SuperpowersQuickActionDefaults.QuickInputFieldName] = "$superpowers ，使用superpowers技能，写一个执行步骤"
             });
 
         await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
         await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
 
         Assert.Equal(
-            SuperpowersPromptBuilder.BuildQuickSkillPrompt("使用superpowers技能，写一个执行步骤"),
+            SuperpowersPromptBuilder.BuildQuickSkillPrompt("$superpowers ，使用superpowers技能，写一个执行步骤"),
             Assert.Single(cliExecutor.ExecutedPrompts));
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SubmitGoalQuickInput_AutoPrefixesPromptAndUsesStandardExecutionPath()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-goal-quick-input";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "goal completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubGoalCapabilityService
+        {
+            ProbeState = GoalCapabilityState.Available,
+            ProbeOutcome = GoalCapabilityProbeOutcome.Available
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId)
+        {
+            ResolvedToolId = "codex"
+        };
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(goalCapabilityService: capabilityService));
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.SubmitGoalQuickInputAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId,
+            formValue: new Dictionary<string, object>
+            {
+                [GoalQuickActionDefaults.QuickInputFieldName] = "整理这个目标"
+            });
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(
+            GoalPromptBuilder.BuildGoalPrompt("整理这个目标"),
+            Assert.Single(cliExecutor.ExecutedPrompts));
+
+        var probeContext = Assert.Single(capabilityService.ProbeContexts);
+        Assert.Equal("codex", probeContext.ToolId);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SubmitGoalQuickInput_DoesNotDoublePrefix()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-goal-quick-input-prefixed";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "goal completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubGoalCapabilityService
+        {
+            ProbeState = GoalCapabilityState.Available,
+            ProbeOutcome = GoalCapabilityProbeOutcome.Available
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId)
+        {
+            ResolvedToolId = "codex"
+        };
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(goalCapabilityService: capabilityService));
+
+        await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.SubmitGoalQuickInputAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId,
+            formValue: new Dictionary<string, object>
+            {
+                [GoalQuickActionDefaults.QuickInputFieldName] = "/goal 整理这个目标"
+            });
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(
+            GoalPromptBuilder.BuildGoalPrompt("/goal 整理这个目标"),
+            Assert.Single(cliExecutor.ExecutedPrompts));
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ContinueSuperpowers_UsesFixedPromptAndSkipsCapabilityProbe()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-continue";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "continued"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubSuperpowersCapabilityService
+        {
+            ProbeState = SuperpowersCapabilityState.Unavailable,
+            ProbeOutcome = SuperpowersCapabilityProbeOutcome.MissingCapability,
+            ProbeMessage = "missing"
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(superpowersCapabilityService: capabilityService));
+
+        await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ContinueSuperpowersAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId);
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(
+            SuperpowersPromptBuilder.BuildContinuePrompt(),
+            Assert.Single(cliExecutor.ExecutedPrompts));
+        Assert.Empty(capabilityService.ProbeContexts);
     }
 
     [Fact]
@@ -695,6 +889,47 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_GoalQuickAction_WhenCapabilityMissing_ReturnsWarningWithoutExecuting()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-goal-missing-capability";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "goal completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubGoalCapabilityService
+        {
+            ProbeState = GoalCapabilityState.Unavailable,
+            ProbeOutcome = GoalCapabilityProbeOutcome.MissingFeature,
+            ProbeMessage = GoalQuickActionDefaults.CapabilityUnavailableText
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId)
+        {
+            ResolvedToolId = "codex"
+        };
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(goalCapabilityService: capabilityService));
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.SubmitGoalQuickInputAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId,
+            formValue: new Dictionary<string, object>
+            {
+                [GoalQuickActionDefaults.QuickInputFieldName] = "整理这个目标"
+            });
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning, response.Toast?.Type);
+        Assert.Contains(GoalQuickActionDefaults.CapabilityUnavailableText, response.Toast?.Content, StringComparison.Ordinal);
+        Assert.Empty(cliExecutor.ExecutedPrompts);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_RetrySuperpowersCapabilityDetection_WhenCapabilityAvailable_ReturnsSuccessToast()
     {
         const string chatId = "oc_current_chat";
@@ -750,7 +985,8 @@ public class FeishuCardActionServiceTests
         Assert.Equal([sessionId], cliExecutor.LowInterruptionSessionIds);
         Assert.NotNull(cardKit.LastStreamingChrome);
         Assert.NotNull(cardKit.LastStreamingChrome!.BottomPrompt);
-        Assert.Empty(cardKit.LastStreamingChrome.BottomActions);
+        var continueAction = Assert.Single(cardKit.LastStreamingChrome.BottomActions);
+        Assert.Equal(SuperpowersQuickActionDefaults.ContinueButtonText, continueAction.Text);
     }
 
     [Fact]
@@ -2831,6 +3067,16 @@ public class FeishuCardActionServiceTests
         return contents;
     }
 
+    private static string? ExtractToastContent(CardActionTriggerResponseDto response)
+    {
+        using var document = JsonDocument.Parse(SerializeResponse(response));
+        return document.RootElement.TryGetProperty("toast", out var toastElement)
+            && toastElement.TryGetProperty("content", out var contentElement)
+            && contentElement.ValueKind == JsonValueKind.String
+            ? contentElement.GetString()
+            : null;
+    }
+
     private static void CollectContentStrings(JsonElement element, List<string> contents)
     {
         switch (element.ValueKind)
@@ -3383,7 +3629,20 @@ public class FeishuCardActionServiceTests
                         ButtonText = chrome.BottomPrompt.ButtonText,
                         ButtonType = chrome.BottomPrompt.ButtonType,
                         Value = chrome.BottomPrompt.Value
-                    }
+                    },
+                AdditionalBottomPrompts = chrome.AdditionalBottomPrompts
+                    .Select(prompt => new FeishuStreamingCardBottomPrompt
+                    {
+                        FormName = prompt.FormName,
+                        InputName = prompt.InputName,
+                        InputLabel = prompt.InputLabel,
+                        Placeholder = prompt.Placeholder,
+                        DefaultValue = prompt.DefaultValue,
+                        ButtonText = prompt.ButtonText,
+                        ButtonType = prompt.ButtonType,
+                        Value = prompt.Value
+                    })
+                    .ToList()
             };
         }
     }
@@ -3417,6 +3676,8 @@ public class FeishuCardActionServiceTests
         public TimeSpan? LastPauseDuration { get; private set; }
 
         public string ResolvedToolId { get; set; } = "claude-code";
+
+        public string? SessionUsername { get; set; } = "luhaiyan";
 
         public Task<string> SendMessageAsync(string chatId, string content, string? username = null, string? appId = null)
         {
@@ -3469,7 +3730,7 @@ public class FeishuCardActionServiceTests
             return "session-new";
         }
 
-        public string? GetSessionUsername(string chatKey) => "luhaiyan";
+        public string? GetSessionUsername(string chatKey) => SessionUsername;
 
         public string ResolveToolId(string chatKey, string? username = null) => ResolvedToolId;
 
@@ -3604,7 +3865,7 @@ public class FeishuCardActionServiceTests
     private sealed class TestServiceProvider : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly StubFeishuUserBindingService _bindingService = new();
-        private readonly StubUserFeishuBotConfigService _feishuBotConfigService = new();
+        private readonly StubUserFeishuBotConfigService _feishuBotConfigService;
         private readonly StubSessionDirectoryService _sessionDirectoryService = new();
         private readonly ICcSwitchService _ccSwitchService;
         private readonly TestUserContextService _userContextService;
@@ -3613,6 +3874,7 @@ public class FeishuCardActionServiceTests
         private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService;
         private readonly IExternalCliSessionService _externalCliSessionService;
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService;
+        private readonly IGoalCapabilityService _goalCapabilityService;
         private readonly IReplyTtsOrchestrator? _replyTtsOrchestrator;
 
         public TestServiceProvider(
@@ -3623,8 +3885,11 @@ public class FeishuCardActionServiceTests
             IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
             IExternalCliSessionService? externalCliSessionService = null,
             ISuperpowersCapabilityService? superpowersCapabilityService = null,
-            IReplyTtsOrchestrator? replyTtsOrchestrator = null)
+            IGoalCapabilityService? goalCapabilityService = null,
+            IReplyTtsOrchestrator? replyTtsOrchestrator = null,
+            StubUserFeishuBotConfigService? feishuBotConfigService = null)
         {
+            _feishuBotConfigService = feishuBotConfigService ?? new StubUserFeishuBotConfigService();
             _userContextService = userContextService ?? new TestUserContextService();
             _projectService = projectService ?? new TestProjectService(_userContextService);
             _chatSessionRepository = chatSessionRepository ?? new StubChatSessionRepository([]);
@@ -3632,6 +3897,7 @@ public class FeishuCardActionServiceTests
             _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
             _externalCliSessionService = externalCliSessionService ?? new StubExternalCliSessionService([]);
             _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
+            _goalCapabilityService = goalCapabilityService ?? new StubGoalCapabilityService();
             _replyTtsOrchestrator = replyTtsOrchestrator;
         }
 
@@ -3690,6 +3956,11 @@ public class FeishuCardActionServiceTests
             if (serviceType == typeof(ISuperpowersCapabilityService))
             {
                 return _superpowersCapabilityService;
+            }
+
+            if (serviceType == typeof(IGoalCapabilityService))
+            {
+                return _goalCapabilityService;
             }
 
             if (serviceType == typeof(IReplyTtsOrchestrator))
@@ -3831,6 +4102,61 @@ public class FeishuCardActionServiceTests
                 ToolId = context.ToolId,
                 ProviderId = context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId,
                 CacheKey = $"{context.ToolId}::{context.ProviderId ?? SuperpowersCapabilityService.UnscopedProviderId}",
+                State = ProbeState,
+                Outcome = ProbeOutcome,
+                Message = ProbeMessage
+            });
+        }
+    }
+
+    private sealed class StubGoalCapabilityService : IGoalCapabilityService
+    {
+        public GoalCapabilityState CachedState { get; set; } = GoalCapabilityState.Unknown;
+
+        public string? CachedMessage { get; set; }
+
+        public GoalCapabilityState ProbeState { get; set; } = GoalCapabilityState.Available;
+
+        public GoalCapabilityProbeOutcome ProbeOutcome { get; set; } = GoalCapabilityProbeOutcome.Available;
+
+        public string? ProbeMessage { get; set; }
+
+        public List<GoalCapabilityContext> ProbeContexts { get; } = new();
+
+        public Task<GoalCapabilitySnapshot> GetStateAsync(
+            GoalCapabilityContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return Task.FromResult<GoalCapabilitySnapshot>(new GoalCapabilitySnapshot
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? GoalCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? GoalCapabilityService.UnscopedProviderId}",
+                State = CachedState,
+                Message = CachedMessage
+            });
+        }
+
+        public Task<GoalCapabilityProbeResult> ProbeAsync(
+            GoalCapabilityContext context,
+            bool forceRefresh = false,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ProbeContexts.Add(new GoalCapabilityContext
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId,
+                WorkspacePath = context.WorkspacePath
+            });
+
+            return Task.FromResult(new GoalCapabilityProbeResult
+            {
+                ToolId = context.ToolId,
+                ProviderId = context.ProviderId ?? GoalCapabilityService.UnscopedProviderId,
+                CacheKey = $"{context.ToolId}::{context.ProviderId ?? GoalCapabilityService.UnscopedProviderId}",
                 State = ProbeState,
                 Outcome = ProbeOutcome,
                 Message = ProbeMessage
@@ -4130,14 +4456,33 @@ public class FeishuCardActionServiceTests
             ThinkingMessage = "鎬濊€冧腑..."
         };
 
+        private readonly Dictionary<string, UserFeishuBotConfigEntity> _configs = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Seed(UserFeishuBotConfigEntity config)
+        {
+            _configs[config.Username] = Clone(config);
+        }
+
         public Task<UserFeishuBotConfigEntity?> GetByUsernameAsync(string username)
-            => Task.FromResult<UserFeishuBotConfigEntity?>(null);
+        {
+            return Task.FromResult<UserFeishuBotConfigEntity?>(
+                _configs.TryGetValue(username, out var config)
+                    ? Clone(config)
+                    : null);
+        }
 
         public Task<UserFeishuBotConfigEntity?> GetByAppIdAsync(string appId)
-            => Task.FromResult<UserFeishuBotConfigEntity?>(null);
+        {
+            var config = _configs.Values.FirstOrDefault(item =>
+                string.Equals(item.AppId, appId, StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult<UserFeishuBotConfigEntity?>(config == null ? null : Clone(config));
+        }
 
         public Task<UserFeishuBotConfigSaveResult> SaveAsync(UserFeishuBotConfigEntity config)
-            => throw new NotSupportedException();
+        {
+            _configs[config.Username] = Clone(config);
+            return Task.FromResult(UserFeishuBotConfigSaveResult.Saved());
+        }
 
         public Task<bool> DeleteAsync(string username) => Task.FromResult(true);
 
@@ -4145,7 +4490,7 @@ public class FeishuCardActionServiceTests
             => Task.FromResult<string?>(null);
 
         public Task<List<UserFeishuBotConfigEntity>> GetAutoStartCandidatesAsync()
-            => Task.FromResult(new List<UserFeishuBotConfigEntity>());
+            => Task.FromResult(_configs.Values.Select(Clone).ToList());
 
         public Task<bool> UpdateRuntimePreferenceAsync(string username, bool autoStartEnabled, DateTime? lastStartedAt = null)
             => Task.FromResult(true);
@@ -4166,6 +4511,30 @@ public class FeishuCardActionServiceTests
                     DefaultCardTitle = "AI鍔╂墜",
                     ThinkingMessage = "鎬濊€冧腑..."
                 });
+
+        private static UserFeishuBotConfigEntity Clone(UserFeishuBotConfigEntity config)
+        {
+            return new UserFeishuBotConfigEntity
+            {
+                Id = config.Id,
+                Username = config.Username,
+                IsEnabled = config.IsEnabled,
+                AutoStartEnabled = config.AutoStartEnabled,
+                AppId = config.AppId,
+                AppSecret = config.AppSecret,
+                EncryptKey = config.EncryptKey,
+                VerificationToken = config.VerificationToken,
+                DefaultCardTitle = config.DefaultCardTitle,
+                ThinkingMessage = config.ThinkingMessage,
+                HttpTimeoutSeconds = config.HttpTimeoutSeconds,
+                StreamingThrottleMs = config.StreamingThrottleMs,
+                ReplyTtsEnabled = config.ReplyTtsEnabled,
+                ReplyTtsVoiceId = config.ReplyTtsVoiceId,
+                LastStartedAt = config.LastStartedAt,
+                CreatedAt = config.CreatedAt,
+                UpdatedAt = config.UpdatedAt
+            };
+        }
     }
 
     private sealed class StubSessionDirectoryService : ISessionDirectoryService

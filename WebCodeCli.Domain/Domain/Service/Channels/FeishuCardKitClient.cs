@@ -469,7 +469,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return chrome?.OverflowOptions.Count is > 0 ? 4000 : 0;
     }
 
-    private object[] BuildStreamingCardElements(string content, FeishuStreamingCardChrome? chrome)
+    internal static object[] BuildStreamingCardElements(string content, FeishuStreamingCardChrome? chrome)
     {
         if (chrome == null)
         {
@@ -488,8 +488,9 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             !string.IsNullOrWhiteSpace(group.SummaryMarkdown)
             || group.OverflowOptions.Count > 0
             || group.Items.Any(item => !string.IsNullOrWhiteSpace(item.Text)));
+        var allBottomPrompts = EnumerateBottomPrompts(chrome).ToArray();
         var hasBottomActions = chrome.BottomActions.Count > 0;
-        var hasBottomPrompt = chrome.BottomPrompt != null;
+        var hasBottomPrompt = allBottomPrompts.Length > 0;
         if (!hasStatusSection && !hasTopChipGroups && !hasBottomActions && !hasBottomPrompt)
         {
             return
@@ -505,53 +506,20 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         var elements = new List<object>();
         if (hasStatusSection)
         {
-            var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
-                ? "当前会话"
-                : chrome.StatusMarkdown;
-
-            if (chrome.OverflowOptions.Count > 0)
-            {
-                elements.Add(new
-                {
-                    tag = "div",
-                    text = new
-                    {
-                        tag = "lark_md",
-                        content = statusMarkdown
-                    },
-                    extra = new
-                    {
-                        tag = "overflow",
-                        options = BuildOverflowOptions(chrome.OverflowOptions)
-                    }
-                });
-            }
-            else
-            {
-                elements.Add(new
-                {
-                    tag = "div",
-                    text = new
-                    {
-                        tag = "lark_md",
-                        content = statusMarkdown
-                    }
-                });
-            }
-
-            elements.Add(new { tag = "hr" });
+            elements.Add(BuildStatusModule(chrome));
         }
 
         if (hasTopChipGroups)
         {
+            elements.Add(BuildSectionMarker("思考等级"));
+
             foreach (var module in FeishuStreamingTopChipLayout.BuildModules(chrome.TopChipGroups, BuildTopChipAction))
             {
                 elements.Add(module);
             }
-
-            elements.Add(new { tag = "hr" });
         }
 
+        elements.Add(BuildSectionMarker("回复内容"));
         elements.Add(new
         {
             tag = "markdown",
@@ -560,11 +528,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         if (hasBottomPrompt || hasBottomActions)
         {
-            elements.Add(new { tag = "hr" });
+            elements.Add(BuildSectionMarker("Superpowers 工作流"));
 
-            if (hasBottomPrompt)
+            foreach (var prompt in allBottomPrompts)
             {
-                elements.Add(BuildBottomPromptForm(chrome.BottomPrompt!));
+                elements.Add(BuildBottomPromptForm(prompt));
             }
 
             if (hasBottomActions)
@@ -580,6 +548,54 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         }
 
         return elements.ToArray();
+    }
+
+    private static object BuildStatusModule(FeishuStreamingCardChrome chrome)
+    {
+        var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
+            ? "当前会话"
+            : chrome.StatusMarkdown;
+
+        if (chrome.OverflowOptions.Count > 0)
+        {
+            return new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = statusMarkdown
+                },
+                extra = new
+                {
+                    tag = "overflow",
+                    options = BuildOverflowOptions(chrome.OverflowOptions)
+                }
+            };
+        }
+
+        return new
+        {
+            tag = "div",
+            text = new
+            {
+                tag = "lark_md",
+                content = statusMarkdown
+            }
+        };
+    }
+
+    private static object BuildSectionMarker(string title)
+    {
+        return new
+        {
+            tag = "div",
+            text = new
+            {
+                tag = "lark_md",
+                content = $"🟥🟥🟥 **{title}**"
+            }
+        };
     }
 
     private static object BuildBottomPromptForm(FeishuStreamingCardBottomPrompt prompt)
@@ -629,7 +645,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                                     text = new { tag = "plain_text", content = prompt.ButtonText },
                                     type = string.IsNullOrWhiteSpace(prompt.ButtonType) ? "primary" : prompt.ButtonType,
                                     action_type = "form_submit",
-                                    name = "low_interruption_continue_submit",
+                                    name = BuildBottomPromptSubmitButtonName(prompt),
                                     value = prompt.Value
                                 }
                             }
@@ -640,7 +656,47 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         };
     }
 
-    private object[] BuildOverflowOptions(IEnumerable<FeishuStreamingCardOverflowOption> options)
+    private static IEnumerable<FeishuStreamingCardBottomPrompt> EnumerateBottomPrompts(FeishuStreamingCardChrome chrome)
+    {
+        if (chrome.BottomPrompt != null)
+        {
+            yield return chrome.BottomPrompt;
+        }
+
+        foreach (var prompt in chrome.AdditionalBottomPrompts)
+        {
+            if (prompt != null)
+            {
+                yield return prompt;
+            }
+        }
+    }
+
+    private static string BuildBottomPromptSubmitButtonName(FeishuStreamingCardBottomPrompt prompt)
+    {
+        var source = !string.IsNullOrWhiteSpace(prompt.InputName)
+            ? prompt.InputName
+            : !string.IsNullOrWhiteSpace(prompt.FormName)
+                ? prompt.FormName
+                : "bottom_prompt";
+
+        Span<char> buffer = stackalloc char[source.Length];
+        var index = 0;
+        foreach (var ch in source)
+        {
+            buffer[index++] = char.IsLetterOrDigit(ch) ? ch : '_';
+        }
+
+        var normalized = new string(buffer[..index]).Trim('_');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            normalized = "bottom_prompt";
+        }
+
+        return $"{normalized}_submit";
+    }
+
+    private static object[] BuildOverflowOptions(IEnumerable<FeishuStreamingCardOverflowOption> options)
     {
         return options
             .Where(option => !string.IsNullOrWhiteSpace(option.Text))
@@ -661,7 +717,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return FeishuStreamingTopChipLayout.BuildButton(item);
     }
 
-    private object[] BuildBottomActionColumns(IEnumerable<FeishuStreamingCardBottomAction> actions)
+    private static object[] BuildBottomActionColumns(IEnumerable<FeishuStreamingCardBottomAction> actions)
     {
         return actions
             .Where(action => !string.IsNullOrWhiteSpace(action.Text))

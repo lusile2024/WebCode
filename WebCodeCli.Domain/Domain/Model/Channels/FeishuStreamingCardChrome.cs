@@ -26,6 +26,11 @@ public sealed class FeishuStreamingCardChrome
     /// 卡片底部少打断执行提示词表单
     /// </summary>
     public FeishuStreamingCardBottomPrompt? BottomPrompt { get; set; }
+
+    /// <summary>
+    /// 卡片底部附加提示词表单，按顺序显示在主表单之后
+    /// </summary>
+    public List<FeishuStreamingCardBottomPrompt> AdditionalBottomPrompts { get; set; } = [];
 }
 
 public sealed class FeishuStreamingCardTopChipGroup

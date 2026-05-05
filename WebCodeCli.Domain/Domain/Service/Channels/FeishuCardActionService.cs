@@ -150,12 +150,17 @@ public class FeishuCardActionService
                     return await HandleSelectCommandAsync(action.CommandId, chatId);
                 case "back_to_list":
                     return await HandleBackToListAsync(chatId);
+                case FeishuHelpCardAction.ToggleReplyTtsAction:
+                    return await HandleToggleReplyTtsAsync(chatId, operatorUserId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case FeishuHelpCardAction.SubmitSuperpowersQuickInputAction:
+                case FeishuHelpCardAction.ContinueSuperpowersAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersPlanAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction:
                     return await HandleSuperpowersQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId);
+                case FeishuHelpCardAction.SubmitGoalQuickInputAction:
+                    return await HandleGoalQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId);
                 case FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction:
                     return await HandleRetrySuperpowersCapabilityDetectionAsync(action, chatId);
                 case LowInterruptionContinueHelper.ActionName:
@@ -256,8 +261,7 @@ public class FeishuCardActionService
     {
         var toolId = ResolveToolIdForChat(chatId);
         await _commandService.RefreshCommandsAsync(toolId);
-        var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
-        var card = _cardBuilder.BuildCommandListCardV2(categories, showRefreshButton: false);
+        var card = await BuildHelpCommandListCardAsync(chatId, showRefreshButton: false);
         _logger.LogInformation("✅ [FeishuHelp] 返回命令列表卡片（回调响应）");
         return _cardBuilder.BuildCardActionResponseV2(card, "🔄 命令列表已更新", "info");
     }
@@ -275,8 +279,7 @@ public class FeishuCardActionService
 
         if (string.IsNullOrEmpty(commandId))
         {
-            var categories = await _commandService.GetCategorizedCommandsAsync(ResolveToolIdForChat(chatId));
-            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            var card = await BuildHelpCommandListCardAsync(chatId);
             return _cardBuilder.BuildCardActionResponseV2(card, "📋 显示命令列表", "info");
         }
 
@@ -295,8 +298,7 @@ public class FeishuCardActionService
         var command = await _commandService.GetCommandAsync(commandId, toolId);
         if (command == null)
         {
-            var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
-            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            var card = await BuildHelpCommandListCardAsync(chatId);
             _logger.LogWarning("❌ [FeishuHelp] 命令不存在");
             return _cardBuilder.BuildCardActionResponseV2(card, "❌ 命令不存在", "warning");
         }
@@ -317,10 +319,45 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少 chatId", "error");
         }
 
-        var categories = await _commandService.GetCategorizedCommandsAsync(ResolveToolIdForChat(chatId));
-        var card = _cardBuilder.BuildCommandListCardV2(categories);
+        var card = await BuildHelpCommandListCardAsync(chatId);
         _logger.LogInformation("📋 [FeishuHelp] 返回命令列表卡片（回调响应）");
         return _cardBuilder.BuildCardActionResponseV2(card, "", "info");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleToggleReplyTtsAsync(string? chatId, string? operatorUserId)
+    {
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少 chatId", "error");
+        }
+
+        var actualChatKey = NormalizeChatKey(chatId);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未找到当前飞书用户配置", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+        var config = await userFeishuBotConfigService.GetByUsernameAsync(username);
+        if (config == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未找到当前飞书用户配置", "error");
+        }
+
+        config.ReplyTtsEnabled = !config.ReplyTtsEnabled;
+        var saveResult = await userFeishuBotConfigService.SaveAsync(config);
+        if (!saveResult.Success)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                $"❌ {(string.IsNullOrWhiteSpace(saveResult.ErrorMessage) ? "飞书语音回复更新失败" : saveResult.ErrorMessage)}",
+                "error");
+        }
+
+        var card = await BuildHelpCommandListCardAsync(chatId);
+        var toastMessage = config.ReplyTtsEnabled ? "✅ 已开启飞书语音回复" : "✅ 已关闭飞书语音回复";
+        return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, "success");
     }
 
     /// <summary>
@@ -482,6 +519,7 @@ public class FeishuCardActionService
         {
             FeishuHelpCardAction.SubmitSuperpowersQuickInputAction => SuperpowersPromptBuilder.BuildQuickSkillPrompt(
                 GetFormStringValue(formValue, SuperpowersQuickActionDefaults.QuickInputFieldName)),
+            FeishuHelpCardAction.ContinueSuperpowersAction => SuperpowersPromptBuilder.BuildContinuePrompt(),
             FeishuHelpCardAction.ExecuteSuperpowersPlanAction => SuperpowersPromptBuilder.BuildExecutePlanPrompt(),
             FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction => SuperpowersPromptBuilder.BuildSubagentExecutePlanPrompt(),
             _ => null
@@ -510,17 +548,20 @@ public class FeishuCardActionService
         }
 
         var effectiveToolId = await ResolveSessionToolIdAsync(activeSessionId, action.ToolId, targetChatKey, null);
-        var capabilityResult = await ProbeSuperpowersCapabilityAsync(activeSessionId, effectiveToolId, forceRefresh: false);
-        if (capabilityResult.State != SuperpowersCapabilityState.Available)
+        if (!string.Equals(action.Action, FeishuHelpCardAction.ContinueSuperpowersAction, StringComparison.Ordinal))
         {
-            var message = string.IsNullOrWhiteSpace(capabilityResult.Message)
-                ? SuperpowersQuickActionDefaults.CapabilityProbeFailedText
-                : capabilityResult.Message!;
-            return _cardBuilder.BuildCardActionToastOnlyResponse(
-                capabilityResult.State == SuperpowersCapabilityState.Unavailable
-                    ? $"⚠️ {message}"
-                    : $"⚠️ {message}",
-                "warning");
+            var capabilityResult = await ProbeSuperpowersCapabilityAsync(activeSessionId, effectiveToolId, forceRefresh: false);
+            if (capabilityResult.State != SuperpowersCapabilityState.Available)
+            {
+                var message = string.IsNullOrWhiteSpace(capabilityResult.Message)
+                    ? SuperpowersQuickActionDefaults.CapabilityProbeFailedText
+                    : capabilityResult.Message!;
+                return _cardBuilder.BuildCardActionToastOnlyResponse(
+                    capabilityResult.State == SuperpowersCapabilityState.Unavailable
+                        ? $"⚠️ {message}"
+                        : $"⚠️ {message}",
+                    "warning");
+            }
         }
 
         return await HandleExecuteCommandAsync(
@@ -563,6 +604,58 @@ public class FeishuCardActionService
             ? SuperpowersQuickActionDefaults.CapabilityProbeFailedText
             : capabilityResult.Message!;
         return _cardBuilder.BuildCardActionToastOnlyResponse($"⚠️ {message}", "warning");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleGoalQuickActionAsync(
+        FeishuHelpCardAction action,
+        JsonElement? formValue,
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        var prompt = GoalPromptBuilder.BuildGoalPrompt(
+            GetFormStringValue(formValue, GoalQuickActionDefaults.QuickInputFieldName));
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 请输入目标", "warning");
+        }
+
+        var targetChatKey = action.ChatKey ?? chatId;
+        if (string.IsNullOrWhiteSpace(targetChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少必要参数", "error");
+        }
+
+        var activeSessionId = action.SessionId ?? _feishuChannel.GetCurrentSession(NormalizeChatKey(targetChatKey));
+        if (!string.IsNullOrWhiteSpace(activeSessionId) && _feishuChannel.IsSessionExecutionActive(activeSessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已有任务在执行，请等待完成后再试", "warning");
+        }
+
+        if (string.IsNullOrWhiteSpace(activeSessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少当前会话，无法执行 /goal 快捷操作", "error");
+        }
+
+        var effectiveToolId = await ResolveSessionToolIdAsync(activeSessionId, action.ToolId, targetChatKey, null);
+        var capabilityResult = await ProbeGoalCapabilityAsync(activeSessionId, effectiveToolId, forceRefresh: false);
+        if (capabilityResult.State != GoalCapabilityState.Available)
+        {
+            var message = string.IsNullOrWhiteSpace(capabilityResult.Message)
+                ? GoalQuickActionDefaults.CapabilityProbeFailedText
+                : capabilityResult.Message!;
+            return _cardBuilder.BuildCardActionToastOnlyResponse($"⚠️ {message}", "warning");
+        }
+
+        return await HandleExecuteCommandAsync(
+            formValue: null,
+            commandFromAction: prompt,
+            chatId: targetChatKey,
+            operatorUserId: operatorUserId,
+            inputValues: null,
+            appId: appId,
+            preferredSessionId: activeSessionId,
+            preferredToolId: effectiveToolId);
     }
 
     private async Task<CardActionTriggerResponseDto> HandleLowInterruptionContinueAsync(
@@ -722,14 +815,14 @@ public class FeishuCardActionService
 
         if (string.IsNullOrEmpty(categoryId))
         {
-            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            var card = await BuildHelpCommandListCardAsync(chatId);
             return _cardBuilder.BuildCardActionResponseV2(card, "📋 显示命令列表", "info");
         }
 
         var category = categories.FirstOrDefault(c => string.Equals(c.Id, categoryId, StringComparison.OrdinalIgnoreCase));
         if (category == null)
         {
-            var card = _cardBuilder.BuildCommandListCardV2(categories);
+            var card = await BuildHelpCommandListCardAsync(chatId);
             return _cardBuilder.BuildCardActionResponseV2(card, "❌ 分类不存在", "warning");
         }
 
@@ -1088,6 +1181,17 @@ public class FeishuCardActionService
             normalizedChatKey,
             normalizedToolId,
             capabilityState);
+        streamingChrome.AdditionalBottomPrompts.Clear();
+        var goalCapabilityState = ResolveGoalCapabilityState(sessionId, normalizedToolId);
+        var goalPrompt = GoalQuickActionCardHelper.CreateBottomPrompt(
+            sessionId,
+            normalizedChatKey,
+            normalizedToolId,
+            goalCapabilityState);
+        if (goalPrompt != null)
+        {
+            streamingChrome.AdditionalBottomPrompts.Add(goalPrompt);
+        }
         streamingChrome.BottomActions.Clear();
         streamingChrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
             sessionId,
@@ -1098,6 +1202,9 @@ public class FeishuCardActionService
         streamingChrome.StatusMarkdown = SuperpowersQuickActionCardHelper.MergeCapabilityStatusMarkdown(
             streamingChrome.StatusMarkdown,
             capabilityState);
+        streamingChrome.StatusMarkdown = GoalQuickActionCardHelper.MergeCapabilityStatusMarkdown(
+            streamingChrome.StatusMarkdown,
+            goalCapabilityState);
     }
 
     private bool ShouldShowSuperpowersPlanActions(string sessionId)
@@ -1208,6 +1315,27 @@ public class FeishuCardActionService
         }).GetAwaiter().GetResult();
     }
 
+    private GoalCapabilitySnapshot? ResolveGoalCapabilityState(string sessionId, string toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetService<IGoalCapabilityService>();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (capabilityService == null)
+        {
+            return null;
+        }
+
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return capabilityService.GetStateAsync(new GoalCapabilityContext
+        {
+            ToolId = normalizedToolId,
+            ProviderId = session?.CcSwitchProviderId,
+            WorkspacePath = session?.WorkspacePath
+        }).GetAwaiter().GetResult();
+    }
+
     private async Task<SuperpowersCapabilityProbeResult> ProbeSuperpowersCapabilityAsync(
         string sessionId,
         string toolId,
@@ -1221,6 +1349,27 @@ public class FeishuCardActionService
 
         return await capabilityService.ProbeAsync(
             new SuperpowersCapabilityContext
+            {
+                ToolId = normalizedToolId,
+                ProviderId = session?.CcSwitchProviderId,
+                WorkspacePath = session?.WorkspacePath
+            },
+            forceRefresh: forceRefresh);
+    }
+
+    private async Task<GoalCapabilityProbeResult> ProbeGoalCapabilityAsync(
+        string sessionId,
+        string toolId,
+        bool forceRefresh)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetRequiredService<IGoalCapabilityService>();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = await repo.GetByIdAsync(sessionId);
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return await capabilityService.ProbeAsync(
+            new GoalCapabilityContext
             {
                 ToolId = normalizedToolId,
                 ProviderId = session?.CcSwitchProviderId,
@@ -2156,6 +2305,29 @@ public class FeishuCardActionService
         return _feishuChannel.GetSessionUsername(chatKey);
     }
 
+    private async Task<ElementsCardV2Dto> BuildHelpCommandListCardAsync(string? chatId, bool showRefreshButton = true)
+    {
+        var actualChatKey = string.IsNullOrWhiteSpace(chatId) ? null : NormalizeChatKey(chatId);
+        var username = string.IsNullOrWhiteSpace(actualChatKey) ? null : _feishuChannel.GetSessionUsername(actualChatKey);
+        var toolId = ResolveToolIdForChat(actualChatKey, username);
+        var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
+        var replyTtsEnabled = await GetReplyTtsEnabledAsync(username);
+        return _cardBuilder.BuildCommandListCardV2(categories, showRefreshButton, replyTtsEnabled);
+    }
+
+    private async Task<bool> GetReplyTtsEnabledAsync(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return false;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+        var config = await userFeishuBotConfigService.GetByUsernameAsync(username);
+        return config?.ReplyTtsEnabled == true;
+    }
+
     private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username, string? appId = null)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -2883,63 +3055,6 @@ public class FeishuCardActionService
 
     private ElementsCardV2Dto BuildStreamingCardRefreshCard(string content, FeishuStreamingCardChrome chrome)
     {
-        var elements = new List<object>();
-        var statusMarkdown = string.IsNullOrWhiteSpace(chrome.StatusMarkdown)
-            ? "当前会话"
-            : chrome.StatusMarkdown;
-
-        if (chrome.OverflowOptions.Count > 0)
-        {
-            elements.Add(new
-            {
-                tag = "div",
-                text = new
-                {
-                    tag = "lark_md",
-                    content = statusMarkdown
-                },
-                extra = new
-                {
-                    tag = "overflow",
-                    options = chrome.OverflowOptions.Select(option => new
-                    {
-                        text = new { tag = "plain_text", content = option.Text },
-                        value = JsonSerializer.Serialize(option.Value)
-                    }).ToArray()
-                }
-            });
-        }
-        else
-        {
-            elements.Add(new
-            {
-                tag = "div",
-                text = new
-                {
-                    tag = "lark_md",
-                    content = statusMarkdown
-                }
-            });
-        }
-
-        elements.Add(new { tag = "hr" });
-
-        foreach (var module in FeishuStreamingTopChipLayout.BuildModules(chrome.TopChipGroups, BuildStreamingChipButton))
-        {
-            elements.Add(module);
-        }
-
-        if (chrome.TopChipGroups.Count > 0)
-        {
-            elements.Add(new { tag = "hr" });
-        }
-
-        elements.Add(new
-        {
-            tag = "markdown",
-            content
-        });
-
         return new ElementsCardV2Dto
         {
             Config = new ElementsCardV2Dto.ConfigSuffix
@@ -2949,14 +3064,9 @@ public class FeishuCardActionService
             },
             Body = new ElementsCardV2Dto.BodySuffix
             {
-                Elements = elements.ToArray()
+                Elements = FeishuCardKitClient.BuildStreamingCardElements(content, chrome)
             }
         };
-    }
-
-    private static object BuildStreamingChipButton(FeishuStreamingCardTopChipItem item)
-    {
-        return FeishuStreamingTopChipLayout.BuildButton(item);
     }
 
     private static string BuildSessionOptionText(ChatSessionEntity session)

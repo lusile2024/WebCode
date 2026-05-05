@@ -1293,6 +1293,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             chatKey,
             normalizedToolId,
             capabilityState);
+        chrome.AdditionalBottomPrompts.Clear();
+        var goalCapabilityState = ResolveGoalCapabilityState(sessionId, normalizedToolId);
+        var goalPrompt = GoalQuickActionCardHelper.CreateBottomPrompt(
+            sessionId,
+            chatKey,
+            normalizedToolId,
+            goalCapabilityState);
+        if (goalPrompt != null)
+        {
+            chrome.AdditionalBottomPrompts.Add(goalPrompt);
+        }
         chrome.BottomActions.Clear();
         chrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
             sessionId,
@@ -1303,6 +1314,9 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         chrome.StatusMarkdown = SuperpowersQuickActionCardHelper.MergeCapabilityStatusMarkdown(
             chrome.StatusMarkdown,
             capabilityState);
+        chrome.StatusMarkdown = GoalQuickActionCardHelper.MergeCapabilityStatusMarkdown(
+            chrome.StatusMarkdown,
+            goalCapabilityState);
     }
 
     private bool ShouldShowSuperpowersPlanActions(string sessionId)
@@ -1371,6 +1385,27 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
 
         return capabilityService.GetStateAsync(new SuperpowersCapabilityContext
+        {
+            ToolId = normalizedToolId,
+            ProviderId = session?.CcSwitchProviderId,
+            WorkspacePath = session?.WorkspacePath
+        }).GetAwaiter().GetResult();
+    }
+
+    private GoalCapabilitySnapshot? ResolveGoalCapabilityState(string sessionId, string toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetService<IGoalCapabilityService>();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (capabilityService == null)
+        {
+            return null;
+        }
+
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return capabilityService.GetStateAsync(new GoalCapabilityContext
         {
             ToolId = normalizedToolId,
             ProviderId = session?.CcSwitchProviderId,
