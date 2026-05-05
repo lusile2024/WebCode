@@ -2,6 +2,18 @@
 
 This directory contains the same-host Python wrapper used by WebCode reply TTS.
 
+When shipped inside a Windows WebCode release, this folder is placed under:
+
+```text
+<WebCodeInstallRoot>\tools\sherpa-kokoro-service
+```
+
+In the source repository, the same files live under:
+
+```text
+<RepoRoot>\tools\sherpa-kokoro-service
+```
+
 - `GET /health`
 - `GET /voices`
 - `POST /synthesize`
@@ -56,7 +68,7 @@ uv python install 3.9
 
 E:\WebCodeData\Kokoro\python\cpython-3.9.23-windows-x86_64-none\python.exe -m venv E:\WebCodeData\Kokoro\venv
 E:\WebCodeData\Kokoro\venv\Scripts\python.exe -m pip install --upgrade pip
-E:\WebCodeData\Kokoro\venv\Scripts\python.exe -m pip install -r D:\VSWorkshop\WebCode\tools\sherpa-kokoro-service\requirements.txt
+E:\WebCodeData\Kokoro\venv\Scripts\python.exe -m pip install -r <WebCodeRoot>\tools\sherpa-kokoro-service\requirements.txt
 ```
 
 Place the extracted `kokoro-int8-multi-lang-v1_1` model directory under:
@@ -70,14 +82,14 @@ E:\WebCodeData\Kokoro\models\kokoro-int8-multi-lang-v1_1
 The script refuses Windows system-drive storage roots. If `-StorageRoot` is omitted on Windows, it selects the first writable fixed non-system drive; if no such drive exists, it exits before creating any service directories. On non-Windows PowerShell, the default storage root is `/data/webcode/kokoro`.
 
 ```powershell
-cd D:\VSWorkshop\WebCode\tools\sherpa-kokoro-service
+cd <WebCodeRoot>\tools\sherpa-kokoro-service
 .\start.ps1 -StorageRoot E:\WebCodeData\Kokoro -Port 5058 -Python E:\WebCodeData\Kokoro\venv\Scripts\python.exe
 ```
 
 ## Non-Windows Startup
 
 ```bash
-cd /path/to/WebCode/tools/sherpa-kokoro-service
+cd <WebCodeRoot>/tools/sherpa-kokoro-service
 chmod +x start.sh
 ./start.sh /data/webcode/kokoro
 ```
