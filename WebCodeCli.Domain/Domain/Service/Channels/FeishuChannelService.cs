@@ -29,6 +29,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private FeishuMessageHandler? _messageHandler;
     private readonly ICliExecutorService _cliExecutor;
     private readonly IChatSessionService _chatSessionService;
+    private readonly IReplyTtsOrchestrator? _replyTtsOrchestrator;
 
     private bool _isRunning = false;
 
@@ -217,7 +218,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         IFeishuCardKitClient cardKit,
         IServiceProvider serviceProvider,
         ICliExecutorService cliExecutor,
-        IChatSessionService chatSessionService)
+        IChatSessionService chatSessionService,
+        IReplyTtsOrchestrator? replyTtsOrchestrator = null)
     {
         _options = options.Value;
         _logger = logger;
@@ -225,6 +227,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         _serviceProvider = serviceProvider;
         _cliExecutor = cliExecutor;
         _chatSessionService = chatSessionService;
+        _replyTtsOrchestrator = replyTtsOrchestrator;
     }
 
     /// <summary>
@@ -350,6 +353,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 await ExecuteCliAndStreamAsync(
                     handle,
                     sessionId,
+                    message.ChatId,
                     toolId,
                     cliPrompt,
                     message.MessageId,
@@ -648,6 +652,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private async Task ExecuteCliAndStreamAsync(
         FeishuStreamingHandle handle,
         string sessionId,
+        string chatId,
         string toolId,
         string userPrompt,
         string messageId,
@@ -815,6 +820,28 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 session.ToolId = tool.Id;
                 session.UpdatedAt = DateTime.UtcNow;
                 await repo.UpdateAsync(session);
+            }
+
+            if (_replyTtsOrchestrator != null)
+            {
+                try
+                {
+                    await _replyTtsOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
+                    {
+                        ChatId = chatId,
+                        Username = username,
+                        AppId = appId,
+                        Output = finalOutput
+                    });
+                }
+                catch (Exception ttsQueueEx)
+                {
+                    _logger.LogWarning(
+                        ttsQueueEx,
+                        "Failed to queue reply TTS after Feishu completion: Session={SessionId}, MessageId={MessageId}",
+                        sessionId,
+                        messageId);
+                }
             }
 
             _logger.LogInformation(
@@ -1266,6 +1293,17 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             chatKey,
             normalizedToolId,
             capabilityState);
+        chrome.AdditionalBottomPrompts.Clear();
+        var goalCapabilityState = ResolveGoalCapabilityState(sessionId, normalizedToolId);
+        var goalPrompt = GoalQuickActionCardHelper.CreateBottomPrompt(
+            sessionId,
+            chatKey,
+            normalizedToolId,
+            goalCapabilityState);
+        if (goalPrompt != null)
+        {
+            chrome.AdditionalBottomPrompts.Add(goalPrompt);
+        }
         chrome.BottomActions.Clear();
         chrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
             sessionId,
@@ -1276,6 +1314,9 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         chrome.StatusMarkdown = SuperpowersQuickActionCardHelper.MergeCapabilityStatusMarkdown(
             chrome.StatusMarkdown,
             capabilityState);
+        chrome.StatusMarkdown = GoalQuickActionCardHelper.MergeCapabilityStatusMarkdown(
+            chrome.StatusMarkdown,
+            goalCapabilityState);
     }
 
     private bool ShouldShowSuperpowersPlanActions(string sessionId)
@@ -1344,6 +1385,27 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
 
         return capabilityService.GetStateAsync(new SuperpowersCapabilityContext
+        {
+            ToolId = normalizedToolId,
+            ProviderId = session?.CcSwitchProviderId,
+            WorkspacePath = session?.WorkspacePath
+        }).GetAwaiter().GetResult();
+    }
+
+    private GoalCapabilitySnapshot? ResolveGoalCapabilityState(string sessionId, string toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var capabilityService = scope.ServiceProvider.GetService<IGoalCapabilityService>();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (capabilityService == null)
+        {
+            return null;
+        }
+
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        var normalizedToolId = NormalizeToolId(session?.CcSwitchSnapshotToolId ?? toolId) ?? toolId;
+
+        return capabilityService.GetStateAsync(new GoalCapabilityContext
         {
             ToolId = normalizedToolId,
             ProviderId = session?.CcSwitchProviderId,

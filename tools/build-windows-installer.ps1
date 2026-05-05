@@ -74,6 +74,45 @@ function Update-PublishAppSettings {
     [System.IO.File]::WriteAllText($settingsPath, $json, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Copy-ReplyTtsServiceAssets {
+    param(
+        [string]$RepoRoot,
+        [string]$PublishDirectory
+    )
+
+    $sourceRoot = Join-Path $RepoRoot "tools\sherpa-kokoro-service"
+    if (-not (Test-Path $sourceRoot)) {
+        throw "Reply TTS service assets were not found at $sourceRoot"
+    }
+
+    $destinationRoot = Join-Path $PublishDirectory "tools\sherpa-kokoro-service"
+    if (Test-Path $destinationRoot) {
+        Remove-Item -Recurse -Force $destinationRoot
+    }
+
+    New-Item -ItemType Directory -Force -Path $destinationRoot | Out-Null
+
+    foreach ($relativePath in @(
+        "README.md",
+        "requirements.txt",
+        "app.py",
+        "start.ps1",
+        "start.sh")) {
+        $sourcePath = Join-Path $sourceRoot $relativePath
+        if (-not (Test-Path $sourcePath)) {
+            throw "Required Reply TTS service asset was not found at $sourcePath"
+        }
+
+        $destinationPath = Join-Path $destinationRoot $relativePath
+        $destinationParent = Split-Path -Parent $destinationPath
+        if (-not (Test-Path $destinationParent)) {
+            New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
+        }
+
+        Copy-Item -Path $sourcePath -Destination $destinationPath -Force
+    }
+}
+
 function Get-LaunchUrlForReleaseNotes {
     param([string]$PublishDirectory)
 
@@ -168,6 +207,7 @@ if (-not (Test-Path $publishedExePath)) {
 }
 
 Update-PublishAppSettings -PublishDirectory $publishDirectory
+Copy-ReplyTtsServiceAssets -RepoRoot $repoRoot -PublishDirectory $publishDirectory
 $launchUrl = Get-LaunchUrlForReleaseNotes -PublishDirectory $publishDirectory
 
 if (Test-Path $portableStageDirectory) {
@@ -222,6 +262,8 @@ $releaseNotes = @"
 - The installer keeps an existing appsettings.json on upgrade
 - Default install path is `%LOCALAPPDATA%\Programs\WebCode`
 - Default runtime data paths are `data/` and `workspaces/` under the install directory
+- Includes the local Kokoro/sherpa-onnx Reply TTS wrapper under 'tools/sherpa-kokoro-service'
+- The bundled Reply TTS wrapper still requires Python dependencies, models, ffmpeg, and a writable non-system storage root before use
 - After launch, open $launchUrl in the browser
 "@
 [System.IO.File]::WriteAllText($releaseNotesPath, $releaseNotes.Trim() + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
