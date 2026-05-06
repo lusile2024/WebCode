@@ -129,6 +129,13 @@ if (dbConfig != null)
     }
     
     // 设置全局实例
+    if (string.Equals(dbConfig.DbType, "Sqlite", StringComparison.OrdinalIgnoreCase))
+    {
+        dbConfig.ConnectionStrings = SqliteConnectionStringResolver.Resolve(
+            dbConfig.ConnectionStrings,
+            AppContext.BaseDirectory);
+    }
+
     DBConnectionOption.Instance = dbConfig;
     
     Log.Information($"Database Type: {DBConnectionOption.Instance.DbType}");

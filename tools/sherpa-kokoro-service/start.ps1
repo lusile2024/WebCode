@@ -91,6 +91,99 @@ function Resolve-DefaultStorageRoot {
     return Join-Path $dataDrive.RootDirectory.FullName "WebCodeData\Kokoro"
 }
 
+function Get-BundledPythonHome {
+    param([string]$StorageRoot)
+
+    $pythonRoot = Join-Path $StorageRoot "python"
+    if (-not (Test-Path $pythonRoot)) {
+        return $null
+    }
+
+    $candidateHomes = Get-ChildItem -Path $pythonRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name
+    foreach ($candidateHome in $candidateHomes) {
+        $pythonExecutablePath = Join-Path $candidateHome.FullName "python.exe"
+        if (Test-Path $pythonExecutablePath) {
+            return $candidateHome.FullName
+        }
+    }
+
+    return $null
+}
+
+function Repair-BundledVenvConfig {
+    param(
+        [string]$StorageRoot,
+        [string]$BundledPythonHome
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BundledPythonHome)) {
+        return
+    }
+
+    $venvConfigPath = Join-Path $StorageRoot "venv\pyvenv.cfg"
+    if (-not (Test-Path $venvConfigPath)) {
+        return
+    }
+
+    $expectedPythonHome = [System.IO.Path]::GetFullPath($BundledPythonHome)
+    $lines = Get-Content -Path $venvConfigPath
+    $updated = $false
+    $hasHomeEntry = $false
+
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^\s*home\s*=') {
+            $hasHomeEntry = $true
+            $expectedLine = "home = $expectedPythonHome"
+            if ($lines[$index] -ne $expectedLine) {
+                $lines[$index] = $expectedLine
+                $updated = $true
+            }
+        }
+    }
+
+    if (-not $hasHomeEntry) {
+        $lines = @("home = $expectedPythonHome") + $lines
+        $updated = $true
+    }
+
+    if ($updated) {
+        [System.IO.File]::WriteAllLines($venvConfigPath, $lines, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
+function Resolve-PythonCommand {
+    param(
+        [string]$StorageRoot,
+        [string]$RequestedPython
+    )
+
+    $bundledPythonHome = Get-BundledPythonHome -StorageRoot $StorageRoot
+    if (-not [string]::IsNullOrWhiteSpace($bundledPythonHome)) {
+        Repair-BundledVenvConfig -StorageRoot $StorageRoot -BundledPythonHome $bundledPythonHome
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedPython) -and $RequestedPython -ne "python") {
+        if (-not [System.IO.Path]::IsPathRooted($RequestedPython) -or (Test-Path $RequestedPython)) {
+            return $RequestedPython
+        }
+    }
+
+    $bundledVenvPythonPath = Join-Path $StorageRoot "venv\Scripts\python.exe"
+    if (Test-Path $bundledVenvPythonPath) {
+        return $bundledVenvPythonPath
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($bundledPythonHome)) {
+        $bundledPythonPath = Join-Path $bundledPythonHome "python.exe"
+        if (Test-Path $bundledPythonPath) {
+            return $bundledPythonPath
+        }
+    }
+
+    return "python"
+}
+
 if ([string]::IsNullOrWhiteSpace($StorageRoot)) {
     $StorageRoot = Resolve-DefaultStorageRoot
 }
@@ -124,6 +217,7 @@ $env:KOKORO_NUM_THREADS = "$NumThreads"
 $env:KOKORO_HOST = "127.0.0.1"
 $env:KOKORO_PORT = "$Port"
 $env:KOKORO_STORAGE_ROOT = $resolvedRoot
+$Python = Resolve-PythonCommand -StorageRoot $resolvedRoot -RequestedPython $Python
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $scriptRoot

@@ -158,9 +158,9 @@ public class FeishuCardActionService
                 case FeishuHelpCardAction.ContinueSuperpowersAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersPlanAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction:
-                    return await HandleSuperpowersQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId);
+                    return await HandleSuperpowersQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
                 case FeishuHelpCardAction.SubmitGoalQuickInputAction:
-                    return await HandleGoalQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId);
+                    return await HandleGoalQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
                 case FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction:
                     return await HandleRetrySuperpowersCapabilityDetectionAsync(action, chatId);
                 case LowInterruptionContinueHelper.ActionName:
@@ -513,12 +513,13 @@ public class FeishuCardActionService
         JsonElement? formValue,
         string? chatId,
         string? operatorUserId,
-        string? appId)
+        string? appId,
+        string? inputValues)
     {
         var prompt = action.Action switch
         {
             FeishuHelpCardAction.SubmitSuperpowersQuickInputAction => SuperpowersPromptBuilder.BuildQuickSkillPrompt(
-                GetFormStringValue(formValue, SuperpowersQuickActionDefaults.QuickInputFieldName)),
+                ResolveQuickInputValue(formValue, SuperpowersQuickActionDefaults.QuickInputFieldName, inputValues)),
             FeishuHelpCardAction.ContinueSuperpowersAction => SuperpowersPromptBuilder.BuildContinuePrompt(),
             FeishuHelpCardAction.ExecuteSuperpowersPlanAction => SuperpowersPromptBuilder.BuildExecutePlanPrompt(),
             FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction => SuperpowersPromptBuilder.BuildSubagentExecutePlanPrompt(),
@@ -611,10 +612,11 @@ public class FeishuCardActionService
         JsonElement? formValue,
         string? chatId,
         string? operatorUserId,
-        string? appId)
+        string? appId,
+        string? inputValues)
     {
         var prompt = GoalPromptBuilder.BuildGoalPrompt(
-            GetFormStringValue(formValue, GoalQuickActionDefaults.QuickInputFieldName));
+            ResolveQuickInputValue(formValue, GoalQuickActionDefaults.QuickInputFieldName, inputValues));
         if (string.IsNullOrWhiteSpace(prompt))
         {
             return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 请输入目标", "warning");
@@ -2358,6 +2360,12 @@ public class FeishuCardActionService
             JsonValueKind.Object when valueElement.TryGetProperty("value", out var nestedValue) && nestedValue.ValueKind == JsonValueKind.String => nestedValue.GetString(),
             _ => valueElement.ToString()
         };
+    }
+
+    private static string? ResolveQuickInputValue(JsonElement? formValue, string key, string? inputValues)
+    {
+        var formInput = GetFormStringValue(formValue, key);
+        return string.IsNullOrWhiteSpace(formInput) ? inputValues : formInput;
     }
 
     private CreateProjectRequest BuildProjectRequestFromForm(JsonElement? formValue)

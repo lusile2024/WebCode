@@ -565,6 +565,36 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_SubmitSuperpowersQuickInput_UsesInputValuesWhenFormValueIsMissing()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-quick-input-from-input";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "plan completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit);
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.SubmitSuperpowersQuickInputAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId,
+            inputValues: "写一个执行步骤");
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(
+            SuperpowersPromptBuilder.BuildQuickSkillPrompt("写一个执行步骤"),
+            Assert.Single(cliExecutor.ExecutedPrompts));
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_SubmitSuperpowersQuickInput_DoesNotDoublePrefix()
     {
         const string chatId = "oc_current_chat";
@@ -640,6 +670,46 @@ public class FeishuCardActionServiceTests
 
         var probeContext = Assert.Single(capabilityService.ProbeContexts);
         Assert.Equal("codex", probeContext.ToolId);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SubmitGoalQuickInput_UsesInputValuesWhenFormValueIsMissing()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-goal-quick-input-from-input";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "goal completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubGoalCapabilityService
+        {
+            ProbeState = GoalCapabilityState.Available,
+            ProbeOutcome = GoalCapabilityProbeOutcome.Available
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId)
+        {
+            ResolvedToolId = "codex"
+        };
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(goalCapabilityService: capabilityService));
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.SubmitGoalQuickInputAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId,
+            inputValues: "整理这个目标");
+
+        Assert.Equal(CardActionTriggerResponseDto.ToastSuffix.ToastType.Info, response.Toast?.Type);
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(
+            GoalPromptBuilder.BuildGoalPrompt("整理这个目标"),
+            Assert.Single(cliExecutor.ExecutedPrompts));
     }
 
     [Fact]
