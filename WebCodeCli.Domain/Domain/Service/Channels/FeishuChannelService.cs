@@ -666,6 +666,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         var assistantMessageBuilder = new StringBuilder();
         var jsonlBuffer = new StringBuilder(); // JSONL 缂撳啿鍖猴紝澶勭悊涓嶅畬鏁寸殑琛?
         var hasStructuredTodoList = false;
+        var latestRenderedContent = thinkingMessage;
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
@@ -673,7 +674,9 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         {
             activeExecution.CancelPulse();
             activeExecution.SetErrorStatus();
-            await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
+            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                latestRenderedContent,
+                $"未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。"));
             _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
             return;
         }
@@ -710,7 +713,9 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                         chunk.ErrorMessage ?? "Unknown error");
                     activeExecution.CancelPulse();
                     activeExecution.SetErrorStatus();
-                    await handle.FinishAsync($"错误：{chunk.ErrorMessage ?? "执行失败"}");
+                    await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                        latestRenderedContent,
+                        chunk.ErrorMessage ?? "执行失败"));
                     return;
                 }
 
@@ -739,6 +744,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
                 // 娴佸紡鏇存柊鍗＄墖锛堣妭娴佸湪 handle 鍐呴儴澶勭悊锛?
                 activeExecution.SetLatestRenderedContent(displayContent);
+                latestRenderedContent = displayContent;
                 activeExecution.PausePulseForOverflowCard(StreamingStatusPulseQuietWindow);
                 await handle.UpdateAsync(displayContent);
 
@@ -861,7 +867,9 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             _logger.LogError(ex, "CLI execution failed for message: {MessageId}", messageId);
             activeExecution.CancelPulse();
             activeExecution.SetErrorStatus();
-            await handle.FinishAsync($"执行出错：{ex.Message}");
+            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                latestRenderedContent,
+                ex.Message));
         }
     }
 

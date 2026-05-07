@@ -81,6 +81,24 @@ internal static class FeishuStreamingStatusFormatter
             : $"{baseStatusMarkdown} · {state}";
 }
 
+internal static class FeishuStreamingErrorFormatter
+{
+    public static string AppendError(string? existingContent, string? errorMessage)
+    {
+        var normalizedError = string.IsNullOrWhiteSpace(errorMessage)
+            ? "执行失败"
+            : errorMessage.Trim();
+        var formattedError = $"**错误：{normalizedError}**";
+
+        if (string.IsNullOrWhiteSpace(existingContent))
+        {
+            return formattedError;
+        }
+
+        return $"{existingContent.TrimEnd()}\n\n---\n\n{formattedError}";
+    }
+}
+
 internal sealed class FeishuStreamingStatusPulseGate
 {
     private long _pauseUntilUtcTicks;

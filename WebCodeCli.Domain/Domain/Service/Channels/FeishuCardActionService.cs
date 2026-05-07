@@ -859,7 +859,9 @@ public class FeishuCardActionService
         if (tool == null)
         {
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
+            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                latestRenderedContent,
+                $"未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。"));
             _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
             return;
         }
@@ -896,7 +898,9 @@ public class FeishuCardActionService
                         chunk.ErrorMessage ?? "Unknown error");
                     statusPulseCts.Cancel();
                     streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-                    await handle.FinishAsync($"错误：{chunk.ErrorMessage ?? "执行失败"}");
+                    await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                        latestRenderedContent,
+                        chunk.ErrorMessage ?? "执行失败"));
                     return;
                 }
 
@@ -990,7 +994,9 @@ public class FeishuCardActionService
             _logger.LogError(ex, "CLI execution failed for session: {SessionId}", sessionId);
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync($"执行出错：{ex.Message}");
+            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                latestRenderedContent,
+                ex.Message));
         }
         finally
         {
@@ -1028,7 +1034,9 @@ public class FeishuCardActionService
         if (tool == null)
         {
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync($"错误：未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。");
+            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                latestRenderedContent,
+                $"未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。"));
             _logger.LogWarning("CLI tool not found for low interruption continue: {ToolId}", resolvedToolId);
             return;
         }
@@ -1058,7 +1066,9 @@ public class FeishuCardActionService
                         chunk.ErrorMessage ?? "Unknown error");
                     statusPulseCts.Cancel();
                     streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-                    await handle.FinishAsync($"错误：{chunk.ErrorMessage ?? "执行失败"}");
+                    await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                        latestRenderedContent,
+                        chunk.ErrorMessage ?? "执行失败"));
                     return;
                 }
 
@@ -1149,7 +1159,9 @@ public class FeishuCardActionService
             _logger.LogError(ex, "Low interruption continue failed for session: {SessionId}", sessionId);
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync($"执行出错：{ex.Message}");
+            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                latestRenderedContent,
+                ex.Message));
         }
         finally
         {
