@@ -78,6 +78,13 @@ public class GoalCapabilityService : IGoalCapabilityService
 
     private static readonly Version MinimumCodexVersion = new(0, 128, 0);
     private static readonly Regex VersionRegex = new(@"(?<version>\d+\.\d+\.\d+)", RegexOptions.Compiled);
+    private static readonly string[] WindowsExecutableExtensions =
+    [
+        ".exe",
+        ".cmd",
+        ".bat",
+        ".ps1"
+    ];
 
     private readonly ConcurrentDictionary<string, GoalCapabilityCacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ICcSwitchService _ccSwitchService;
@@ -297,12 +304,14 @@ public class GoalCapabilityService : IGoalCapabilityService
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
 
+        var invocation = ResolveCommandInvocation(command, arguments);
+
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = command,
-                Arguments = arguments,
+                FileName = invocation.FileName,
+                Arguments = invocation.Arguments,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -354,6 +363,116 @@ public class GoalCapabilityService : IGoalCapabilityService
         catch
         {
         }
+    }
+
+    internal static CommandInvocation ResolveCommandInvocation(
+        string command,
+        string arguments,
+        string? pathEnvironment = null,
+        string? comSpec = null,
+        string? powershellPath = null)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return new CommandInvocation(string.Empty, arguments);
+        }
+
+        var trimmedCommand = command.Trim().Trim('"');
+        if (!OperatingSystem.IsWindows())
+        {
+            return new CommandInvocation(trimmedCommand, arguments);
+        }
+
+        var resolvedPath = ResolveWindowsCommandPath(trimmedCommand, pathEnvironment);
+        var extension = Path.GetExtension(resolvedPath);
+
+        if (string.Equals(extension, ".ps1", StringComparison.OrdinalIgnoreCase))
+        {
+            var shellPath = string.IsNullOrWhiteSpace(powershellPath)
+                ? "powershell.exe"
+                : powershellPath;
+            return new CommandInvocation(
+                shellPath,
+                $"-NoProfile -ExecutionPolicy Bypass -File \"{resolvedPath}\" {arguments}".Trim());
+        }
+
+        if (string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase))
+        {
+            var cmdPath = string.IsNullOrWhiteSpace(comSpec)
+                ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+                : comSpec;
+            var commandArguments = string.IsNullOrWhiteSpace(arguments)
+                ? $"\"{resolvedPath}\""
+                : $"\"{resolvedPath}\" {arguments}";
+            return new CommandInvocation(
+                cmdPath,
+                $"/d /c \"{commandArguments}\"");
+        }
+
+        return new CommandInvocation(resolvedPath, arguments);
+    }
+
+    internal static string ResolveWindowsCommandPath(string command, string? pathEnvironment = null)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return string.Empty;
+        }
+
+        if (Path.IsPathRooted(command) || command.Contains(Path.DirectorySeparatorChar) || command.Contains(Path.AltDirectorySeparatorChar))
+        {
+            return command;
+        }
+
+        if (Path.HasExtension(command))
+        {
+            return FindCommandOnPath(command, pathEnvironment) ?? command;
+        }
+
+        foreach (var extension in WindowsExecutableExtensions)
+        {
+            var candidate = FindCommandOnPath(command + extension, pathEnvironment);
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return FindCommandOnPath(command, pathEnvironment) ?? command;
+    }
+
+    private static string? FindCommandOnPath(string command, string? pathEnvironment)
+    {
+        var effectivePath = string.IsNullOrWhiteSpace(pathEnvironment)
+            ? Environment.GetEnvironmentVariable("PATH")
+            : pathEnvironment;
+        if (string.IsNullOrWhiteSpace(effectivePath))
+        {
+            return null;
+        }
+
+        foreach (var rawDirectory in effectivePath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (string.IsNullOrWhiteSpace(rawDirectory))
+            {
+                continue;
+            }
+
+            try
+            {
+                var candidate = Path.Combine(rawDirectory, command);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
     }
 
     private static Version? ParseVersion(string output)
@@ -495,6 +614,7 @@ public class GoalCapabilityService : IGoalCapabilityService
     }
 
     protected readonly record struct CommandProbeResult(bool Success, string Output);
+    internal readonly record struct CommandInvocation(string FileName, string Arguments);
 }
 
 internal sealed class NullGoalCapabilityService : IGoalCapabilityService
