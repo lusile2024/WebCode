@@ -699,7 +699,27 @@ public class FeishuCardActionServiceTests
 
             var cardKit = new StubFeishuCardKitClient();
             var feishuChannel = new StubFeishuChannelService(activeSessionId);
-            var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit, chatSessionService);
+            var sessionRepository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = activeSessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    WorkspacePath = workspacePath,
+                    FeishuChatKey = chatId,
+                    IsFeishuActive = true,
+                    ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                    CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                    UpdatedAt = DateTime.UtcNow
+                }
+            ]);
+            var service = CreateService(
+                cliExecutor,
+                feishuChannel,
+                new TestServiceProvider(chatSessionRepository: sessionRepository),
+                cardKit,
+                chatSessionService);
 
             await service.HandleCardActionAsync(
                 """{"action":"execute_command"}""",
@@ -827,7 +847,27 @@ public class FeishuCardActionServiceTests
 
         var cardKit = new StubFeishuCardKitClient();
         var feishuChannel = new StubFeishuChannelService(activeSessionId);
-        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit, chatSessionService);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = activeSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\superpowers",
+                FeishuChatKey = chatId,
+                IsFeishuActive = true,
+                ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            cardKit,
+            chatSessionService);
 
         await service.HandleCardActionAsync(
             """{"action":"execute_command"}""",
@@ -870,6 +910,216 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ExecuteCommand_HidesGoalButtons_WhenUsingOneShotProcess()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-one-shot";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "plan completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+        cliExecutor.SetToolUsePersistentProcess("codex", false);
+
+        var chatSessionService = new StubChatSessionService();
+        chatSessionService.Messages[activeSessionId] =
+        [
+            new ChatMessage
+            {
+                Role = "user",
+                Content = "superpowers",
+                IsCompleted = true,
+                CreatedAt = DateTime.UtcNow.AddMinutes(-2)
+            }
+        ];
+
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = activeSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\superpowers",
+                FeishuChatKey = chatId,
+                IsFeishuActive = true,
+                ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":false}}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            cardKit,
+            chatSessionService);
+
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "继续");
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(cardKit.LastStreamingChrome);
+        var chrome = cardKit.LastStreamingChrome!;
+        Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.StatusButtonText);
+        Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.PauseButtonText);
+        Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ClearButtonText);
+        Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
+        Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SuperpowersQuickAction_WhenActiveSessionChanged_ReturnsConfirmCardWithoutExecuting()
+    {
+        const string chatId = "oc_current_chat";
+        const string boundSessionId = "session-bound";
+        const string currentSessionId = "session-current";
+        const string existingReply = "这是之前已经输出完成的回复内容";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        cliExecutor.SetSessionWorkspacePath(boundSessionId, @"D:\repo\bound");
+        cliExecutor.SetSessionWorkspacePath(currentSessionId, @"D:\repo\current");
+
+        var chatSessionService = new StubChatSessionService();
+        chatSessionService.Messages[boundSessionId] =
+        [
+            new ChatMessage
+            {
+                Role = "assistant",
+                Content = existingReply,
+                IsCompleted = true,
+                CreatedAt = DateTime.UtcNow.AddMinutes(-1)
+            }
+        ];
+
+        var feishuChannel = new StubFeishuChannelService(currentSessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = boundSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\bound",
+                FeishuChatKey = chatId,
+                IsFeishuActive = false,
+                ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
+            },
+            new ChatSessionEntity
+            {
+                SessionId = currentSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\current",
+                FeishuChatKey = chatId,
+                IsFeishuActive = true,
+                ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-4),
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            chatSessionService: chatSessionService);
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ContinueSuperpowersAction}}","session_id":"{{boundSessionId}}","chat_key":"{{chatId}}","tool_id":"codex"}""",
+            chatId: chatId);
+
+        Assert.Equal("⚠️ 当前激活会话已变化，请先确认要执行的会话", ExtractToastContent(response));
+        var cardContents = ExtractCardContentStrings(response);
+        Assert.Contains(cardContents, content => content.Contains("回复内容", StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains(existingReply, StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains("Superpowers 工作流", StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains(boundSessionId, StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains(currentSessionId, StringComparison.Ordinal));
+        Assert.False(cliExecutor.WasExecuted);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SuperpowersQuickAction_ConfirmBoundSession_ExecutesOnBoundSession()
+    {
+        const string chatId = "oc_current_chat";
+        const string boundSessionId = "session-bound";
+        const string currentSessionId = "session-current";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "confirmed"
+        };
+        cliExecutor.SetSessionWorkspacePath(boundSessionId, @"D:\repo\bound");
+        cliExecutor.SetSessionWorkspacePath(currentSessionId, @"D:\repo\current");
+
+        var chatSessionService = new StubChatSessionService();
+        chatSessionService.Messages[boundSessionId] =
+        [
+            new ChatMessage
+            {
+                Role = "user",
+                Content = "superpowers",
+                IsCompleted = true,
+                CreatedAt = DateTime.UtcNow.AddMinutes(-2)
+            }
+        ];
+
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService(currentSessionId);
+        var sessionRepository = new StubChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = boundSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\bound",
+                FeishuChatKey = chatId,
+                IsFeishuActive = false,
+                ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
+            },
+            new ChatSessionEntity
+            {
+                SessionId = currentSessionId,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\current",
+                FeishuChatKey = chatId,
+                IsFeishuActive = true,
+                ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-4),
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            cardKit,
+            chatSessionService);
+
+        await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ConfirmBoundSuperpowersAction}}","session_id":"{{boundSessionId}}","chat_key":"{{chatId}}","tool_id":"codex","command":"{{FeishuHelpCardAction.ContinueSuperpowersAction}}"}""",
+            chatId: chatId);
+
+        var usedSessionId = await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(boundSessionId, usedSessionId);
+        Assert.True(cliExecutor.WasExecuted);
+        Assert.NotEmpty(cliExecutor.ExecutedPrompts);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_AttachesQuickInputAndKeepsContinueAction_WhenSessionHistoryLacksSuperpowers()
     {
         const string chatId = "oc_current_chat";
@@ -892,7 +1142,26 @@ public class FeishuCardActionServiceTests
 
             var cardKit = new StubFeishuCardKitClient();
             var feishuChannel = new StubFeishuChannelService(activeSessionId);
-            var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit);
+            var sessionRepository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = activeSessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    WorkspacePath = workspacePath,
+                    FeishuChatKey = chatId,
+                    IsFeishuActive = true,
+                    ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":true}}",
+                    CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                    UpdatedAt = DateTime.UtcNow
+                }
+            ]);
+            var service = CreateService(
+                cliExecutor,
+                feishuChannel,
+                new TestServiceProvider(chatSessionRepository: sessionRepository),
+                cardKit);
 
             await service.HandleCardActionAsync(
                 """{"action":"execute_command"}""",
@@ -3778,7 +4047,7 @@ public class FeishuCardActionServiceTests
         private readonly Dictionary<string, CliToolConfig> _tools = new(StringComparer.OrdinalIgnoreCase)
         {
             ["claude-code"] = new CliToolConfig { Id = "claude-code", Name = "Claude Code" },
-            ["codex"] = new CliToolConfig { Id = "codex", Name = "Codex" }
+            ["codex"] = new CliToolConfig { Id = "codex", Name = "Codex", UsePersistentProcess = true }
         };
         private readonly Dictionary<string, string> _cliThreadIds = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _workspacePaths = new(StringComparer.OrdinalIgnoreCase);
@@ -3833,6 +4102,14 @@ public class FeishuCardActionServiceTests
         public void SetSessionWorkspacePath(string sessionId, string workspacePath)
         {
             _workspacePaths[sessionId] = workspacePath;
+        }
+
+        public void SetToolUsePersistentProcess(string toolId, bool usePersistentProcess)
+        {
+            if (_tools.TryGetValue(toolId, out var tool))
+            {
+                tool.UsePersistentProcess = usePersistentProcess;
+            }
         }
 
         public async Task<string> WaitForExecutionAsync(TimeSpan timeout)
@@ -4335,7 +4612,8 @@ public class FeishuCardActionServiceTests
                         ButtonType = prompt.ButtonType,
                         Value = prompt.Value
                     })
-                    .ToList()
+                    .ToList(),
+                BottomNoticeMarkdowns = chrome.BottomNoticeMarkdowns.ToList()
             };
         }
     }

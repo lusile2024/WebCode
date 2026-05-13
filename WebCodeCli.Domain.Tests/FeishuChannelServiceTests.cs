@@ -2487,6 +2487,7 @@ public class FeishuChannelServiceTests
                     Name = "Codex",
                     Description = "Codex",
                     Command = "codex",
+                    UsePersistentProcess = true,
                     Enabled = true
                 }
                 : null;
@@ -2564,6 +2565,8 @@ public class FeishuChannelServiceTests
         public ICliToolAdapter? Adapter { get; set; }
 
         public bool EnableStreamParsing { get; set; }
+
+        public bool UsePersistentProcess { get; set; } = true;
 
         public List<StreamOutputChunk>? StreamChunks { get; set; }
 
@@ -2659,6 +2662,7 @@ public class FeishuChannelServiceTests
                     Name = "Codex",
                     Description = "Codex",
                     Command = "codex",
+                    UsePersistentProcess = UsePersistentProcess,
                     Enabled = true
                 }
                 : null;
@@ -2720,6 +2724,83 @@ public class FeishuChannelServiceTests
 
         public void RefreshWorkspaceRootCache()
         {
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_HidesGoalButtons_WhenUsingOneShotProcess()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-superpowers-one-shot-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+
+        const string sessionId = "33333333-one-shot";
+        repositoryProxy.Store(new ChatSessionEntity
+        {
+            SessionId = sessionId,
+            Username = "luhaiyan",
+            WorkspacePath = workspacePath,
+            ToolId = "codex",
+            ToolLaunchOverridesJson = "{\"codex\":{\"usePersistentProcess\":false}}",
+            FeishuChatKey = "oc_low_interrupt_chat",
+            IsFeishuActive = true,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath)
+        {
+            FinalContent = "计划已完成\n"
+        };
+        cliExecutor.UsePersistentProcess = false;
+
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                MessageId = "msg-one-shot",
+                ChatId = "oc_low_interrupt_chat",
+                Content = "继续",
+                SenderName = "luhaiyan"
+            });
+
+            var handle = Assert.Single(cardKit.Handles);
+            var chrome = Assert.IsType<FeishuStreamingCardChrome>(handle.Chrome);
+            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.StatusButtonText);
+            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.PauseButtonText);
+            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ClearButtonText);
+            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
+            Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            Directory.Delete(workspaceRoot, recursive: true);
         }
     }
 
@@ -2828,6 +2909,7 @@ public class FeishuChannelServiceTests
                     Name = "Codex",
                     Description = "Codex",
                     Command = "codex",
+                    UsePersistentProcess = true,
                     Enabled = true
                 }
                 : null;

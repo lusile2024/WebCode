@@ -480,15 +480,18 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             {
                 categories = await _commandService.GetCategorizedCommandsAsync(toolId);
                 _logger.LogInformation("🔥 [FeishuHelp] 获取到 {Count} 个分组", categories.Count);
+                var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(chatId, webUsername, toolId);
                 card = _cardBuilder.BuildCommandListCardV2(
                     categories,
-                    replyTtsEnabled: await GetReplyTtsEnabledAsync(chatId, webUsername));
+                    replyTtsEnabled: await GetReplyTtsEnabledAsync(chatId, webUsername),
+                    showGoalQuickActionButtons: showGoalQuickActionButtons);
             }
             else
             {
                 categories = await _commandService.FilterCommandsAsync(keyword, toolId);
                 _logger.LogInformation("🔥 [FeishuHelp] 过滤后获取到 {Count} 个分组", categories.Count);
-                card = _cardBuilder.BuildFilteredCardV2(categories, keyword);
+                var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(chatId, webUsername, toolId);
+                card = _cardBuilder.BuildFilteredCardV2(categories, keyword, showGoalQuickActionButtons);
             }
 
             _logger.LogDebug("🔥 [FeishuHelp] 帮助卡片DTO内容: {Card}", JsonSerializer.Serialize(card));
@@ -582,6 +585,24 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
         var config = await userFeishuBotConfigService.GetByUsernameAsync(resolvedUsername);
         return config?.ReplyTtsEnabled == true;
+    }
+
+    private bool ResolveShowGoalQuickActionButtons(string chatId, string? username, string? toolId)
+    {
+        var chatKey = chatId.ToLowerInvariant();
+        var resolvedUsername = string.IsNullOrWhiteSpace(username)
+            ? _feishuChannel.GetSessionUsername(chatKey)
+            : username;
+        var sessionId = _feishuChannel.GetCurrentSession(chatKey, resolvedUsername);
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return false;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        var session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        return GoalQuickActionVisibilityHelper.ShouldShowButtons(session, _cliExecutor, toolId);
     }
 
     private async Task<List<ChatSessionEntity>> GetChatSessionEntitiesAsync(string chatKey, string username)

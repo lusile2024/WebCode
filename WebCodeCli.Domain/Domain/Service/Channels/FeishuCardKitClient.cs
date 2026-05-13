@@ -494,10 +494,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             || group.OverflowOptions.Count > 0
             || group.Items.Any(item => !string.IsNullOrWhiteSpace(item.Text)));
         var hasToolSummary = !string.IsNullOrWhiteSpace(chrome.LatestToolCallMarkdown);
+        var hasBottomNotice = chrome.BottomNoticeMarkdowns.Any(markdown => !string.IsNullOrWhiteSpace(markdown));
         var allBottomPrompts = EnumerateBottomPrompts(chrome).ToArray();
         var hasBottomActions = chrome.BottomActions.Count > 0;
         var hasBottomPrompt = allBottomPrompts.Length > 0;
-        if (!hasStatusSection && !hasTopChipGroups && !hasToolSummary && !hasBottomActions && !hasBottomPrompt)
+        if (!hasStatusSection && !hasTopChipGroups && !hasToolSummary && !hasBottomNotice && !hasBottomActions && !hasBottomPrompt)
         {
             return
             [
@@ -537,9 +538,14 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             elements.Add(BuildToolSummaryLine(chrome.LatestToolCallMarkdown!));
         }
 
-        if (hasBottomPrompt || hasBottomActions)
+        if (hasBottomNotice || hasBottomPrompt || hasBottomActions)
         {
             elements.Add(BuildSectionMarker("Superpowers 工作流"));
+
+            foreach (var markdown in chrome.BottomNoticeMarkdowns.Where(markdown => !string.IsNullOrWhiteSpace(markdown)))
+            {
+                elements.Add(BuildToolSummaryLine(markdown));
+            }
 
             foreach (var prompt in allBottomPrompts)
             {

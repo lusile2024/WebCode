@@ -41,9 +41,10 @@ internal static class GoalQuickActionCardHelper
         string sessionId,
         string chatKey,
         string? toolId,
-        GoalCapabilitySnapshot? capabilityState = null)
+        GoalCapabilitySnapshot? capabilityState = null,
+        bool showButtons = true)
     {
-        if (capabilityState?.State == GoalCapabilityState.Unavailable)
+        if (!showButtons || capabilityState?.State == GoalCapabilityState.Unavailable)
         {
             return [];
         }

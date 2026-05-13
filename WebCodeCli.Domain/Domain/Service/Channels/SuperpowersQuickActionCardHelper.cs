@@ -9,6 +9,7 @@ internal static class SuperpowersQuickActionCardHelper
     private const string ExecutionControlRow = "execution_control_row";
     private const string PlanActionRow = "plan_action_row";
     private const string CapabilityActionRow = "capability_action_row";
+    private const string SessionConfirmActionRow = "session_confirm_action_row";
 
     public static bool ShouldShowPlanActions(
         IEnumerable<string?>? sessionContents,
@@ -140,6 +141,57 @@ internal static class SuperpowersQuickActionCardHelper
         return string.IsNullOrWhiteSpace(statusMarkdown)
             ? capabilityMessage
             : $"{statusMarkdown}\n{capabilityMessage}";
+    }
+
+    public static string BuildSessionMismatchConfirmationMarkdown(
+        string boundSessionId,
+        string currentSessionId)
+    {
+        return
+            "⚠️ 当前激活会话已经变化，已暂停直接执行。\n\n" +
+            $"卡片绑定会话：`{boundSessionId}`\n" +
+            $"当前激活会话：`{currentSessionId}`\n\n" +
+            "请选择接下来要对哪个会话执行这次 Superpowers 操作。";
+    }
+
+    public static IReadOnlyList<FeishuStreamingCardBottomAction> CreateSessionMismatchConfirmActions(
+        string boundSessionId,
+        string currentSessionId,
+        string chatKey,
+        string? toolId,
+        string command)
+    {
+        return
+        [
+            new FeishuStreamingCardBottomAction
+            {
+                Text = "继续原会话",
+                Type = "default",
+                RowKey = SessionConfirmActionRow,
+                Value = new
+                {
+                    action = FeishuHelpCardAction.ConfirmBoundSuperpowersAction,
+                    session_id = boundSessionId,
+                    chat_key = chatKey,
+                    tool_id = toolId,
+                    command
+                }
+            },
+            new FeishuStreamingCardBottomAction
+            {
+                Text = "改为当前会话",
+                Type = "primary",
+                RowKey = SessionConfirmActionRow,
+                Value = new
+                {
+                    action = FeishuHelpCardAction.ConfirmCurrentSuperpowersAction,
+                    session_id = currentSessionId,
+                    chat_key = chatKey,
+                    tool_id = toolId,
+                    command
+                }
+            }
+        ];
     }
 
     private static object BuildActionValue(

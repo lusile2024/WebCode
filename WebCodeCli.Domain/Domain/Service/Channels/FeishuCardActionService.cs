@@ -246,6 +246,8 @@ public class FeishuCardActionService
                 case FeishuHelpCardAction.StopStreamingExecutionAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersPlanAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction:
+                case FeishuHelpCardAction.ConfirmBoundSuperpowersAction:
+                case FeishuHelpCardAction.ConfirmCurrentSuperpowersAction:
                     return action.Action == FeishuHelpCardAction.StopStreamingExecutionAction
                         ? await HandleStopStreamingExecutionAsync(action, chatId)
                         : await HandleSuperpowersQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
@@ -625,7 +627,12 @@ public class FeishuCardActionService
         string? appId,
         string? inputValues)
     {
-        var prompt = action.Action switch
+        var effectiveAction = string.Equals(action.Action, FeishuHelpCardAction.ConfirmBoundSuperpowersAction, StringComparison.Ordinal)
+                              || string.Equals(action.Action, FeishuHelpCardAction.ConfirmCurrentSuperpowersAction, StringComparison.Ordinal)
+            ? action.Command
+            : action.Action;
+
+        var prompt = effectiveAction switch
         {
             FeishuHelpCardAction.SubmitSuperpowersQuickInputAction => SuperpowersPromptBuilder.BuildQuickSkillPrompt(
                 ResolveQuickInputValue(formValue, SuperpowersQuickActionDefaults.QuickInputFieldName, inputValues)),
@@ -646,7 +653,32 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少必要参数", "error");
         }
 
-        var activeSessionId = action.SessionId ?? _feishuChannel.GetCurrentSession(NormalizeChatKey(targetChatKey));
+        var normalizedChatKey = NormalizeChatKey(targetChatKey);
+        var boundSessionId = action.SessionId;
+        var currentSessionId = _feishuChannel.GetCurrentSession(normalizedChatKey);
+        var activeSessionId = string.Equals(action.Action, FeishuHelpCardAction.ConfirmCurrentSuperpowersAction, StringComparison.Ordinal)
+            ? currentSessionId
+            : string.Equals(action.Action, FeishuHelpCardAction.ConfirmBoundSuperpowersAction, StringComparison.Ordinal)
+                ? boundSessionId
+                : boundSessionId ?? currentSessionId;
+
+        if (!string.IsNullOrWhiteSpace(boundSessionId)
+            && !string.IsNullOrWhiteSpace(currentSessionId)
+            && !string.Equals(boundSessionId, currentSessionId, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(action.Action, FeishuHelpCardAction.ConfirmBoundSuperpowersAction, StringComparison.Ordinal)
+            && !string.Equals(action.Action, FeishuHelpCardAction.ConfirmCurrentSuperpowersAction, StringComparison.Ordinal))
+        {
+            var confirmToolId = await ResolveSessionToolIdAsync(boundSessionId, action.ToolId, targetChatKey, null);
+            return await BuildSuperpowersSessionMismatchRefreshResponseAsync(
+                normalizedChatKey,
+                boundSessionId,
+                currentSessionId,
+                confirmToolId,
+                effectiveAction ?? action.Action,
+                "⚠️ 当前激活会话已变化，请先确认要执行的会话",
+                "warning");
+        }
+
         if (!string.IsNullOrWhiteSpace(activeSessionId) && _feishuChannel.IsSessionExecutionActive(activeSessionId))
         {
             return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已有任务在执行，请等待完成后再试", "warning");
@@ -658,7 +690,7 @@ public class FeishuCardActionService
         }
 
         var effectiveToolId = await ResolveSessionToolIdAsync(activeSessionId, action.ToolId, targetChatKey, null);
-        if (!string.Equals(action.Action, FeishuHelpCardAction.ContinueSuperpowersAction, StringComparison.Ordinal))
+        if (!string.Equals(effectiveAction, FeishuHelpCardAction.ContinueSuperpowersAction, StringComparison.Ordinal))
         {
             var capabilityResult = await ProbeSuperpowersCapabilityAsync(activeSessionId, effectiveToolId, forceRefresh: false);
             if (capabilityResult.State != SuperpowersCapabilityState.Available)
@@ -995,7 +1027,8 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionResponseV2(card, "❌ 分类不存在", "warning");
         }
 
-        var categoryCard = _cardBuilder.BuildCategoryCommandsCardV2(category);
+        var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(chatId, null, toolId);
+        var categoryCard = _cardBuilder.BuildCategoryCommandsCardV2(category, showGoalQuickActionButtons);
         _logger.LogInformation("📋 [FeishuHelp] 返回分类命令卡片: {Category}", category.Name);
         return _cardBuilder.BuildCardActionResponseV2(categoryCard, "", "info");
     }
@@ -1542,6 +1575,7 @@ public class FeishuCardActionService
 
         var normalizedToolId = NormalizeToolId(toolId) ?? toolId;
         var capabilityState = ResolveSuperpowersCapabilityState(sessionId, normalizedToolId);
+        var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(sessionId, normalizedToolId);
         streamingChrome.BottomPrompt = SuperpowersQuickActionCardHelper.CreateBottomPrompt(
             sessionId,
             normalizedChatKey,
@@ -1563,7 +1597,8 @@ public class FeishuCardActionService
             sessionId,
             normalizedChatKey,
             normalizedToolId,
-            goalCapabilityState));
+            goalCapabilityState,
+            showGoalQuickActionButtons));
         streamingChrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
             sessionId,
             normalizedChatKey,
@@ -2999,7 +3034,39 @@ public class FeishuCardActionService
         var toolId = ResolveToolIdForChat(actualChatKey, username);
         var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
         var replyTtsEnabled = await GetReplyTtsEnabledAsync(username);
-        return _cardBuilder.BuildCommandListCardV2(categories, showRefreshButton, replyTtsEnabled);
+        var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(actualChatKey, username, toolId);
+        return _cardBuilder.BuildCommandListCardV2(
+            categories,
+            showRefreshButton,
+            replyTtsEnabled,
+            showGoalQuickActionButtons);
+    }
+
+    private bool ResolveShowGoalQuickActionButtons(string? chatKey, string? username, string? toolId)
+    {
+        if (string.IsNullOrWhiteSpace(chatKey))
+        {
+            return false;
+        }
+
+        var sessionId = _feishuChannel.GetCurrentSession(chatKey, username);
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return false;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        return GoalQuickActionVisibilityHelper.ShouldShowButtons(session, _cliExecutor, toolId);
+    }
+
+    private bool ResolveShowGoalQuickActionButtons(string sessionId, string? toolId)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        var session = repo?.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+        return GoalQuickActionVisibilityHelper.ShouldShowButtons(session, _cliExecutor, toolId);
     }
 
     private async Task<bool> GetReplyTtsEnabledAsync(string? username)
@@ -3760,6 +3827,78 @@ public class FeishuCardActionService
                 Elements = FeishuCardKitClient.BuildStreamingCardElements(content, chrome)
             }
         };
+    }
+
+    private async Task<CardActionTriggerResponseDto> BuildSuperpowersSessionMismatchRefreshResponseAsync(
+        string chatKey,
+        string boundSessionId,
+        string currentSessionId,
+        string? toolId,
+        string command,
+        string toastMessage,
+        string toastType)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        var boundSession = repo == null ? null : await repo.GetByIdAsync(boundSessionId);
+        var effectiveToolId = NormalizeToolId(toolId) ?? boundSession?.ToolId ?? ResolveDefaultToolId();
+
+        var (chrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(
+            chatKey,
+            boundSessionId,
+            boundSession?.Username,
+            effectiveToolId);
+        chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+        SetTopChipGroupsEnabled(chrome, true);
+        chrome.BottomPrompt = null;
+        chrome.AdditionalBottomPrompts.Clear();
+        chrome.BottomNoticeMarkdowns.Clear();
+        chrome.BottomNoticeMarkdowns.Add(
+            SuperpowersQuickActionCardHelper.BuildSessionMismatchConfirmationMarkdown(
+                boundSessionId,
+                currentSessionId));
+        chrome.BottomActions.Clear();
+        chrome.BottomActions.AddRange(
+            SuperpowersQuickActionCardHelper.CreateSessionMismatchConfirmActions(
+                boundSessionId,
+                currentSessionId,
+                chatKey,
+                effectiveToolId,
+                command));
+
+        var latestAssistantContent = await ResolveLatestAssistantContentForCardRefreshAsync(
+            boundSessionId,
+            effectiveToolId,
+            boundSession?.WorkspacePath);
+        var card = BuildStreamingCardRefreshCard(latestAssistantContent, chrome);
+        return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, toastType);
+    }
+
+    private async Task<string> ResolveLatestAssistantContentForCardRefreshAsync(
+        string sessionId,
+        string toolId,
+        string? fallbackWorkspacePath = null)
+    {
+        var latestAssistantContent = _chatSessionService.GetMessages(sessionId)
+            .Where(message => string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase))
+            .Select(message => message.Content)
+            .LastOrDefault();
+        if (!string.IsNullOrWhiteSpace(latestAssistantContent))
+        {
+            return latestAssistantContent;
+        }
+
+        var historyContent = await TryGetLatestAssistantMessageFromExternalHistoryAsync(
+            sessionId,
+            toolId,
+            expectedUserPrompt: null,
+            CancellationToken.None);
+        if (!string.IsNullOrWhiteSpace(historyContent))
+        {
+            return historyContent.Trim();
+        }
+
+        return BuildCompletionNotificationText(sessionId, fallbackWorkspacePath);
     }
 
     private static string BuildSessionOptionText(ChatSessionEntity session)

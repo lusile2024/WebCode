@@ -1579,10 +1579,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         bool showStopAction = false)
     {
         string? chatKey = null;
+        ChatSessionEntity? session = null;
         using (var scope = _serviceProvider.CreateScope())
         {
             var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-            var session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+            session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
             chatKey = session?.FeishuChatKey;
         }
 
@@ -1593,6 +1594,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         var normalizedToolId = NormalizeToolId(toolId) ?? toolId;
         var capabilityState = ResolveSuperpowersCapabilityState(sessionId, normalizedToolId);
+        var showGoalQuickActionButtons = GoalQuickActionVisibilityHelper.ShouldShowButtons(
+            session,
+            _cliExecutor,
+            normalizedToolId);
         chrome.BottomPrompt = SuperpowersQuickActionCardHelper.CreateBottomPrompt(
             sessionId,
             chatKey,
@@ -1614,7 +1619,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             sessionId,
             chatKey,
             normalizedToolId,
-            goalCapabilityState));
+            goalCapabilityState,
+            showGoalQuickActionButtons));
         chrome.BottomActions.AddRange(SuperpowersQuickActionCardHelper.CreateBottomActions(
             sessionId,
             chatKey,

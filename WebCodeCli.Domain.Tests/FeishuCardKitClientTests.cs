@@ -652,6 +652,47 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateStreamingHandleAsync_RendersBottomNoticeAboveActions()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+        chrome.BottomNoticeMarkdowns.Add("⚠️ 当前激活会话已经变化");
+        chrome.BottomActions.Add(new FeishuStreamingCardBottomAction
+        {
+            Text = "继续原会话",
+            Type = "default",
+            Value = new { action = "confirm_bound_superpowers_action", session_id = "session-1" }
+        });
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("div", elements[4].GetProperty("tag").GetString());
+        Assert.Equal("⚠️ 当前激活会话已经变化", elements[4].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
+    }
+
+    [Fact]
     public async Task CreateStreamingHandleAsync_KeepsClientStreamingMode_WhenNoOverflowActionsExist()
     {
         var handler = new StubHttpMessageHandler(

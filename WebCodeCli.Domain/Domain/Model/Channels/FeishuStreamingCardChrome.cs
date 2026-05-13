@@ -40,6 +40,11 @@ public sealed class FeishuStreamingCardChrome
     /// 卡片底部附加提示词表单，按顺序显示在主表单之后
     /// </summary>
     public List<FeishuStreamingCardBottomPrompt> AdditionalBottomPrompts { get; set; } = [];
+
+    /// <summary>
+    /// 卡片底部工作流区域的附加说明文案
+    /// </summary>
+    public List<string> BottomNoticeMarkdowns { get; set; } = [];
 }
 
 public sealed class FeishuStreamingCardTopChipGroup
