@@ -508,7 +508,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         try
         {
-            await execution.Handle.FinishAsync(SupersededExecutionMessage);
+            await execution.Handle.FinishAsync(BuildSupersededCardContent(execution));
         }
         catch (Exception ex)
         {
@@ -962,6 +962,23 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 latestRenderedContent,
                 ex.Message));
         }
+    }
+
+    private static string BuildSupersededCardContent(ActiveSessionExecution execution)
+    {
+        var latestContent = execution.GetLatestRenderedContent()?.Trim();
+        if (string.IsNullOrWhiteSpace(latestContent) ||
+            string.Equals(latestContent, execution.InitialContent.Trim(), StringComparison.Ordinal))
+        {
+            return SupersededExecutionMessage;
+        }
+
+        if (latestContent.Contains(SupersededExecutionMessage, StringComparison.Ordinal))
+        {
+            return latestContent;
+        }
+
+        return $"{latestContent}\n\n{SupersededExecutionMessage}";
     }
 
     /// <summary>
@@ -2212,6 +2229,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             Handle = handle;
             Chrome = chrome;
             BaseStatusMarkdown = baseStatusMarkdown;
+            InitialContent = initialContent;
             _latestRenderedContent = initialContent;
             ExecutionCancellationTokenSource = new CancellationTokenSource();
             UpdateCancellationTokenSource = new CancellationTokenSource();
@@ -2230,6 +2248,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         public FeishuStreamingCardChrome Chrome { get; }
 
         public string BaseStatusMarkdown { get; }
+
+        public string InitialContent { get; }
 
         public CancellationTokenSource ExecutionCancellationTokenSource { get; }
 

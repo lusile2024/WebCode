@@ -248,6 +248,84 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
+    public async Task HandleIncomingMessageAsync_WhenSupersededAfterStreamingOutput_KeepsExistingCardContent()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspacePath = Path.Combine(Path.GetTempPath(), $"feishu-takeover-content-{Guid.NewGuid():N}", "superpowers");
+        var cliExecutor = new TakeoverCliExecutor(workspacePath)
+        {
+            FirstCallPartialContent = "第一段输出\n"
+        };
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        Directory.CreateDirectory(workspacePath);
+
+        try
+        {
+            service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_takeover_content_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            var firstTask = service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_takeover_content_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-content-1",
+                Content = "先输出一段"
+            });
+
+            await cliExecutor.ThreadIdPersisted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await cliExecutor.FirstPartialContentEmitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var secondTask = service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_takeover_content_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-content-2",
+                Content = "继续补充"
+            });
+
+            await Task.WhenAll(firstTask, secondTask);
+
+            Assert.StartsWith("第一段输出", cardKit.Handles[0].FinalContent, StringComparison.Ordinal);
+            Assert.NotEqual(
+                "当前回复已停止：同一会话收到了新的补充消息，请查看新卡片继续结果。",
+                cardKit.Handles[0].FinalContent);
+            Assert.Contains("已停止", cardKit.Handles[0].FinalStatusMarkdown);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(workspacePath)!, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HandleIncomingMessageAsync_WhenCodexStdoutOnlyReportsThreadStarted_UsesExternalHistoryAssistantMessage()
     {
         var repository = CreateRepository(out var repositoryProxy);
@@ -2267,9 +2345,13 @@ public class FeishuChannelServiceTests
 
         public TaskCompletionSource<bool> ThreadIdPersisted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource<bool> FirstPartialContentEmitted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public List<ExecutionCall> ExecuteCalls { get; } = new();
 
         public bool BlockFirstCall { get; set; } = true;
+
+        public string? FirstCallPartialContent { get; set; }
 
         public ICliToolAdapter? GetAdapter(CliToolConfig tool) => new CodexAdapter();
 
@@ -2328,6 +2410,16 @@ public class FeishuChannelServiceTests
                     Content = "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n",
                     IsCompleted = false
                 };
+
+                if (!string.IsNullOrWhiteSpace(FirstCallPartialContent))
+                {
+                    yield return new StreamOutputChunk
+                    {
+                        Content = FirstCallPartialContent,
+                        IsCompleted = false
+                    };
+                    FirstPartialContentEmitted.TrySetResult(true);
+                }
 
                 var wasCancelled = false;
                 try
