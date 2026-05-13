@@ -550,6 +550,108 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateStreamingHandleAsync_RendersBottomActionsAcrossMultipleRows_WhenRowKeysDiffer()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话"
+        };
+        chrome.BottomActions.AddRange(
+        [
+            new FeishuStreamingCardBottomAction
+            {
+                Text = "/goal",
+                RowKey = "goal_row_1",
+                Value = new { action = "status_goal", session_id = "session-1" }
+            },
+            new FeishuStreamingCardBottomAction
+            {
+                Text = "/goal pause",
+                RowKey = "goal_row_1",
+                Value = new { action = "pause_goal", session_id = "session-1" }
+            },
+            new FeishuStreamingCardBottomAction
+            {
+                Text = "继续",
+                RowKey = "execution_control_row",
+                Value = new { action = "continue_superpowers", session_id = "session-1" }
+            },
+            new FeishuStreamingCardBottomAction
+            {
+                Text = "停止",
+                RowKey = "execution_control_row",
+                Value = new { action = "stop_streaming_execution", session_id = "session-1" }
+            }
+        ]);
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "still have backlog",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
+        Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
+        Assert.Equal(2, elements[4].GetProperty("columns").GetArrayLength());
+        Assert.Equal(2, elements[5].GetProperty("columns").GetArrayLength());
+        Assert.Equal("/goal", elements[4].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("/goal pause", elements[4].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("继续", elements[5].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("停止", elements[5].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_RendersLatestToolCallLineBelowReplyContent()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话",
+            LatestToolCallMarkdown = "**调用工具：** `Bash · git status --short`"
+        };
+
+        await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "assistant output",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: chrome);
+
+        using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
+        var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("markdown", elements[2].GetProperty("tag").GetString());
+        Assert.Equal("assistant output", elements[2].GetProperty("content").GetString());
+        Assert.Equal("div", elements[3].GetProperty("tag").GetString());
+        Assert.Equal("**调用工具：** `Bash · git status --short`", elements[3].GetProperty("text").GetProperty("content").GetString());
+    }
+
+    [Fact]
     public async Task CreateStreamingHandleAsync_KeepsClientStreamingMode_WhenNoOverflowActionsExist()
     {
         var handler = new StubHttpMessageHandler(

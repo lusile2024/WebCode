@@ -14,9 +14,11 @@ public class CodexAdapter : ICliToolAdapter
     /// 默认参数模板
     /// 支持的占位符:
     /// - {prompt}: 用户提示词
-    /// - {session}: 会话恢复参数（如果有，格式为 "resume session_id"）
+    /// - {session}: 会话恢复参数（兼容自定义模板，格式为 "resume session_id"）
+    /// - {cliThreadId}: 仅线程 ID，默认 resume 模板使用
     /// </summary>
     public const string DefaultArgumentTemplate = "exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json {session} \"{prompt}\"";
+    public const string DefaultResumeArgumentTemplate = "exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json {cliThreadId} \"{prompt}\"";
     public const string DefaultLowInterruptionArgumentTemplate = "exec resume --skip-git-repo-check --json --full-auto {cliThreadId}";
 
     public string[] SupportedToolIds => new[] { "codex" };
@@ -36,9 +38,12 @@ public class CodexAdapter : ICliToolAdapter
         var escapedPrompt = EscapeJsonString(prompt);
 
         // 获取参数模板：优先使用配置的 ArgumentTemplate，为空则使用默认值
-        var template = !string.IsNullOrWhiteSpace(tool.ArgumentTemplate) 
-            ? tool.ArgumentTemplate 
-            : DefaultArgumentTemplate;
+        var useConfiguredTemplate = !string.IsNullOrWhiteSpace(tool.ArgumentTemplate);
+        var template = useConfiguredTemplate
+            ? tool.ArgumentTemplate
+            : context.IsResume && !string.IsNullOrEmpty(context.CliThreadId)
+                ? DefaultResumeArgumentTemplate
+                : DefaultArgumentTemplate;
 
         // 构建会话恢复参数
         var sessionArg = string.Empty;
@@ -48,18 +53,10 @@ public class CodexAdapter : ICliToolAdapter
         }
 
         // 替换模板占位符
-        var result = template
+        return NormalizeArguments(template
             .Replace("{prompt}", escapedPrompt)
-            .Replace("{session}", sessionArg)
-            .Trim();
-
-        // 清理多余空格
-        while (result.Contains("  "))
-        {
-            result = result.Replace("  ", " ");
-        }
-
-        return result;
+            .Replace("{cliThreadId}", context.CliThreadId ?? string.Empty)
+            .Replace("{session}", sessionArg));
     }
 
     public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)

@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Net.Http.Json;
 using WebCodeCli.Domain.Domain.Model;
+using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
@@ -2342,6 +2343,17 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         await SubmitSuperpowersQuickActionAsync(sourceMessage, SuperpowersQuickActionRequestType.ExecuteSubagentPlan);
     }
 
+    private async Task OnStopSuperpowersActionAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentSuperpowersQuickActionEligibility;
+        if (!_isLoading || !SuperpowersQuickActionHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        await CancelExecution();
+    }
+
     private async Task SubmitSuperpowersQuickActionAsync(
         ChatMessage sourceMessage,
         SuperpowersQuickActionRequestType requestType)
@@ -2416,6 +2428,52 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         await SendMessageCoreAsync(message, clearComposerInput: false);
     }
 
+    private Task OnGoalStatusActionAsync(ChatMessage sourceMessage)
+        => SendGoalActionAsync(sourceMessage, FeishuHelpCardAction.StatusGoalAction);
+
+    private async Task OnGoalPauseActionAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentGoalQuickActionEligibility;
+        if (!_isLoading || !SuperpowersQuickActionHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        await CancelExecution();
+    }
+
+    private Task OnGoalClearActionAsync(ChatMessage sourceMessage)
+        => SendGoalActionAsync(sourceMessage, FeishuHelpCardAction.ClearGoalAction);
+
+    private Task OnGoalResumeActionAsync(ChatMessage sourceMessage)
+        => SendGoalActionAsync(sourceMessage, FeishuHelpCardAction.ResumeGoalAction);
+
+    private async Task SendGoalActionAsync(ChatMessage sourceMessage, string action)
+    {
+        var eligibility = CurrentGoalQuickActionEligibility;
+        var viewState = CurrentGoalQuickActionViewState;
+        if (_isLoading
+            || viewState.IsDisabled
+            || !SuperpowersQuickActionHelper.IsMessageEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        var message = GoalPromptBuilder.BuildPromptForAction(action, input: null);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var capabilityAvailable = await EnsureGoalCapabilityAvailableAsync(forceRefresh: false);
+        if (!capabilityAvailable)
+        {
+            return;
+        }
+
+        await SendMessageCoreAsync(message, clearComposerInput: false);
+    }
+
     private async Task RetryGoalCapabilityAsync(ChatMessage sourceMessage)
     {
         var eligibility = CurrentGoalQuickActionEligibility;
@@ -2446,7 +2504,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
         var probeResult = await SuperpowersCapabilityService.ProbeAsync(
             BuildSuperpowersCapabilityContext(),
-            forceRefresh: forceRefresh);
+            forceRefresh: forceRefresh || _superpowersCapabilityPresentation.State != SuperpowersCapabilityState.Available);
 
         _superpowersCapabilityPresentation = probeResult.Outcome switch
         {
@@ -4871,11 +4929,13 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             StateHasChanged();
 
             var session = await SessionHistoryManager.GetSessionAsync(_sessionToConfigureLaunch.SessionId) ?? _sessionToConfigureLaunch;
-            session.ToolLaunchOverrides = SessionLaunchOverrideHelper.ApplyOverride(
-                session.ToolLaunchOverrides,
-                toolId,
-                clearOverride ? null : _sessionLaunchOverrideModel,
-                clearOverride ? null : _sessionLaunchReasoningEffort);
+            session.ToolLaunchOverrides = clearOverride
+                ? SessionLaunchOverrideHelper.RemoveOverride(session.ToolLaunchOverrides, toolId)
+                : SessionLaunchOverrideHelper.ApplyOverride(
+                    session.ToolLaunchOverrides,
+                    toolId,
+                    _sessionLaunchOverrideModel,
+                    _sessionLaunchReasoningEffort);
 
             await SessionHistoryManager.SaveSessionImmediateAsync(session);
             await CliExecutorService.ResetSessionRuntimeAsync(session.SessionId, clearCliThreadId: false);
@@ -6943,8 +7003,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     /// </summary>
     private Task CancelExecution()
     {
-        // 这里可以添加取消执行的逻辑
-        // 目前只是隐藏进度追踪器
+        _ = CliExecutorService.StopSessionExecutionAsync(_sessionId, _selectedToolId);
         _progressTracker?.Hide();
         _isLoading = false;
         StateHasChanged();

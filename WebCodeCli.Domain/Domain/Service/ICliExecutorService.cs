@@ -52,6 +52,14 @@ public interface ICliExecutorService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// 停止指定会话当前正在运行的 CLI 执行
+    /// </summary>
+    Task StopSessionExecutionAsync(
+        string sessionId,
+        string? toolId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 执行 CLI 命令并返回流式输出
     /// </summary>
     /// <param name="sessionId">会话ID,用于创建独立工作区</param>

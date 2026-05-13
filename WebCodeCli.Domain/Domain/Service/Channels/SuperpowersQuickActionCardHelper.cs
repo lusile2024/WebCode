@@ -6,6 +6,10 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 
 internal static class SuperpowersQuickActionCardHelper
 {
+    private const string ExecutionControlRow = "execution_control_row";
+    private const string PlanActionRow = "plan_action_row";
+    private const string CapabilityActionRow = "capability_action_row";
+
     public static bool ShouldShowPlanActions(
         IEnumerable<string?>? sessionContents,
         bool hasPlanFiles)
@@ -46,67 +50,78 @@ internal static class SuperpowersQuickActionCardHelper
         string chatKey,
         string? toolId,
         bool showPlanActions,
-        SuperpowersCapabilitySnapshot? capabilityState = null)
+        SuperpowersCapabilitySnapshot? capabilityState = null,
+        bool showStopAction = false)
     {
+        var actions = new List<FeishuStreamingCardBottomAction>();
+
         if (capabilityState?.State == SuperpowersCapabilityState.Unavailable)
         {
-            return
+            actions.Add(new FeishuStreamingCardBottomAction
+            {
+                Text = SuperpowersQuickActionDefaults.CapabilityRetryButtonText,
+                Type = "default",
+                RowKey = CapabilityActionRow,
+                Value = BuildActionValue(
+                    FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction,
+                    sessionId,
+                    chatKey,
+                    toolId)
+            });
+
+            if (showStopAction)
+            {
+                actions.Add(CreateStopAction(sessionId, chatKey, toolId));
+            }
+
+            return actions;
+        }
+
+        actions.Add(new FeishuStreamingCardBottomAction
+        {
+            Text = SuperpowersQuickActionDefaults.ContinueButtonText,
+            Type = "default",
+            RowKey = ExecutionControlRow,
+            Value = BuildActionValue(
+                FeishuHelpCardAction.ContinueSuperpowersAction,
+                sessionId,
+                chatKey,
+                toolId)
+        });
+
+        if (showStopAction)
+        {
+            actions.Add(CreateStopAction(sessionId, chatKey, toolId));
+        }
+
+        if (showPlanActions)
+        {
+            actions.AddRange(
             [
                 new FeishuStreamingCardBottomAction
                 {
-                    Text = SuperpowersQuickActionDefaults.CapabilityRetryButtonText,
+                    Text = SuperpowersQuickActionDefaults.ExecutePlanButtonText,
                     Type = "default",
+                    RowKey = PlanActionRow,
                     Value = BuildActionValue(
-                        FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction,
+                        FeishuHelpCardAction.ExecuteSuperpowersPlanAction,
+                        sessionId,
+                        chatKey,
+                        toolId)
+                },
+                new FeishuStreamingCardBottomAction
+                {
+                    Text = SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText,
+                    Type = "primary",
+                    RowKey = PlanActionRow,
+                    Value = BuildActionValue(
+                        FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction,
                         sessionId,
                         chatKey,
                         toolId)
                 }
-            ];
+            ]);
         }
-
-        var actions = new List<FeishuStreamingCardBottomAction>
-        {
-            new()
-            {
-                Text = SuperpowersQuickActionDefaults.ContinueButtonText,
-                Type = "default",
-                Value = BuildActionValue(
-                    FeishuHelpCardAction.ContinueSuperpowersAction,
-                    sessionId,
-                    chatKey,
-                    toolId)
-            }
-        };
-
-        if (!showPlanActions)
-        {
-            return actions;
-        }
-
-        actions.AddRange(
-        [
-            new FeishuStreamingCardBottomAction
-            {
-                Text = SuperpowersQuickActionDefaults.ExecutePlanButtonText,
-                Type = "default",
-                Value = BuildActionValue(
-                    FeishuHelpCardAction.ExecuteSuperpowersPlanAction,
-                    sessionId,
-                    chatKey,
-                    toolId)
-            },
-            new FeishuStreamingCardBottomAction
-            {
-                Text = SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText,
-                Type = "primary",
-                Value = BuildActionValue(
-                    FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction,
-                    sessionId,
-                    chatKey,
-                    toolId)
-            }
-        ]);
 
         return actions;
     }
@@ -139,6 +154,24 @@ internal static class SuperpowersQuickActionCardHelper
             session_id = sessionId,
             chat_key = chatKey,
             tool_id = toolId
+        };
+    }
+
+    private static FeishuStreamingCardBottomAction CreateStopAction(
+        string sessionId,
+        string chatKey,
+        string? toolId)
+    {
+        return new FeishuStreamingCardBottomAction
+        {
+            Text = SuperpowersQuickActionDefaults.StopButtonText,
+            Type = "default",
+            RowKey = ExecutionControlRow,
+            Value = BuildActionValue(
+                FeishuHelpCardAction.StopStreamingExecutionAction,
+                sessionId,
+                chatKey,
+                toolId)
         };
     }
 

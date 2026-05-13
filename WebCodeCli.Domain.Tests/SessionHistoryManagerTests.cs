@@ -39,7 +39,7 @@ public class SessionHistoryManagerTests
             ],
             ToolLaunchOverrides = new Dictionary<string, SessionToolLaunchOverride>(StringComparer.OrdinalIgnoreCase)
             {
-                ["codex"] = new() { Model = "gpt-5.4", ReasoningEffort = "high" },
+                ["codex"] = new() { Model = "gpt-5.4", ReasoningEffort = "high", UsePersistentProcess = true },
                 ["claude-code"] = new() { Model = "sonnet" }
             }
         };
@@ -53,10 +53,12 @@ public class SessionHistoryManagerTests
         Assert.NotNull(storedEntity);
         Assert.Contains("\"codex\"", storedEntity!.ToolLaunchOverridesJson, StringComparison.Ordinal);
         Assert.Contains("\"reasoningEffort\":\"high\"", storedEntity.ToolLaunchOverridesJson, StringComparison.Ordinal);
+        Assert.Contains("\"usePersistentProcess\":true", storedEntity.ToolLaunchOverridesJson, StringComparison.Ordinal);
 
         Assert.NotNull(reloadedSession);
         Assert.Equal("gpt-5.4", reloadedSession!.ToolLaunchOverrides["codex"].Model);
         Assert.Equal("high", reloadedSession.ToolLaunchOverrides["codex"].ReasoningEffort);
+        Assert.True(reloadedSession.ToolLaunchOverrides["codex"].UsePersistentProcess);
         Assert.Equal("sonnet", reloadedSession.ToolLaunchOverrides["claude-code"].Model);
     }
 

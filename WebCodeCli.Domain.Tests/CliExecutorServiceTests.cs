@@ -109,8 +109,20 @@ public class CliExecutorServiceTests
         var workspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
         var workspacePath = Path.Combine(workspaceRoot, "workspace");
         var liveConfigPath = Path.Combine(workspaceRoot, "codex-live-config.toml");
+        var userProfileRoot = Path.Combine(workspaceRoot, "user-profile");
         Directory.CreateDirectory(workspacePath);
         await File.WriteAllTextAsync(liveConfigPath, "model_provider = \"provider-new\"\n");
+        Directory.CreateDirectory(Path.Combine(userProfileRoot, ".codex", "skills", "using-superpowers"));
+        await File.WriteAllTextAsync(
+            Path.Combine(userProfileRoot, ".codex", "skills", "using-superpowers", "SKILL.md"),
+            """
+            ---
+            name: using-superpowers
+            description: test skill
+            ---
+
+            # using-superpowers
+            """);
 
         try
         {
@@ -162,7 +174,8 @@ public class CliExecutorServiceTests
                 serviceProvider,
                 new StubChatSessionService(),
                 new StubCliAdapterFactory(),
-                ccSwitchService);
+                ccSwitchService,
+                userProfileResolver: () => userProfileRoot);
 
             var result = await service.SyncCodexThreadProviderAsync(sessionId);
 
@@ -172,6 +185,8 @@ public class CliExecutorServiceTests
             Assert.Equal("provider-new", request.TargetProviderId);
             Assert.False(result.HasWarnings);
             Assert.True(File.Exists(Path.Combine(workspacePath, ".codex", "config.toml")));
+            Assert.True(File.Exists(Path.Combine(workspacePath, ".codex", "skills", "using-superpowers", "SKILL.md")));
+            Assert.Contains("全局 Codex skills", result.Message ?? string.Empty, StringComparison.Ordinal);
             Assert.Equal(cliThreadId, repository.LastUpdatedCliThreadId);
         }
         finally
@@ -283,6 +298,375 @@ public class CliExecutorServiceTests
         Assert.Equal("exec resume --skip-git-repo-check --json --full-auto thread-123", arguments);
         Assert.DoesNotContain("{prompt}", arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("keep going", arguments, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenGoalUsesOneTimeProcess_ExecutesWithoutPersistentProcessGate()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "powershell.exe",
+            ArgumentTemplate = "-NoProfile -Command \"Write-Output 'unexpected'\"",
+            UsePersistentProcess = false,
+            Enabled = true
+        };
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(),
+            new StubCcSwitchService(includeBuiltInManagedTools: false),
+            codexAppServerSessionManager: new StubCodexAppServerSessionManager());
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteStreamAsync("session-goal-one-time", tool.Id, "/goal ship this task"))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.DoesNotContain(
+            chunks,
+            chunk => chunk.IsError
+                     && string.Equals(chunk.ErrorMessage, GoalQuickActionDefaults.PersistentProcessRequiredText, StringComparison.Ordinal));
+        Assert.Contains(chunks, chunk => chunk.IsCompleted && !chunk.IsError);
+    }
+
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenGoalUsesSessionOverride_PersistsGoalRuntimeForCurrentSessionOnly()
+    {
+        const string sessionId = "session-goal-session-override";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(tempRoot, "workspace");
+        var liveConfigDirectory = Path.Combine(tempRoot, "live");
+        var liveConfigPath = Path.Combine(liveConfigDirectory, "config.toml");
+        Directory.CreateDirectory(workspacePath);
+        Directory.CreateDirectory(liveConfigDirectory);
+        await File.WriteAllTextAsync(liveConfigPath, "model = \"gpt-5.4\"\nprovider = \"provider-a\"\n");
+
+        try
+        {
+            var repository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = sessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    WorkspacePath = workspacePath,
+                    CreatedAt = DateTime.Now,
+                    UpdatedAt = DateTime.Now
+                }
+            ]);
+
+            var tool = new CliToolConfig
+            {
+                Id = "codex",
+                Name = "Codex",
+                Command = "powershell.exe",
+                PersistentModeArguments = @"-NoProfile -Command ""$reader = [Console]::In; while (($line = $reader.ReadLine()) -ne $null) { Write-Output $line }""",
+                UsePersistentProcess = false,
+                Enabled = true,
+                TimeoutSeconds = 5
+            };
+
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                    Tools = [tool]
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(repository, new StubSessionOutputService()),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory(),
+                new StubCcSwitchService(new Dictionary<string, CcSwitchToolStatus>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["codex"] = new()
+                    {
+                        ToolId = "codex",
+                        ToolName = "Codex",
+                        IsManaged = true,
+                        IsLaunchReady = true,
+                        ActiveProviderId = "provider-a",
+                        ActiveProviderName = "Provider A",
+                        ActiveProviderCategory = "custom",
+                        LiveConfigPath = liveConfigPath,
+                        StatusMessage = "Codex 已由 cc-switch 管理并可直接启动。"
+                    }
+                }),
+                codexAppServerSessionManager: new StubCodexAppServerSessionManager());
+
+            var chunks = new List<StreamOutputChunk>();
+            await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "/goal ship this task"))
+            {
+                chunks.Add(chunk);
+                if (chunk.IsCompleted || chunk.IsError)
+                {
+                    break;
+                }
+            }
+
+            Assert.DoesNotContain(
+                chunks,
+                chunk => chunk.IsError && string.Equals(chunk.ErrorMessage, GoalQuickActionDefaults.PersistentProcessRequiredText, StringComparison.Ordinal));
+            Assert.Contains(chunks, chunk => !string.IsNullOrWhiteSpace(chunk.Content) && chunk.Content.Contains("ship this task", StringComparison.OrdinalIgnoreCase));
+
+            var storedSession = repository.GetById(sessionId);
+            var launchOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(
+                SessionLaunchOverrideHelper.Deserialize(storedSession.ToolLaunchOverridesJson),
+                "codex",
+                storedSession.ToolId,
+                storedSession.CcSwitchSnapshotToolId);
+
+            Assert.NotNull(launchOverride);
+            Assert.True(launchOverride!.UseGoalRuntime);
+            Assert.Null(launchOverride.UsePersistentProcess);
+
+            await service.ResetSessionRuntimeAsync(sessionId);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenGoalCodexOutputIsSparse_DoesNotEndOnDefaultIdleFallback()
+    {
+        const string sessionId = "session-goal-sparse-output";
+        const string cliThreadId = "thread-goal-sparse-output";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(tempRoot, "workspace");
+        var liveConfigDirectory = Path.Combine(tempRoot, "live");
+        var liveConfigPath = Path.Combine(liveConfigDirectory, "config.toml");
+        var scriptPath = Path.Combine(tempRoot, "codex-goal-sparse.cmd");
+
+        Directory.CreateDirectory(workspacePath);
+        Directory.CreateDirectory(liveConfigDirectory);
+        await File.WriteAllTextAsync(liveConfigPath, "model = \"gpt-5.4\"\nprovider = \"provider-a\"\n");
+        await File.WriteAllTextAsync(
+            scriptPath,
+            """
+            @echo off
+            set /p INPUT=
+            echo {"type":"thread.started","thread_id":"thread-goal-sparse-output"}
+            powershell.exe -NoProfile -Command "Start-Sleep -Seconds 3"
+            echo {"type":"item.updated","item":{"type":"agent_message","text":"still-running"}}
+            echo {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+            """);
+
+        try
+        {
+            var repository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = sessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    WorkspacePath = workspacePath,
+                    CreatedAt = DateTime.Now,
+                    UpdatedAt = DateTime.Now
+                }
+            ]);
+
+            var tool = new CliToolConfig
+            {
+                Id = "codex",
+                Name = "Codex",
+                Command = "cmd.exe",
+                PersistentModeArguments = $"/d /c \"{scriptPath}\"",
+                UsePersistentProcess = true,
+                TimeoutSeconds = 10,
+                Enabled = true
+            };
+
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = tempRoot,
+                    Tools = [tool]
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(repository, new StubSessionOutputService()),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory(new TestCodexLikeAdapter("codex")),
+                new StubCcSwitchService(new Dictionary<string, CcSwitchToolStatus>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["codex"] = new()
+                    {
+                        ToolId = "codex",
+                        ToolName = "Codex",
+                        IsManaged = true,
+                        IsLaunchReady = true,
+                        ActiveProviderId = "provider-a",
+                        ActiveProviderName = "Provider A",
+                        ActiveProviderCategory = "custom",
+                        LiveConfigPath = liveConfigPath,
+                        StatusMessage = "Codex 已由 cc-switch 管理并可直接启动。"
+                    }
+                }),
+                codexAppServerSessionManager: new StubCodexAppServerSessionManager());
+
+            var chunks = new List<StreamOutputChunk>();
+            await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "/goal keep working"))
+            {
+                chunks.Add(chunk);
+            }
+
+            Assert.DoesNotContain(chunks, c => c.IsError && c.IsCompleted);
+            Assert.Contains(
+                chunks,
+                c => !string.IsNullOrEmpty(c.Content) && c.Content.Contains("still-running", StringComparison.Ordinal));
+            Assert.Contains(
+                chunks,
+                c => !string.IsNullOrEmpty(c.Content) && c.Content.Contains("\"turn.completed\"", StringComparison.Ordinal));
+            Assert.Contains(chunks, c => c.IsCompleted && !c.IsError);
+            Assert.Equal(cliThreadId, service.GetCliThreadId(sessionId));
+
+            await service.ResetSessionRuntimeAsync(sessionId);
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteStreamAsync_WhenCodexUsesPersistentFlag_FallsBackToSingleExecResumeProcess()
+    {
+        const string sessionId = "session-codex-persistent-fallback";
+        const string cliThreadId = "thread-codex-persistent-fallback";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var scriptPath = Path.Combine(tempRoot, "codex-persistent-fallback.cmd");
+
+        Directory.CreateDirectory(tempRoot);
+        await File.WriteAllTextAsync(
+            scriptPath,
+            """
+            @echo off
+            if "%~1"=="" (
+              echo ERROR: missing-args
+              exit /b 1
+            )
+            echo %*
+            echo {"type":"thread.started","thread_id":"thread-codex-persistent-fallback"}
+            echo {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+            """);
+
+        var tool = new CliToolConfig
+        {
+            Id = "codex-persistent-fallback",
+            Name = "Codex Persistent Fallback",
+            Command = scriptPath,
+            UsePersistentProcess = true,
+            TimeoutSeconds = 10,
+            Enabled = true
+        };
+
+        var options = Options.Create(new CliToolsOption
+        {
+            TempWorkspaceRoot = tempRoot,
+            Tools = [tool]
+        });
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            options,
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(new CodexAdapter()),
+            new StubCcSwitchService());
+
+        try
+        {
+            service.SetCliThreadId(sessionId, cliThreadId);
+
+            var chunks = new List<StreamOutputChunk>();
+            await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "/goal keep working"))
+            {
+                chunks.Add(chunk);
+            }
+
+            Assert.DoesNotContain(chunks, c => c.IsError && c.IsCompleted);
+            Assert.Contains(
+                chunks,
+                c => !string.IsNullOrWhiteSpace(c.Content)
+                     && c.Content.Contains($"exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json {cliThreadId} \"/goal keep working\"", StringComparison.Ordinal));
+            Assert.Contains(
+                chunks,
+                c => !string.IsNullOrWhiteSpace(c.Content) && c.Content.Contains("\"turn.completed\"", StringComparison.Ordinal));
+            Assert.Contains(chunks, c => c.IsCompleted && !c.IsError);
+        }
+        finally
+        {
+            service.CleanupSessionWorkspace(sessionId);
+            if (Directory.Exists(tempRoot))
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void CodexAdapter_BuildArguments_WhenResuming_UsesExecResumeSyntax()
+    {
+        var adapter = new CodexAdapter();
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+        var context = new CliSessionContext
+        {
+            SessionId = "session-resume",
+            CliThreadId = "thread-123",
+            WorkingDirectory = Path.GetTempPath()
+        };
+
+        var arguments = adapter.BuildArguments(tool, "/goal resume", context);
+
+        Assert.Equal(
+            "exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json thread-123 \"/goal resume\"",
+            arguments);
     }
 
     [Fact]
@@ -494,7 +878,7 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
-    public async Task ExecuteLowInterruptionContinueStreamAsync_ForCodex_WritesContinuationPromptToStandardInput()
+    public async Task ExecuteLowInterruptionContinueStreamAsync_ForCodex_DoesNotWriteContinuationPromptToStandardInput()
     {
         var tool = new CliToolConfig
         {
@@ -526,7 +910,7 @@ public class CliExecutorServiceTests
             chunks.Add(chunk);
         }
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             chunks,
             chunk => string.Equals(
                 chunk.Content?.Trim(),
@@ -535,7 +919,7 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
-    public async Task ExecuteLowInterruptionContinueStreamAsync_ForCodex_UsesProvidedPromptOverride()
+    public async Task ExecuteLowInterruptionContinueStreamAsync_ForCodex_IgnoresProvidedPromptOverride()
     {
         var tool = new CliToolConfig
         {
@@ -571,7 +955,7 @@ public class CliExecutorServiceTests
             chunks.Add(chunk);
         }
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             chunks,
             chunk => string.Equals(
                 chunk.Content?.Trim(),
@@ -716,6 +1100,157 @@ public class CliExecutorServiceTests
             service.CleanupSessionWorkspace(sessionA);
             service.CleanupSessionWorkspace(sessionB);
 
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task StopSessionExecutionAsync_CleansUpOnlyTargetSessionPersistentProcess()
+    {
+        const string sessionA = "session-stop-a";
+        const string sessionB = "session-stop-b";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+
+        var tool = new CliToolConfig
+        {
+            Id = "persistent-stop-tool",
+            Name = "Persistent Stop Tool",
+            Command = "powershell.exe",
+            PersistentModeArguments = "-NoProfile -Command \"$line = [Console]::In.ReadLine(); Write-Output 'persisted-ready'; Start-Sleep -Seconds 30\"",
+            UsePersistentProcess = true,
+            TimeoutSeconds = 6,
+            Enabled = true
+        };
+
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = tempRoot,
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(),
+            new StubCcSwitchService());
+
+        try
+        {
+            await foreach (var _ in service.ExecuteStreamAsync(sessionA, tool.Id, "hello-a"))
+            {
+            }
+
+            await foreach (var _ in service.ExecuteStreamAsync(sessionB, tool.Id, "hello-b"))
+            {
+            }
+
+            var processManager = typeof(CliExecutorService)
+                .GetField("_processManager", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(service)!;
+            var processMap = typeof(PersistentProcessManager)
+                .GetField("_processes", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(processManager)!;
+
+            Assert.Equal(2, (int)processMap.GetType().GetProperty("Count")!.GetValue(processMap)!);
+
+            await service.StopSessionExecutionAsync(sessionA, tool.Id);
+
+            Assert.Equal(1, (int)processMap.GetType().GetProperty("Count")!.GetValue(processMap)!);
+
+            var remainingKeys = (IEnumerable<string>)processMap.GetType().GetProperty("Keys")!.GetValue(processMap)!;
+            Assert.Single(remainingKeys);
+            Assert.Contains(sessionB, remainingKeys.Single(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            service.CleanupSessionWorkspace(sessionA);
+            service.CleanupSessionWorkspace(sessionB);
+
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task StopSessionExecutionAsync_WhenGoalRuntimeDoesNotBootstrapAnewSession()
+    {
+        const string sessionId = "session-stop-goal-runtime";
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(tempRoot, "workspace");
+        Directory.CreateDirectory(workspacePath);
+
+        var overrideJson = SessionLaunchOverrideHelper.Serialize(new Dictionary<string, SessionToolLaunchOverride>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["codex"] = new() { UseGoalRuntime = true }
+        });
+
+        CliExecutorService? service = null;
+        try
+        {
+            var repository = new StubChatSessionRepository(
+            [
+                new ChatSessionEntity
+                {
+                    SessionId = sessionId,
+                    Username = "luhaiyan",
+                    ToolId = "codex",
+                    WorkspacePath = workspacePath,
+                    ToolLaunchOverridesJson = overrideJson,
+                    CreatedAt = DateTime.Now,
+                    UpdatedAt = DateTime.Now
+                }
+            ]);
+
+            var tool = new CliToolConfig
+            {
+                Id = "codex",
+                Name = "Codex",
+                Command = "powershell.exe",
+                Enabled = true
+            };
+
+            var stubManager = new StubCodexAppServerSessionManager();
+            service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                Options.Create(new CliToolsOption
+                {
+                    TempWorkspaceRoot = tempRoot,
+                    Tools = [tool]
+                }),
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(repository, new StubSessionOutputService()),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory(),
+                new StubCcSwitchService(new Dictionary<string, CcSwitchToolStatus>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["codex"] = new()
+                    {
+                        ToolId = "codex",
+                        ToolName = "Codex",
+                        IsManaged = true,
+                        IsLaunchReady = true,
+                        ActiveProviderId = "provider-a",
+                        ActiveProviderName = "Provider A",
+                        ActiveProviderCategory = "custom",
+                        StatusMessage = "Codex 已由 cc-switch 管理并可直接启动。"
+                    }
+                }),
+                codexAppServerSessionManager: stubManager);
+
+            await service.StopSessionExecutionAsync(sessionId, tool.Id);
+
+            Assert.Equal(0, stubManager.EnsureThreadCalls);
+            Assert.Equal(1, stubManager.SimpleInterruptCalls);
+            Assert.Equal(0, stubManager.LegacyInterruptCalls);
+        }
+        finally
+        {
             if (Directory.Exists(tempRoot))
             {
                 Directory.Delete(tempRoot, recursive: true);
@@ -3505,21 +4040,232 @@ args = ["mcp", "serve"]
         }
     }
 
+    private sealed class StubCodexAppServerSessionManager : ICodexAppServerSessionManager
+    {
+        private readonly Dictionary<string, string> _threadIds = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, AppServerGoalSnapshot> _goals = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _activeTurnIds = new(StringComparer.OrdinalIgnoreCase);
+        private int _nextTurnId;
+
+        public int SimpleInterruptCalls { get; private set; }
+        public int EnsureThreadCalls { get; private set; }
+        public int LegacyInterruptCalls { get; private set; }
+
+        public void Dispose()
+        {
+            _threadIds.Clear();
+            _goals.Clear();
+            _activeTurnIds.Clear();
+        }
+
+        public Task<string> EnsureThreadAsync(
+            string sessionId,
+            string commandPath,
+            CliToolConfig tool,
+            string workingDirectory,
+            Dictionary<string, string>? environmentVariables,
+            CliSessionContext sessionContext,
+            string? existingThreadId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureThreadCalls++;
+
+            if (!_threadIds.TryGetValue(sessionId, out var threadId))
+            {
+                var sessionSuffix = sessionId.StartsWith("session-", StringComparison.OrdinalIgnoreCase)
+                    ? sessionId["session-".Length..]
+                    : sessionId;
+                threadId = string.IsNullOrWhiteSpace(existingThreadId)
+                    ? $"thread-{sessionSuffix}"
+                    : existingThreadId!;
+                _threadIds[sessionId] = threadId;
+            }
+
+            return Task.FromResult(threadId);
+        }
+
+        public async Task<AppServerTurnRun> StartTurnAsync(
+            string sessionId,
+            string commandPath,
+            CliToolConfig tool,
+            string workingDirectory,
+            Dictionary<string, string>? environmentVariables,
+            CliSessionContext sessionContext,
+            string userPrompt,
+            string? existingThreadId,
+            CancellationToken cancellationToken = default)
+        {
+            var threadId = await EnsureThreadAsync(
+                sessionId,
+                commandPath,
+                tool,
+                workingDirectory,
+                environmentVariables,
+                sessionContext,
+                existingThreadId,
+                cancellationToken);
+
+            var turnId = $"turn-{Interlocked.Increment(ref _nextTurnId)}";
+            _activeTurnIds[sessionId] = turnId;
+
+            return new AppServerTurnRun(threadId, turnId, EmitTurnOutputAsync(sessionId, userPrompt, cancellationToken));
+        }
+
+        public Task<AppServerGoalSnapshot?> GetGoalAsync(
+            string sessionId,
+            string commandPath,
+            CliToolConfig tool,
+            string workingDirectory,
+            Dictionary<string, string>? environmentVariables,
+            CliSessionContext sessionContext,
+            string? existingThreadId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _goals.TryGetValue(sessionId, out var goal);
+            return Task.FromResult<AppServerGoalSnapshot?>(goal);
+        }
+
+        public async Task<AppServerGoalSnapshot?> SetGoalAsync(
+            string sessionId,
+            string commandPath,
+            CliToolConfig tool,
+            string workingDirectory,
+            Dictionary<string, string>? environmentVariables,
+            CliSessionContext sessionContext,
+            string objective,
+            string status,
+            long? tokenBudget,
+            string? existingThreadId,
+            CancellationToken cancellationToken = default)
+        {
+            var threadId = await EnsureThreadAsync(
+                sessionId,
+                commandPath,
+                tool,
+                workingDirectory,
+                environmentVariables,
+                sessionContext,
+                existingThreadId,
+                cancellationToken);
+
+            var goal = new AppServerGoalSnapshot(objective, status, tokenBudget, 0, 0);
+            _threadIds[sessionId] = threadId;
+            _goals[sessionId] = goal;
+            return goal;
+        }
+
+        public Task<bool> ClearGoalAsync(
+            string sessionId,
+            string commandPath,
+            CliToolConfig tool,
+            string workingDirectory,
+            Dictionary<string, string>? environmentVariables,
+            CliSessionContext sessionContext,
+            string? existingThreadId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_goals.Remove(sessionId));
+        }
+
+        public Task<bool> InterruptActiveTurnAsync(
+            string sessionId,
+            string commandPath,
+            CliToolConfig tool,
+            string workingDirectory,
+            Dictionary<string, string>? environmentVariables,
+            CliSessionContext sessionContext,
+            string? existingThreadId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LegacyInterruptCalls++;
+            return Task.FromResult(_activeTurnIds.Remove(sessionId));
+        }
+
+        public Task<bool> InterruptActiveTurnAsync(
+            string sessionId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SimpleInterruptCalls++;
+            return Task.FromResult(_activeTurnIds.Remove(sessionId));
+        }
+
+        public bool CleanupSession(string sessionId)
+        {
+            var removed = _threadIds.Remove(sessionId);
+            removed = _goals.Remove(sessionId) || removed;
+            removed = _activeTurnIds.Remove(sessionId) || removed;
+            return removed;
+        }
+
+        private async IAsyncEnumerable<StreamOutputChunk> EmitTurnOutputAsync(
+            string sessionId,
+            string userPrompt,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (userPrompt.Contains("keep working", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return new StreamOutputChunk
+                {
+                    Content = "still-running"
+                };
+                yield return new StreamOutputChunk
+                {
+                    Content = "{\"type\":\"turn.completed\"}"
+                };
+            }
+            else
+            {
+                yield return new StreamOutputChunk
+                {
+                    Content = userPrompt
+                };
+            }
+
+            _activeTurnIds.Remove(sessionId);
+            yield return new StreamOutputChunk
+            {
+                IsCompleted = true
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class StubCcSwitchService : ICcSwitchService
     {
         private readonly Dictionary<string, CcSwitchToolStatus> _statuses;
         private readonly Dictionary<string, CcSwitchModelCatalog> _modelCatalogs;
+        private readonly bool _includeBuiltInManagedTools;
 
         public StubCcSwitchService(
             Dictionary<string, CcSwitchToolStatus>? statuses = null,
-            Dictionary<string, CcSwitchModelCatalog>? modelCatalogs = null)
+            Dictionary<string, CcSwitchModelCatalog>? modelCatalogs = null,
+            bool includeBuiltInManagedTools = true)
         {
             _statuses = statuses ?? new Dictionary<string, CcSwitchToolStatus>(StringComparer.OrdinalIgnoreCase);
             _modelCatalogs = modelCatalogs ?? new Dictionary<string, CcSwitchModelCatalog>(StringComparer.OrdinalIgnoreCase);
+            _includeBuiltInManagedTools = includeBuiltInManagedTools;
         }
 
         public bool IsManagedTool(string toolId)
         {
+            if (_statuses.ContainsKey(toolId) || _modelCatalogs.ContainsKey(toolId))
+            {
+                return true;
+            }
+
+            if (!_includeBuiltInManagedTools)
+            {
+                return false;
+            }
+
             return string.Equals(toolId, "claude-code", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(toolId, "opencode", StringComparison.OrdinalIgnoreCase);

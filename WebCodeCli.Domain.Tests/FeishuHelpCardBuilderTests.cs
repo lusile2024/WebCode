@@ -171,6 +171,14 @@ public class FeishuHelpCardBuilderTests
         Assert.Equal(
             FeishuHelpCardAction.SubmitGoalQuickInputAction,
             goalInput.GetProperty("behaviors")[0].GetProperty("value").GetProperty("action").GetString());
+        Assert.True(ContainsAction(elements, "status_goal"));
+        Assert.True(ContainsStringValue(elements, "/goal pause"));
+        Assert.True(ContainsStringValue(elements, "/goal clear"));
+        Assert.True(ContainsStringValue(elements, "/goal resume"));
+        Assert.True(ContainsAction(elements, "status_goal"));
+        Assert.True(ContainsAction(elements, "pause_goal"));
+        Assert.True(ContainsAction(elements, "clear_goal"));
+        Assert.True(ContainsAction(elements, "resume_goal"));
 
         Assert.True(
             GetInputIndexByName(elements, GoalQuickActionDefaults.QuickInputFieldName)

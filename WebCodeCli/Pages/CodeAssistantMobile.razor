@@ -618,23 +618,9 @@
                                     <div class="mt-2 rounded-2xl border border-blue-100 bg-blue-50/70 p-3">
                                         <p class="mb-2 text-xs leading-relaxed text-blue-900">@SuperpowersQuickActionDefaults.InstructionText</p>
                                         <div class="flex flex-col gap-2">
-                                            <input @bind="_superpowersQuickInput"
-                                               @bind:event="oninput"
-                                               @onkeydown="@(args => HandleSuperpowersQuickInputKeyDown(message, args))"
-                                               disabled="@superpowersViewState.IsDisabled"
-                                               class="w-full rounded-full border border-blue-200 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
-                                               placeholder="@SuperpowersQuickActionDefaults.QuickInputPlaceholder" />
                                             @if (superpowersViewState.ShowPlanActions)
                                             {
                                                 <div class="flex flex-wrap gap-2">
-                                                <button @onclick="() => OnContinueSuperpowersActionAsync(message)"
-                                                        disabled="@superpowersViewState.ContinueActionDisabled"
-                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.ContinueActionDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-blue-700 hover:bg-blue-100")">
-                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l-7 7 7 7"></path>
-                                                    </svg>
-                                                    <span>@SuperpowersQuickActionDefaults.ContinueButtonText</span>
-                                                </button>
                                                 <button @onclick="() => OnExecuteSuperpowersPlanAsync(message)"
                                                         disabled="@superpowersViewState.IsDisabled"
                                                         class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-blue-700 hover:bg-blue-100")">
@@ -653,6 +639,12 @@
                                                 </button>
                                                 </div>
                                             }
+                                            <input @bind="_superpowersQuickInput"
+                                                   @bind:event="oninput"
+                                                   @onkeydown="@(args => HandleSuperpowersQuickInputKeyDown(message, args))"
+                                               disabled="@superpowersViewState.IsDisabled"
+                                               class="w-full rounded-full border border-blue-200 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                                               placeholder="@SuperpowersQuickActionDefaults.QuickInputPlaceholder" />
                                             @if (!string.IsNullOrWhiteSpace(superpowersViewState.StatusMessage) || superpowersViewState.ShowRetryAction)
                                             {
                                                 <div class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-white/80 px-3 py-2 text-xs text-blue-900">
@@ -685,6 +677,36 @@
                                                    disabled="@goalViewState.IsDisabled"
                                                    class="w-full rounded-full border border-emerald-200 px-3 py-2 text-xs text-gray-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                                                    placeholder="@GoalQuickActionDefaults.QuickInputPlaceholder" />
+                                            <div class="flex flex-wrap gap-2">
+                                                <button @onclick="() => OnSubmitGoalQuickInputAsync(message)"
+                                                        disabled="@goalViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-200 px-3 py-1.5 text-xs font-medium transition-colors @(goalViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-emerald-600 text-white hover:bg-emerald-700")">
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                                    </svg>
+                                                    <span>@GoalQuickActionDefaults.QuickSubmitButtonText</span>
+                                                </button>
+                                                <button @onclick="() => OnGoalStatusActionAsync(message)"
+                                                        disabled="@goalViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center rounded-full border border-emerald-200 px-3 py-1.5 text-xs font-medium transition-colors @(goalViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-emerald-700 hover:bg-emerald-100")">
+                                                    @GoalQuickActionDefaults.StatusButtonText
+                                                </button>
+                                                <button @onclick="() => OnGoalPauseActionAsync(message)"
+                                                        disabled="@(!_isLoading)"
+                                                        class="inline-flex items-center justify-center rounded-full border border-emerald-200 px-3 py-1.5 text-xs font-medium transition-colors @(!_isLoading ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-emerald-700 hover:bg-emerald-100")">
+                                                    @GoalQuickActionDefaults.PauseButtonText
+                                                </button>
+                                                <button @onclick="() => OnGoalClearActionAsync(message)"
+                                                        disabled="@goalViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center rounded-full border border-emerald-200 px-3 py-1.5 text-xs font-medium transition-colors @(goalViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-emerald-700 hover:bg-emerald-100")">
+                                                    @GoalQuickActionDefaults.ClearButtonText
+                                                </button>
+                                                <button @onclick="() => OnGoalResumeActionAsync(message)"
+                                                        disabled="@goalViewState.IsDisabled"
+                                                        class="inline-flex items-center justify-center rounded-full border border-emerald-200 px-3 py-1.5 text-xs font-medium transition-colors @(goalViewState.IsDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-emerald-700 hover:bg-emerald-100")">
+                                                    @GoalQuickActionDefaults.ResumeButtonText
+                                                </button>
+                                            </div>
                                             @if (!string.IsNullOrWhiteSpace(goalViewState.StatusMessage) || goalViewState.ShowRetryAction)
                                             {
                                                 <div class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-100 bg-white/70 px-3 py-2 text-xs text-emerald-900">
@@ -703,6 +725,29 @@
                                                 </div>
                                             }
                                         </div>
+                                    </div>
+                                }
+                                @if (superpowersViewState.ShowPlanActions)
+                                {
+                                    <div class="mt-2 flex flex-wrap gap-2">
+                                        @if (_isLoading)
+                                        {
+                                            <button @onclick="() => OnStopSuperpowersActionAsync(message)"
+                                                    class="inline-flex items-center justify-center gap-1.5 rounded-full border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50">
+                                                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M7 7h10v10H7z"></path>
+                                                </svg>
+                                                <span>鍋滄</span>
+                                            </button>
+                                        }
+                                        <button @onclick="() => OnContinueSuperpowersActionAsync(message)"
+                                                disabled="@superpowersViewState.ContinueActionDisabled"
+                                                class="inline-flex items-center justify-center gap-1.5 rounded-full border border-blue-200 px-3 py-1.5 text-xs font-medium transition-colors @(superpowersViewState.ContinueActionDisabled ? "cursor-not-allowed bg-gray-100 text-gray-400 border-gray-200" : "bg-white text-blue-700 hover:bg-blue-100")">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l-7 7 7 7"></path>
+                                            </svg>
+                                            <span>@SuperpowersQuickActionDefaults.ContinueButtonText</span>
+                                        </button>
                                     </div>
                                 }
                             </div>

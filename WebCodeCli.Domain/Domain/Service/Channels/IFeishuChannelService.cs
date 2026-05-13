@@ -93,6 +93,13 @@ public interface IFeishuChannelService
     bool IsSessionExecutionActive(string sessionId);
 
     /// <summary>
+    /// 请求停止指定会话的流式执行。
+    /// </summary>
+    /// <param name="sessionId">会话 ID</param>
+    /// <returns>是否找到并停止了活动执行</returns>
+    bool StopSessionExecution(string sessionId);
+
+    /// <summary>
     /// 暂停指定会话流式卡片的状态脉冲刷新一段时间
     /// </summary>
     /// <param name="sessionId">会话 ID</param>

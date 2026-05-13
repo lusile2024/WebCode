@@ -953,6 +953,7 @@ public class FeishuHelpCardBuilder
         elements.Add(new { tag = "hr" });
         elements.Add(BuildSuperpowersQuickInput());
         elements.Add(BuildGoalQuickInput());
+        elements.Add(BuildGoalQuickActions());
     }
 
     private static object BuildSuperpowersQuickInput()
@@ -995,6 +996,56 @@ public class FeishuHelpCardBuilder
                     value = new
                     {
                         action = FeishuHelpCardAction.SubmitGoalQuickInputAction
+                    }
+                }
+            }
+        };
+    }
+
+    private static object BuildGoalQuickActions()
+    {
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            columns = new object[]
+            {
+                BuildGoalQuickActionColumn(GoalQuickActionDefaults.StatusButtonText, FeishuHelpCardAction.StatusGoalAction),
+                BuildGoalQuickActionColumn(GoalQuickActionDefaults.PauseButtonText, FeishuHelpCardAction.PauseGoalAction),
+                BuildGoalQuickActionColumn(GoalQuickActionDefaults.ClearButtonText, FeishuHelpCardAction.ClearGoalAction),
+                BuildGoalQuickActionColumn(GoalQuickActionDefaults.ResumeButtonText, FeishuHelpCardAction.ResumeGoalAction)
+            }
+        };
+    }
+
+    private static object BuildGoalQuickActionColumn(string text, string action)
+    {
+        return new
+        {
+            tag = "column",
+            width = "weighted",
+            weight = 1,
+            elements = new object[]
+            {
+                new
+                {
+                    tag = "button",
+                    text = new
+                    {
+                        tag = "plain_text",
+                        content = text
+                    },
+                    type = "default",
+                    behaviors = new[]
+                    {
+                        new
+                        {
+                            type = "callback",
+                            value = new
+                            {
+                                action
+                            }
+                        }
                     }
                 }
             }

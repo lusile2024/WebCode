@@ -8,6 +8,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using WebCodeCli.Domain.Domain.Model;
+using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Components;
@@ -1014,6 +1015,18 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         await SubmitSuperpowersQuickActionAsync(sourceMessage, SuperpowersQuickActionRequestType.ExecuteSubagentPlan);
     }
 
+    private async Task OnStopSuperpowersActionAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentSuperpowersQuickActionEligibility;
+        if (!_isLoading || !IsSuperpowersQuickActionEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        CancelExecution();
+        await Task.CompletedTask;
+    }
+
     private async Task SubmitSuperpowersQuickActionAsync(
         ChatMessage sourceMessage,
         SuperpowersQuickActionRequestType requestType)
@@ -1088,6 +1101,53 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         await SendMessageCoreAsync(message, clearComposerInput: false, closeTransientPanels: true);
     }
 
+    private Task OnGoalStatusActionAsync(ChatMessage sourceMessage)
+        => SendGoalActionAsync(sourceMessage, FeishuHelpCardAction.StatusGoalAction);
+
+    private Task OnGoalPauseActionAsync(ChatMessage sourceMessage)
+    {
+        var eligibility = CurrentGoalQuickActionEligibility;
+        if (!_isLoading || !IsSuperpowersQuickActionEligible(sourceMessage, eligibility))
+        {
+            return Task.CompletedTask;
+        }
+
+        CancelExecution();
+        return Task.CompletedTask;
+    }
+
+    private Task OnGoalClearActionAsync(ChatMessage sourceMessage)
+        => SendGoalActionAsync(sourceMessage, FeishuHelpCardAction.ClearGoalAction);
+
+    private Task OnGoalResumeActionAsync(ChatMessage sourceMessage)
+        => SendGoalActionAsync(sourceMessage, FeishuHelpCardAction.ResumeGoalAction);
+
+    private async Task SendGoalActionAsync(ChatMessage sourceMessage, string action)
+    {
+        var eligibility = CurrentGoalQuickActionEligibility;
+        var viewState = CurrentGoalQuickActionViewState;
+        if (_isLoading
+            || viewState.IsDisabled
+            || !IsSuperpowersQuickActionEligible(sourceMessage, eligibility))
+        {
+            return;
+        }
+
+        var message = GoalPromptBuilder.BuildPromptForAction(action, input: null);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var capabilityAvailable = await EnsureGoalCapabilityAvailableAsync(forceRefresh: false);
+        if (!capabilityAvailable)
+        {
+            return;
+        }
+
+        await SendMessageCoreAsync(message, clearComposerInput: false, closeTransientPanels: true);
+    }
+
     private async Task RetryGoalCapabilityAsync(ChatMessage sourceMessage)
     {
         var eligibility = CurrentGoalQuickActionEligibility;
@@ -1118,7 +1178,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
 
         var probeResult = await SuperpowersCapabilityService.ProbeAsync(
             BuildSuperpowersCapabilityContext(),
-            forceRefresh: forceRefresh);
+            forceRefresh: forceRefresh || _superpowersCapabilityPresentation.State != SuperpowersCapabilityState.Available);
 
         _superpowersCapabilityPresentation = probeResult.Outcome switch
         {
@@ -2574,6 +2634,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         try
         {
             _cancellationTokenSource?.Cancel();
+            _ = CliExecutorService.StopSessionExecutionAsync(_sessionId, _selectedToolId);
             _isLoading = false;
             StateHasChanged();
         }
@@ -3118,11 +3179,13 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             StateHasChanged();
 
             var session = await SessionHistoryManager.GetSessionAsync(_sessionToConfigureLaunch.SessionId) ?? _sessionToConfigureLaunch;
-            session.ToolLaunchOverrides = SessionLaunchOverrideHelper.ApplyOverride(
-                session.ToolLaunchOverrides,
-                toolId,
-                clearOverride ? null : _sessionLaunchOverrideModel,
-                clearOverride ? null : _sessionLaunchReasoningEffort);
+            session.ToolLaunchOverrides = clearOverride
+                ? SessionLaunchOverrideHelper.RemoveOverride(session.ToolLaunchOverrides, toolId)
+                : SessionLaunchOverrideHelper.ApplyOverride(
+                    session.ToolLaunchOverrides,
+                    toolId,
+                    _sessionLaunchOverrideModel,
+                    _sessionLaunchReasoningEffort);
 
             await SessionHistoryManager.SaveSessionImmediateAsync(session);
             await CliExecutorService.ResetSessionRuntimeAsync(session.SessionId, clearCliThreadId: false);

@@ -393,6 +393,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
             return false;
         }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "更新卡片超时 (cardId={CardId}, seq={Sequence})", cardId, sequence);
+            return false;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Update card failed (cardId={CardId}, seq={Sequence})", cardId, sequence);
@@ -488,10 +493,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             !string.IsNullOrWhiteSpace(group.SummaryMarkdown)
             || group.OverflowOptions.Count > 0
             || group.Items.Any(item => !string.IsNullOrWhiteSpace(item.Text)));
+        var hasToolSummary = !string.IsNullOrWhiteSpace(chrome.LatestToolCallMarkdown);
         var allBottomPrompts = EnumerateBottomPrompts(chrome).ToArray();
         var hasBottomActions = chrome.BottomActions.Count > 0;
         var hasBottomPrompt = allBottomPrompts.Length > 0;
-        if (!hasStatusSection && !hasTopChipGroups && !hasBottomActions && !hasBottomPrompt)
+        if (!hasStatusSection && !hasTopChipGroups && !hasToolSummary && !hasBottomActions && !hasBottomPrompt)
         {
             return
             [
@@ -526,6 +532,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             content
         });
 
+        if (hasToolSummary)
+        {
+            elements.Add(BuildToolSummaryLine(chrome.LatestToolCallMarkdown!));
+        }
+
         if (hasBottomPrompt || hasBottomActions)
         {
             elements.Add(BuildSectionMarker("Superpowers 工作流"));
@@ -537,17 +548,33 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
             if (hasBottomActions)
             {
-                elements.Add(new
+                foreach (var row in BuildBottomActionRows(chrome.BottomActions))
                 {
-                    tag = "column_set",
-                    flex_mode = "none",
-                    horizontal_spacing = "8px",
-                    columns = BuildBottomActionColumns(chrome.BottomActions)
-                });
+                    elements.Add(new
+                    {
+                        tag = "column_set",
+                        flex_mode = "none",
+                        horizontal_spacing = "8px",
+                        columns = BuildBottomActionColumns(row)
+                    });
+                }
             }
         }
 
         return elements.ToArray();
+    }
+
+    private static object BuildToolSummaryLine(string markdown)
+    {
+        return new
+        {
+            tag = "div",
+            text = new
+            {
+                tag = "lark_md",
+                content = markdown
+            }
+        };
     }
 
     private static object BuildStatusModule(FeishuStreamingCardChrome chrome)
@@ -715,6 +742,31 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     private static object BuildTopChipAction(FeishuStreamingCardTopChipItem item)
     {
         return FeishuStreamingTopChipLayout.BuildButton(item);
+    }
+
+    private static IReadOnlyList<List<FeishuStreamingCardBottomAction>> BuildBottomActionRows(
+        IEnumerable<FeishuStreamingCardBottomAction> actions)
+    {
+        var rows = new List<List<FeishuStreamingCardBottomAction>>();
+        var rowIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var action in actions.Where(action => !string.IsNullOrWhiteSpace(action.Text)))
+        {
+            var rowKey = string.IsNullOrWhiteSpace(action.RowKey)
+                ? "__default__"
+                : action.RowKey.Trim();
+
+            if (!rowIndexes.TryGetValue(rowKey, out var rowIndex))
+            {
+                rowIndex = rows.Count;
+                rowIndexes[rowKey] = rowIndex;
+                rows.Add([]);
+            }
+
+            rows[rowIndex].Add(action);
+        }
+
+        return rows;
     }
 
     private static object[] BuildBottomActionColumns(IEnumerable<FeishuStreamingCardBottomAction> actions)

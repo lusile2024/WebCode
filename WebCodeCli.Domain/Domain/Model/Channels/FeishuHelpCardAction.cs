@@ -10,7 +10,12 @@ public class FeishuHelpCardAction
 {
     public const string SubmitSuperpowersQuickInputAction = "submit_superpowers_quick_input";
     public const string SubmitGoalQuickInputAction = "submit_goal_quick_input";
+    public const string StatusGoalAction = "status_goal";
+    public const string PauseGoalAction = "pause_goal";
+    public const string ClearGoalAction = "clear_goal";
+    public const string ResumeGoalAction = "resume_goal";
     public const string ContinueSuperpowersAction = "continue_superpowers";
+    public const string StopStreamingExecutionAction = "stop_streaming_execution";
     public const string ExecuteSuperpowersPlanAction = "execute_superpowers_plan";
     public const string ExecuteSuperpowersSubagentPlanAction = "execute_superpowers_subagent_plan";
     public const string RetrySuperpowersCapabilityDetectionAction = "retry_superpowers_capability_detection";
