@@ -53,6 +53,7 @@ The relevant implementations live mainly under [WebCodeCli.Domain/Domain/Service
 - session history, switching, closing, isolation, and cleanup are supported
 - existing local CLI sessions can be imported and continued inside WebCode
 - mobile session drawers and Feishu session cards can manage the same session set
+- supports attachment-aware messages across desktop Web, mobile, and Feishu, with native CLI attachment input when available and workspace-reference fallback otherwise
 
 ### Multi-user controls
 
