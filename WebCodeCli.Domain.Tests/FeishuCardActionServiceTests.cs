@@ -201,6 +201,37 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task OpenAttachmentDraftAction_UsesCurrentSessionAndReturnsDraftCard()
+    {
+        const string chatId = "oc_attachment_draft_chat";
+        const string activeSessionId = "session-open-attachment-draft";
+        const string senderId = "ou_test_user";
+        const string appId = "cli_test";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var draftService = new FeishuAttachmentDraftService();
+        var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var serviceProvider = new TestServiceProvider(attachmentDraftService: draftService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"open_attachment_draft"}""",
+            chatId: chatId,
+            operatorUserId: senderId,
+            appId: appId);
+
+        Assert.Equal("📎 已打开附件草稿", ExtractToastContent(response));
+        var draft = draftService.GetDraft(appId, chatId, senderId);
+        Assert.NotNull(draft);
+        Assert.Equal(activeSessionId, draft!.SessionId);
+        Assert.False(string.IsNullOrWhiteSpace(draft.ToolId));
+        Assert.Contains("submit_attachment_draft", SerializeResponse(response), StringComparison.Ordinal);
+        Assert.Contains("clear_attachment_draft", SerializeResponse(response), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_CreatesStreamingCardWithRecentSessionMenu()
     {
         const string chatId = "oc_current_chat";

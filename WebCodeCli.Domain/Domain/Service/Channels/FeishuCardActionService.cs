@@ -3803,6 +3803,10 @@ public class FeishuCardActionService
             StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
         };
         chrome.OverflowOptions.AddRange(await BuildStreamingStatusOverflowOptionsAsync(chatKey, sessionId, currentSession, currentToolId));
+        chrome.OverflowOptions.Add(BuildOpenAttachmentDraftOverflowOption(
+            chatKey,
+            sessionId,
+            currentSession?.ToolId ?? currentToolId));
         chrome.TopChipGroups.AddRange(await BuildStreamingTopChipGroupsAsync(chatKey, sessionId, currentSession, currentToolId, isEnabled: false));
 
         foreach (var session in sessions
@@ -3833,6 +3837,24 @@ public class FeishuCardActionService
         });
 
         return (chrome, baseStatusMarkdown);
+    }
+
+    private static FeishuStreamingCardOverflowOption BuildOpenAttachmentDraftOverflowOption(
+        string chatKey,
+        string sessionId,
+        string? toolId)
+    {
+        return new FeishuStreamingCardOverflowOption
+        {
+            Text = "打开附件草稿",
+            Value = new
+            {
+                action = "open_attachment_draft",
+                session_id = sessionId,
+                chat_key = chatKey,
+                tool_id = toolId
+            }
+        };
     }
 
     private string GetSessionWorkspaceName(string sessionId, string? fallbackWorkspacePath = null)

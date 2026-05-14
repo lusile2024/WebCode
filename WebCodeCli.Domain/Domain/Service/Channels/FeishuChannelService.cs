@@ -316,10 +316,16 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 message.Content);
 
             var normalizedPrompt = FeishuPromptNormalizer.Normalize(message.Content);
-            var existingDraft = _attachmentDraftService.GetDraft(message.AppId, message.ChatId, message.SenderId);
+            FeishuAttachmentDraftState? existingDraft = null;
+            if (!string.IsNullOrWhiteSpace(message.SenderId))
+            {
+                existingDraft = _attachmentDraftService.GetDraft(message.AppId, message.ChatId, message.SenderId);
+            }
+
             if (existingDraft != null && (!string.IsNullOrWhiteSpace(normalizedPrompt) || message.Attachments.Count > 0))
             {
-                await UpdateOpenAttachmentDraftAsync(existingDraft, message, normalizedPrompt);
+                var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
+                await UpdateOpenAttachmentDraftAsync(existingDraft, message, normalizedPrompt, effectiveOptions);
                 return;
             }
 
@@ -487,6 +493,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         FeishuAttachmentDraftState draft,
         FeishuIncomingMessage message,
         string normalizedPrompt,
+        FeishuOptions effectiveOptions,
         CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(normalizedPrompt))
@@ -496,7 +503,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         foreach (var incomingAttachment in message.Attachments)
         {
-            var stagedAttachment = await StageIncomingAttachmentForDraftAsync(draft, incomingAttachment, cancellationToken);
+            var stagedAttachment = await StageIncomingAttachmentForDraftAsync(draft, incomingAttachment, effectiveOptions, cancellationToken);
             _attachmentDraftService.AddStagedAttachment(message.AppId, message.ChatId, message.SenderId, stagedAttachment);
         }
 
@@ -506,17 +513,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             return;
         }
 
-        await SendAttachmentDraftCardAsync(updatedDraft, message.ChatId, message.SenderName, message.AppId, cancellationToken);
+        await SendAttachmentDraftCardAsync(updatedDraft, message.ChatId, effectiveOptions, cancellationToken);
     }
 
     private async Task<MessageAttachment> StageIncomingAttachmentForDraftAsync(
         FeishuAttachmentDraftState draft,
         FeishuIncomingAttachment incomingAttachment,
+        FeishuOptions effectiveOptions,
         CancellationToken cancellationToken)
     {
         var downloadedAttachment = await _cardKit.DownloadIncomingAttachmentAsync(
             incomingAttachment,
-            cancellationToken);
+            cancellationToken,
+            effectiveOptions);
 
         var workspacePath = _cliExecutor.GetSessionWorkspacePath(draft.SessionId);
         var workspaceRoot = Path.GetFullPath(workspacePath);
@@ -555,8 +564,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private async Task SendAttachmentDraftCardAsync(
         FeishuAttachmentDraftState draft,
         string chatId,
-        string? username,
-        string? appId,
+        FeishuOptions effectiveOptions,
         CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
@@ -567,7 +575,6 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
 
         var card = cardBuilder.BuildCard(draft);
-        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, chatId, appId);
         var cardJson = JsonSerializer.Serialize(card);
         await _cardKit.SendRawCardAsync(
             chatId,
@@ -1537,6 +1544,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, 0)
         };
         chrome.OverflowOptions.AddRange(await BuildStreamingStatusOverflowOptionsAsync(chatKey, sessionId, currentSession, currentSession?.ToolId));
+        chrome.OverflowOptions.Add(BuildOpenAttachmentDraftOverflowOption(
+            chatKey,
+            sessionId,
+            currentSession?.ToolId));
         chrome.TopChipGroups.AddRange(await BuildStreamingTopChipGroupsAsync(chatKey, sessionId, currentSession, currentSession?.ToolId, isEnabled: false));
 
         foreach (var session in sessions
@@ -1644,6 +1655,24 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 }
             })
             .ToList();
+    }
+
+    private static FeishuStreamingCardOverflowOption BuildOpenAttachmentDraftOverflowOption(
+        string chatKey,
+        string sessionId,
+        string? toolId)
+    {
+        return new FeishuStreamingCardOverflowOption
+        {
+            Text = "打开附件草稿",
+            Value = new
+            {
+                action = "open_attachment_draft",
+                session_id = sessionId,
+                chat_key = chatKey,
+                tool_id = toolId
+            }
+        };
     }
 
     private async Task<List<CcSwitchModelOption>> LoadStreamingModelOptionsAsync(string toolId, string? providerId, string? currentModel)

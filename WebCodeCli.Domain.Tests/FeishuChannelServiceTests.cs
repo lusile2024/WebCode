@@ -325,6 +325,219 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
+    public async Task HandleIncomingMessageAsync_TextMessageWithoutSenderId_ExecutesCliNormally()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-missing-sender-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_missing_sender_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                AppId = "cli_test",
+                ChatId = "oc_missing_sender_chat",
+                SenderId = null,
+                SenderName = "luhaiyan",
+                MessageId = "msg-missing-sender",
+                Content = "run this normally"
+            });
+
+            var call = Assert.Single(cliExecutor.ExecuteCalls);
+            Assert.Equal("run this normally", call.Prompt);
+            Assert.Equal(1, cardKit.ReplyTextCallCount);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_StreamingCardIncludesOpenAttachmentDraftAction()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-draft-action-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            var sessionId = service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_streaming_draft_entry_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_streaming_draft_entry_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-open-draft-entry",
+                Content = "show the streaming card"
+            });
+
+            var handle = Assert.Single(cardKit.Handles);
+            Assert.NotNull(handle.InitialChromeSnapshot);
+            var chrome = handle.InitialChromeSnapshot!;
+            var draftOption = Assert.Single(
+                chrome.OverflowOptions.Where(option => TryGetActionName(option.Value) == "open_attachment_draft"));
+            var actionValue = JsonSerializer.SerializeToElement(draftOption.Value);
+
+            Assert.Equal(sessionId, actionValue.GetProperty("session_id").GetString());
+            Assert.Equal("oc_streaming_draft_entry_chat", actionValue.GetProperty("chat_key").GetString());
+            Assert.Equal("codex", actionValue.GetProperty("tool_id").GetString());
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_AttachmentDraftDownload_UsesEffectiveFeishuOptions()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new DraftAttachmentRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var draftService = new FeishuAttachmentDraftService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-draft-download-options-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new TakeoverCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService(),
+            attachmentDraftService: draftService);
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            var sessionId = service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_draft_download_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            draftService.OpenDraft(
+                "cli_custom_bot",
+                "oc_draft_download_chat",
+                "feishu-user-attachment",
+                sessionId,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                AppId = "cli_custom_bot",
+                ChatId = "oc_draft_download_chat",
+                SenderId = "feishu-user-attachment",
+                SenderName = "luhaiyan",
+                MessageId = "msg-draft-attachment",
+                Content = string.Empty,
+                Attachments =
+                [
+                    new FeishuIncomingAttachment
+                    {
+                        MessageType = "file",
+                        AttachmentKey = "file-1",
+                        DisplayName = "notes.txt",
+                        MimeType = "text/plain"
+                    }
+                ]
+            });
+
+            Assert.NotNull(cardKit.LastDownloadOptionsOverride);
+            Assert.Equal("cli_custom_bot", cardKit.LastDownloadOptionsOverride!.AppId);
+            Assert.Equal("bot-secret", cardKit.LastDownloadOptionsOverride.AppSecret);
+            var draft = draftService.GetDraft("cli_custom_bot", "oc_draft_download_chat", "feishu-user-attachment");
+            Assert.NotNull(draft);
+            Assert.Single(draft!.Attachments);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HandleIncomingMessageAsync_WhenSupersededAfterStreamingOutput_KeepsExistingCardContent()
     {
         var repository = CreateRepository(out var repositoryProxy);
@@ -2185,7 +2398,7 @@ public class FeishuChannelServiceTests
             => throw new NotSupportedException();
     }
 
-    private sealed class StreamingRecordingFeishuCardKitClient : IFeishuCardKitClient
+    private class StreamingRecordingFeishuCardKitClient : IFeishuCardKitClient
     {
         public List<StreamingHandleRecord> Handles { get; } = new();
 
@@ -2217,7 +2430,7 @@ public class FeishuChannelServiceTests
             return Task.FromResult($"reply-text-{ReplyTextCallCount}");
         }
 
-        public Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+        public virtual Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
             FeishuIncomingAttachment attachment,
             CancellationToken cancellationToken = default,
             FeishuOptions? optionsOverride = null)
@@ -2273,7 +2486,7 @@ public class FeishuChannelServiceTests
                 throttleMs: 0));
         }
 
-        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public virtual Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
 
         public Task<string> ReplyElementsCardAsync(string replyMessageId, FeishuNetSdk.Im.Dtos.ElementsCardV2Dto card, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
@@ -2363,6 +2576,41 @@ public class FeishuChannelServiceTests
                     .ToList()
             };
         }
+    }
+
+    private sealed class DraftAttachmentRecordingFeishuCardKitClient : StreamingRecordingFeishuCardKitClient
+    {
+        public FeishuOptions? LastDownloadOptionsOverride { get; private set; }
+
+        public override Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+        {
+            LastDownloadOptionsOverride = optionsOverride;
+            return Task.FromResult(new FeishuDownloadedAttachment
+            {
+                DisplayName = attachment.DisplayName,
+                MimeType = attachment.MimeType,
+                Content = "draft body"u8.ToArray(),
+                SizeBytes = "draft body"u8.Length
+            });
+        }
+
+        public override Task<string> SendRawCardAsync(
+            string chatId,
+            string cardJson,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => Task.FromResult("raw-card-1");
+    }
+
+    private static string? TryGetActionName(object value)
+    {
+        var element = JsonSerializer.SerializeToElement(value);
+        return element.TryGetProperty("action", out var actionElement)
+            ? actionElement.GetString()
+            : null;
     }
 
     private sealed class StreamingHandleRecord
