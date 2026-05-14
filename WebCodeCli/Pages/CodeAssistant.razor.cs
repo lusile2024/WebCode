@@ -5560,6 +5560,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         {
             // 生成新的会话ID
             _sessionId = Guid.NewGuid().ToString();
+            _messageAttachmentComposer.Clear();
             
             // 清空当前会话
             _currentSession = null;

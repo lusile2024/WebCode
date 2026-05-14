@@ -2907,6 +2907,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         try
         {
             _sessionId = Guid.NewGuid().ToString();
+            _messageAttachmentComposer.Clear();
             _messages.Clear();
             _expandedMessageIndices.Clear(); // 重置展开状态
             _currentSession = null;
