@@ -133,6 +133,64 @@ public class MessageSubmissionServiceTests
         }
     }
 
+    [Fact]
+    public async Task PrepareAsync_WhenCustomAdapterDeclaresPdfNativeCapability_UsesAdapterCapabilityInsteadOfConcreteCodexType()
+    {
+        var workspaceRoot = CreateWorkspaceRoot();
+
+        try
+        {
+            var tool = new CliToolConfig
+            {
+                Id = "custom-pdf-native",
+                Name = "Custom PDF Native",
+                Command = "custom-pdf-native"
+            };
+            var adapter = new CustomPdfNativeAdapter();
+            var cliExecutor = new CustomStubCliExecutorService(workspaceRoot, tool, adapter);
+            var stagingService = new AttachmentStagingService(cliExecutor, NullLogger<AttachmentStagingService>.Instance);
+            var service = new MessageSubmissionService(
+                cliExecutor,
+                new SingleAdapterFactory(adapter),
+                stagingService,
+                NullLogger<MessageSubmissionService>.Instance);
+
+            var prepared = await service.PrepareAsync(new MessageDraft
+            {
+                DraftId = "submission-custom-capabilities",
+                SessionId = "session-custom-capabilities",
+                ToolId = tool.Id,
+                Channel = MessageSubmissionChannel.Web,
+                Text = "Review all attached files",
+                Attachments =
+                [
+                    new MessageDraftAttachmentInput
+                    {
+                        FileName = "notes.pdf",
+                        ContentType = "application/pdf",
+                        Content = [0x01, 0x02]
+                    },
+                    new MessageDraftAttachmentInput
+                    {
+                        FileName = "diagram.png",
+                        ContentType = "image/png",
+                        Content = [0x03, 0x04]
+                    }
+                ]
+            });
+
+            Assert.Single(prepared.ExecutionRequest.NativeAttachments);
+            Assert.Equal(MessageAttachmentKind.Pdf, prepared.ExecutionRequest.NativeAttachments[0].Kind);
+            Assert.Single(prepared.ExecutionRequest.ReferenceAttachments);
+            Assert.Equal(MessageAttachmentKind.Image, prepared.ExecutionRequest.ReferenceAttachments[0].Kind);
+            Assert.Contains(prepared.Warnings, warning => warning.Code == "partial-downgrade");
+        }
+        finally
+        {
+            DeleteWorkspaceRoot(workspaceRoot);
+        }
+    }
+
     private static MessageSubmissionService CreateService(string workspaceRoot)
     {
         var cliExecutor = new StubCliExecutorService(workspaceRoot);
@@ -204,5 +262,85 @@ public class MessageSubmissionServiceTests
         public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
         public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
         public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
+    }
+
+    private sealed class CustomStubCliExecutorService(string workspaceRoot, CliToolConfig tool, ICliToolAdapter adapter) : ICliExecutorService
+    {
+        public ICliToolAdapter? GetAdapter(CliToolConfig requestTool)
+            => string.Equals(requestTool.Id, tool.Id, StringComparison.OrdinalIgnoreCase) ? adapter : null;
+
+        public ICliToolAdapter? GetAdapterById(string toolId)
+            => string.Equals(toolId, tool.Id, StringComparison.OrdinalIgnoreCase) ? adapter : null;
+
+        public bool SupportsStreamParsing(CliToolConfig toolConfig) => false;
+        public string? GetCliThreadId(string sessionId) => null;
+        public void SetCliThreadId(string sessionId, string threadId) => throw new NotSupportedException();
+        public Task ResetSessionRuntimeAsync(string sessionId, bool clearCliThreadId = true, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task StopSessionExecutionAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public bool SupportsLowInterruptionContinue(string toolId) => false;
+        public bool CanStartLowInterruptionContinue(string sessionId, string toolId) => false;
+        public IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(string sessionId, string toolId, string? prompt = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public List<CliToolConfig> GetAvailableTools(string? username = null) => [tool];
+        public CliToolConfig? GetTool(string toolId, string? username = null) => string.Equals(toolId, tool.Id, StringComparison.OrdinalIgnoreCase) ? tool : null;
+        public bool ValidateTool(string toolId, string? username = null) => string.Equals(toolId, tool.Id, StringComparison.OrdinalIgnoreCase);
+        public void CleanupSessionWorkspace(string sessionId) => throw new NotSupportedException();
+        public void CleanupExpiredWorkspaces() => throw new NotSupportedException();
+        public string GetSessionWorkspacePath(string sessionId) => workspaceRoot;
+        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null) => Task.FromResult(new Dictionary<string, string>());
+        public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null) => throw new NotSupportedException();
+        public byte[]? GetWorkspaceFile(string sessionId, string relativePath) => throw new NotSupportedException();
+        public byte[]? GetWorkspaceZip(string sessionId) => throw new NotSupportedException();
+        public Task<bool> UploadFileToWorkspaceAsync(string sessionId, string fileName, byte[] fileContent, string? relativePath = null) => throw new NotSupportedException();
+        public Task<bool> CreateFolderInWorkspaceAsync(string sessionId, string folderPath) => throw new NotSupportedException();
+        public Task<bool> DeleteWorkspaceItemAsync(string sessionId, string relativePath, bool isDirectory) => throw new NotSupportedException();
+        public Task<bool> MoveFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
+        public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
+        public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName) => throw new NotSupportedException();
+        public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
+        public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
+    }
+
+    private sealed class CustomPdfNativeAdapter : ICliToolAdapter
+    {
+        public string[] SupportedToolIds => ["custom-pdf-native"];
+
+        public bool SupportsStreamParsing => false;
+
+        public bool CanHandle(CliToolConfig tool)
+            => string.Equals(tool.Id, "custom-pdf-native", StringComparison.OrdinalIgnoreCase);
+
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => CliAttachmentCapabilities.ForNativeKinds(MessageAttachmentKind.Pdf);
+
+        public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+            => prompt;
+
+        public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+            => throw new NotSupportedException();
+
+        public CliOutputEvent? ParseOutputLine(string line) => null;
+        public string? ExtractSessionId(CliOutputEvent outputEvent) => null;
+        public string? ExtractAssistantMessage(CliOutputEvent outputEvent) => null;
+        public string GetEventTitle(CliOutputEvent outputEvent) => string.Empty;
+        public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
+        public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
+    }
+
+    private sealed class SingleAdapterFactory(ICliToolAdapter adapter) : ICliAdapterFactory
+    {
+        public ICliToolAdapter? GetAdapter(CliToolConfig tool)
+            => adapter.CanHandle(tool) ? adapter : null;
+
+        public ICliToolAdapter? GetAdapter(string toolId)
+            => adapter.SupportedToolIds.Any(id => string.Equals(id, toolId, StringComparison.OrdinalIgnoreCase)) ? adapter : null;
+
+        public bool SupportsStreamParsing(CliToolConfig tool)
+            => GetAdapter(tool)?.SupportsStreamParsing ?? false;
+
+        public IEnumerable<ICliToolAdapter> GetAllAdapters()
+            => [adapter];
     }
 }

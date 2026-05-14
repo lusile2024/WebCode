@@ -71,29 +71,6 @@ public class CodexAdapter : ICliToolAdapter
             PromptText = prompt,
             SessionContext = context
         });
-
-        var escapedPrompt = EscapeJsonString(prompt);
-
-        // 获取参数模板：优先使用配置的 ArgumentTemplate，为空则使用默认值
-        var useConfiguredTemplate = !string.IsNullOrWhiteSpace(tool.ArgumentTemplate);
-        var template = useConfiguredTemplate
-            ? tool.ArgumentTemplate
-            : context.IsResume && !string.IsNullOrEmpty(context.CliThreadId)
-                ? DefaultResumeArgumentTemplate
-                : DefaultArgumentTemplate;
-
-        // 构建会话恢复参数
-        var sessionArg = string.Empty;
-        if (context.IsResume && !string.IsNullOrEmpty(context.CliThreadId))
-        {
-            sessionArg = $"resume {context.CliThreadId}";
-        }
-
-        // 替换模板占位符
-        return NormalizeArguments(template
-            .Replace("{prompt}", escapedPrompt)
-            .Replace("{cliThreadId}", context.CliThreadId ?? string.Empty)
-            .Replace("{session}", sessionArg));
     }
 
     public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)

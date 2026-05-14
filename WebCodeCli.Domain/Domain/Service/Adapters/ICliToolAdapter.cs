@@ -29,7 +29,15 @@ public interface ICliToolAdapter
         => CliAttachmentCapabilities.ReferenceOnly();
 
     string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
-        => BuildArguments(tool, request.PromptText, request.SessionContext);
+    {
+        if (request.NativeAttachments.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Adapter for tool '{tool.Id}' must override request-based argument translation when native attachments are present.");
+        }
+
+        return BuildArguments(tool, request.BuildPromptText(), request.SessionContext);
+    }
 
     /// <summary>
     /// 构建命令行参数
