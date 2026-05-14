@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using SqlSugar;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Exceptions;
@@ -190,7 +191,9 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             MergeManagedToolSnapshot(session, existingSession);
             
             // 保存会话实体
-            var sessionEntity = MapToSessionEntity(session, username);
+            await ExecuteWithTransactionIfAvailableAsync(async () =>
+            {
+                var sessionEntity = MapToSessionEntity(session, username);
             var sessionSuccess = await _sessionRepository.InsertOrUpdateAsync(sessionEntity);
 
             if (!sessionSuccess)
@@ -223,11 +226,22 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
                         MapToAttachmentEntity(attachment, messageEntity.MessageId, session.SessionId, username)));
                 }
 
-                await _messageRepository.InsertMessagesAsync(messageEntities);
-                await _messageAttachmentRepository.InsertAttachmentsAsync(attachmentEntities);
+                var messagesInserted = await _messageRepository.InsertMessagesAsync(messageEntities);
+                if (!messagesInserted)
+                {
+                    throw new InvalidOperationException("淇濆瓨浼氳瘽娑堟伅澶辫触锛岃绋嶅悗閲嶈瘯");
+                }
+
+                var attachmentsInserted = await _messageAttachmentRepository.InsertAttachmentsAsync(attachmentEntities);
+                if (!attachmentsInserted)
+                {
+                    throw new InvalidOperationException("淇濆瓨浼氳瘽闄勪欢澶辫触锛岃绋嶅悗閲嶈瘯");
+                }
             }
 
             // 更新缓存
+            });
+
             _sessionCache[session.SessionId] = session;
             
             // 更新全局缓存中的会话
@@ -536,15 +550,19 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             IsWorkspaceValid = entity.IsWorkspaceValid,
             IsCustomWorkspace = entity.IsCustomWorkspace,
             ProjectId = entity.ProjectId,
-            Messages = messageEntities.Select(m => new ChatMessage
+            Messages = messageEntities.Select(m =>
             {
-                Id = string.IsNullOrWhiteSpace(m.MessageId) ? Guid.NewGuid().ToString("N") : m.MessageId,
-                Role = m.Role,
-                Content = m.Content ?? string.Empty,
-                CreatedAt = m.CreatedAt,
-                Attachments = attachmentsByMessageId.TryGetValue(m.MessageId, out var attachments)
-                    ? attachments
-                    : new List<MessageAttachment>()
+                var logicalMessageId = ResolveLogicalMessageId(m);
+                return new ChatMessage
+                {
+                    Id = logicalMessageId,
+                    Role = m.Role,
+                    Content = m.Content ?? string.Empty,
+                    CreatedAt = m.CreatedAt,
+                    Attachments = attachmentsByMessageId.TryGetValue(logicalMessageId, out var attachments)
+                        ? attachments
+                        : new List<MessageAttachment>()
+                };
             }).ToList()
         };
     }
@@ -628,6 +646,47 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             WorkspaceRelativePath = attachmentEntity.WorkspaceRelativePath,
             CreatedAt = attachmentEntity.CreatedAt
         };
+    }
+
+    private async Task ExecuteWithTransactionIfAvailableAsync(Func<Task> action)
+    {
+        var db = TryGetTransactionDb();
+        if (db == null)
+        {
+            await action();
+            return;
+        }
+
+        await db.Ado.BeginTranAsync();
+        try
+        {
+            await action();
+            await db.Ado.CommitTranAsync();
+        }
+        catch
+        {
+            await db.Ado.RollbackTranAsync();
+            throw;
+        }
+    }
+
+    private SqlSugarScope? TryGetTransactionDb()
+    {
+        try
+        {
+            return _sessionRepository.GetDB();
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveLogicalMessageId(ChatMessageEntity messageEntity)
+    {
+        return string.IsNullOrWhiteSpace(messageEntity.MessageId)
+            ? $"legacy-msg-{messageEntity.Id}"
+            : messageEntity.MessageId;
     }
 
     private static void MergeManagedToolSnapshot(SessionHistory session, ChatSessionEntity? existingEntity)

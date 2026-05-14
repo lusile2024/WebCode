@@ -238,6 +238,7 @@ public static class DatabaseInitializer
             EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotSyncedAt", "datetime NULL", logger);
             EnsureColumnIfNotExists(db, "ChatSession", "ToolLaunchOverridesJson", "TEXT NULL", logger);
             EnsureColumnIfNotExists(db, "ChatMessage", "MessageId", "varchar(64) NOT NULL DEFAULT ''", logger);
+            BackfillLegacyChatMessageIds(db, logger);
             BackfillCliThreadIdsFromImportedTitles(db, logger);
         }
         catch (Exception ex)
@@ -303,6 +304,17 @@ public static class DatabaseInitializer
     /// <summary>
     /// 为聊天会话相关表创建索引
     /// </summary>
+    private static void BackfillLegacyChatMessageIds(SqlSugarScope db, ILogger? logger = null)
+    {
+        var rows = db.Ado.ExecuteCommand(
+            "UPDATE ChatMessage SET MessageId = 'legacy-msg-' || Id WHERE IFNULL(MessageId, '') = ''");
+
+        if (rows > 0)
+        {
+            logger?.LogInformation("Backfilled {Count} ChatMessage.MessageId values", rows);
+        }
+    }
+
     private static void InitializeChatSessionIndexes(SqlSugarScope db, ILogger? logger = null)
     {
         try

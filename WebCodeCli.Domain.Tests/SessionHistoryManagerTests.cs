@@ -58,6 +58,106 @@ public class SessionHistoryManagerTests
     }
 
     [Fact]
+    public async Task GetSessionAsync_WhenStoredMessageIdIsBlank_UsesStableLegacyIdAcrossLoads()
+    {
+        var sessionRepository = new InMemoryChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = "session-legacy-message-id",
+                Username = "default",
+                Title = "Legacy message id",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\superpowers",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var messageRepository = new InMemoryChatMessageRepository(
+        [
+            new ChatMessageEntity
+            {
+                Id = 42,
+                MessageId = string.Empty,
+                SessionId = "session-legacy-message-id",
+                Username = "default",
+                Role = "user",
+                Content = "legacy message",
+                CreatedAt = DateTime.UtcNow
+            }
+        ]);
+        var manager = CreateManager(sessionRepository, messageRepository);
+
+        var firstLoad = await manager.GetSessionAsync("session-legacy-message-id");
+        manager.ClearCache();
+        var secondLoad = await manager.GetSessionAsync("session-legacy-message-id");
+
+        var firstMessage = Assert.Single(firstLoad!.Messages);
+        var secondMessage = Assert.Single(secondLoad!.Messages);
+        Assert.Equal("legacy-msg-42", firstMessage.Id);
+        Assert.Equal(firstMessage.Id, secondMessage.Id);
+    }
+
+    [Fact]
+    public async Task SaveSessionImmediateAsync_RoundTripsAttachmentOrderWhenCreatedAtMatches()
+    {
+        var manager = CreateManager();
+        var createdAt = new DateTime(2026, 05, 14, 12, 0, 0, DateTimeKind.Utc);
+        var session = new SessionHistory
+        {
+            SessionId = "session-attachment-order",
+            Title = "Attachment order",
+            WorkspacePath = @"D:\VSWorkshop\WebCode\artifacts\session-attachment-order",
+            ToolId = "codex",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Id = "msg-user-order",
+                    Role = "user",
+                    Content = "Review these files in order",
+                    Attachments =
+                    [
+                        new MessageAttachment
+                        {
+                            Id = "att-a",
+                            DisplayName = "a.txt",
+                            MimeType = "text/plain",
+                            Extension = ".txt",
+                            SizeBytes = 1,
+                            Kind = MessageAttachmentKind.Text,
+                            WorkspaceRelativePath = ".webcode/message-inputs/submission-1/a.txt",
+                            CreatedAt = createdAt
+                        },
+                        new MessageAttachment
+                        {
+                            Id = "att-b",
+                            DisplayName = "b.txt",
+                            MimeType = "text/plain",
+                            Extension = ".txt",
+                            SizeBytes = 1,
+                            Kind = MessageAttachmentKind.Text,
+                            WorkspaceRelativePath = ".webcode/message-inputs/submission-1/b.txt",
+                            CreatedAt = createdAt
+                        }
+                    ]
+                }
+            ]
+        };
+
+        await manager.SaveSessionImmediateAsync(session);
+        manager.ClearCache();
+
+        var reloaded = await manager.GetSessionAsync("session-attachment-order");
+
+        var message = Assert.Single(reloaded!.Messages);
+        Assert.Collection(
+            message.Attachments,
+            attachment => Assert.Equal("att-a", attachment.Id),
+            attachment => Assert.Equal("att-b", attachment.Id));
+    }
+
+    [Fact]
     public async Task SaveSessionImmediateAsync_RoundTripsToolLaunchOverrides()
     {
         var sessionRepository = new InMemoryChatSessionRepository();
@@ -293,9 +393,9 @@ public class SessionHistoryManagerTests
         public Task<string> CreateFeishuSessionAsync(string feishuChatKey, string username, string? workspacePath = null, string? toolId = null) => Task.FromResult(Guid.NewGuid().ToString("N"));
     }
 
-    private sealed class InMemoryChatMessageRepository : IChatMessageRepository
+    private sealed class InMemoryChatMessageRepository(IEnumerable<ChatMessageEntity>? initialMessages = null) : IChatMessageRepository
     {
-        private readonly List<ChatMessageEntity> _messages = [];
+        private readonly List<ChatMessageEntity> _messages = initialMessages?.ToList() ?? [];
 
         public SqlSugarScope GetDB() => throw new NotSupportedException();
         public List<ChatMessageEntity> GetList() => [.. _messages];
@@ -367,9 +467,10 @@ public class SessionHistoryManagerTests
         }
     }
 
-    private sealed class InMemoryChatMessageAttachmentRepository : IChatMessageAttachmentRepository
+    private sealed class InMemoryChatMessageAttachmentRepository(IEnumerable<ChatMessageAttachmentEntity>? initialAttachments = null) : IChatMessageAttachmentRepository
     {
-        private readonly List<ChatMessageAttachmentEntity> _attachments = [];
+        private readonly List<ChatMessageAttachmentEntity> _attachments = initialAttachments?.ToList() ?? [];
+        private int _nextId = (initialAttachments?.Select(x => x.Id).DefaultIfEmpty(0).Max() ?? 0) + 1;
 
         public SqlSugarScope GetDB() => throw new NotSupportedException();
         public List<ChatMessageAttachmentEntity> GetList() => [.. _attachments];
@@ -420,7 +521,11 @@ public class SessionHistoryManagerTests
         public Task<bool> InsertOrUpdateAsync(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
         public bool IsAny(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().Any(whereExpression);
         public Task<bool> IsAnyAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(IsAny(whereExpression));
-        public Task<List<ChatMessageAttachmentEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_attachments.Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).ToList());
+        public Task<List<ChatMessageAttachmentEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_attachments
+            .Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.CreatedAt)
+            .ThenBy(x => x.Id)
+            .ToList());
         public Task<bool> DeleteBySessionIdAndUsernameAsync(string sessionId, string username)
         {
             _attachments.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase));
@@ -429,6 +534,14 @@ public class SessionHistoryManagerTests
 
         public Task<bool> InsertAttachmentsAsync(List<ChatMessageAttachmentEntity> attachments)
         {
+            foreach (var attachment in attachments)
+            {
+                if (attachment.Id <= 0)
+                {
+                    attachment.Id = _nextId++;
+                }
+            }
+
             _attachments.AddRange(attachments);
             return Task.FromResult(true);
         }

@@ -16,7 +16,7 @@ public class ChatMessageAttachmentRepository : Repository<ChatMessageAttachmentE
     {
         return await GetDB().Queryable<ChatMessageAttachmentEntity>()
             .Where(x => x.SessionId == sessionId && x.Username == username)
-            .OrderBy(x => x.CreatedAt, OrderByType.Asc)
+            .OrderBy("CreatedAt asc, Id asc")
             .ToListAsync();
     }
 
