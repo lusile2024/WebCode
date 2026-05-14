@@ -158,6 +158,66 @@ public class SessionHistoryManagerTests
     }
 
     [Fact]
+    public async Task DeleteSessionAsync_RemovesSessionMessagesAndAttachments()
+    {
+        var sessionRepository = new InMemoryChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = "session-delete-cleanup",
+                Username = "default",
+                Title = "Delete cleanup",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\superpowers",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var messageRepository = new InMemoryChatMessageRepository(
+        [
+            new ChatMessageEntity
+            {
+                Id = 7,
+                MessageId = "msg-delete-1",
+                SessionId = "session-delete-cleanup",
+                Username = "default",
+                Role = "user",
+                Content = "delete me",
+                CreatedAt = DateTime.UtcNow
+            }
+        ]);
+        var attachmentRepository = new InMemoryChatMessageAttachmentRepository(
+        [
+            new ChatMessageAttachmentEntity
+            {
+                Id = 11,
+                MessageId = "msg-delete-1",
+                SessionId = "session-delete-cleanup",
+                Username = "default",
+                AttachmentId = "att-delete-1",
+                DisplayName = "delete.txt",
+                MimeType = "text/plain",
+                Extension = ".txt",
+                SizeBytes = 3,
+                Kind = MessageAttachmentKind.Text.ToString(),
+                WorkspaceRelativePath = ".webcode/message-inputs/delete.txt",
+                CreatedAt = DateTime.UtcNow
+            }
+        ]);
+        var manager = CreateManager(sessionRepository, messageRepository, attachmentRepository);
+
+        await manager.DeleteSessionAsync("session-delete-cleanup");
+
+        var session = await manager.GetSessionAsync("session-delete-cleanup");
+        var remainingMessages = await messageRepository.GetBySessionIdAndUsernameAsync("session-delete-cleanup", "default");
+        var remainingAttachments = await attachmentRepository.GetBySessionIdAndUsernameAsync("session-delete-cleanup", "default");
+
+        Assert.Null(session);
+        Assert.Empty(remainingMessages);
+        Assert.Empty(remainingAttachments);
+    }
+
+    [Fact]
     public async Task SaveSessionImmediateAsync_RoundTripsToolLaunchOverrides()
     {
         var sessionRepository = new InMemoryChatSessionRepository();

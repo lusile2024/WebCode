@@ -281,31 +281,35 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
         try
         {
             var username = _userContextService.GetCurrentUsername();
-            
-            // 删除消息
-            await _messageAttachmentRepository.DeleteBySessionIdAndUsernameAsync(sessionId, username);
-            await _messageRepository.DeleteBySessionIdAndUsernameAsync(sessionId, username);
-            
-            // 删除会话
-            var success = await _sessionRepository.DeleteByIdAndUsernameAsync(sessionId, username);
 
-            if (success)
+            try
             {
-                // 更新缓存
-                _sessionCache.TryRemove(sessionId, out _);
-                
-                // 从全局缓存中移除
-                if (_allSessionsCache != null)
+                await ExecuteWithTransactionIfAvailableAsync(async () =>
                 {
-                    _allSessionsCache.RemoveAll(s => s.SessionId == sessionId);
-                }
-                
-                _logger.LogInformation("会话 {SessionId} 已删除", sessionId);
+                    await _messageAttachmentRepository.DeleteBySessionIdAndUsernameAsync(sessionId, username);
+                    await _messageRepository.DeleteBySessionIdAndUsernameAsync(sessionId, username);
+
+                    var success = await _sessionRepository.DeleteByIdAndUsernameAsync(sessionId, username);
+                    if (!success)
+                    {
+                        throw new SessionDeleteNotFoundException(sessionId);
+                    }
+                });
             }
-            else
+            catch (SessionDeleteNotFoundException)
             {
                 _logger.LogWarning("会话 {SessionId} 不存在或删除失败", sessionId);
+                return;
             }
+
+            _sessionCache.TryRemove(sessionId, out _);
+
+            if (_allSessionsCache != null)
+            {
+                _allSessionsCache.RemoveAll(s => s.SessionId == sessionId);
+            }
+
+            _logger.LogInformation("会话 {SessionId} 已删除", sessionId);
         }
         catch (Exception ex)
         {
@@ -688,6 +692,9 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             ? $"legacy-msg-{messageEntity.Id}"
             : messageEntity.MessageId;
     }
+
+    private sealed class SessionDeleteNotFoundException(string sessionId)
+        : InvalidOperationException($"Session '{sessionId}' was not found during delete.");
 
     private static void MergeManagedToolSnapshot(SessionHistory session, ChatSessionEntity? existingEntity)
     {
