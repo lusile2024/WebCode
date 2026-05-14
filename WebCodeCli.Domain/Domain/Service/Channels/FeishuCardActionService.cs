@@ -241,6 +241,12 @@ public class FeishuCardActionService
                     return await HandleToggleReplyTtsAsync(chatId, operatorUserId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
+                case "open_attachment_draft":
+                    return await HandleOpenAttachmentDraftAsync(action, chatId, operatorUserId, appId);
+                case "submit_attachment_draft":
+                    return await HandleSubmitAttachmentDraftAsync(action, chatId, operatorUserId, appId);
+                case "clear_attachment_draft":
+                    return HandleClearAttachmentDraft(action, chatId, operatorUserId, appId);
                 case FeishuHelpCardAction.SubmitSuperpowersQuickInputAction:
                 case FeishuHelpCardAction.ContinueSuperpowersAction:
                 case FeishuHelpCardAction.StopStreamingExecutionAction:
@@ -617,6 +623,199 @@ public class FeishuCardActionService
         });
 
         return toastResponse;
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleOpenAttachmentDraftAsync(
+        FeishuHelpCardAction action,
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        var senderId = ResolveAttachmentDraftSenderId(operatorUserId);
+        if (string.IsNullOrWhiteSpace(senderId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少当前飞书用户，无法打开附件草稿", "error");
+        }
+
+        var targetChatKey = action.ChatKey ?? chatId;
+        if (string.IsNullOrWhiteSpace(targetChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少会话信息，无法打开附件草稿", "error");
+        }
+
+        var normalizedChatKey = NormalizeChatKey(targetChatKey);
+        var sessionId = action.SessionId ?? _feishuChannel.GetCurrentSession(normalizedChatKey);
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前没有活跃会话，请先创建或切换会话", "warning");
+        }
+
+        var toolId = await ResolveSessionToolIdAsync(sessionId, action.ToolId, normalizedChatKey, null);
+        var draftService = GetAttachmentDraftService();
+        var draftCardBuilder = GetAttachmentDraftCardBuilder();
+        var draft = draftService.OpenDraft(appId, normalizedChatKey, senderId, sessionId, toolId);
+        var card = draftCardBuilder.BuildCard(draft);
+
+        return _cardBuilder.BuildCardActionResponseV2(card, "📎 已打开附件草稿", "info");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleSubmitAttachmentDraftAsync(
+        FeishuHelpCardAction action,
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        var senderId = ResolveAttachmentDraftSenderId(operatorUserId);
+        if (string.IsNullOrWhiteSpace(senderId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少当前飞书用户，无法提交附件草稿", "error");
+        }
+
+        var targetChatKey = action.ChatKey ?? chatId;
+        if (string.IsNullOrWhiteSpace(targetChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少会话信息，无法提交附件草稿", "error");
+        }
+
+        var normalizedChatKey = NormalizeChatKey(targetChatKey);
+        var draftService = GetAttachmentDraftService();
+        var draft = draftService.GetDraft(appId, normalizedChatKey, senderId);
+        if (draft == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前没有可提交的附件草稿", "warning");
+        }
+
+        var toastResponse = _cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始提交附件草稿...", "info");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var username = ResolveFeishuUsername(normalizedChatKey, operatorUserId);
+                var messageDraft = BuildMessageDraftFromAttachmentDraft(draft, username);
+
+                using var scope = _serviceProvider.CreateScope();
+                var submissionService = scope.ServiceProvider.GetRequiredService<IMessageSubmissionService>();
+                var preparedSubmission = await submissionService.PrepareAsync(messageDraft);
+                await _feishuChannel.ExecutePreparedSubmissionAsync(
+                    preparedSubmission,
+                    normalizedChatKey,
+                    username: username,
+                    appId: appId);
+                draftService.ClearDraft(appId, normalizedChatKey, senderId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "提交附件草稿失败: ChatId={ChatId}", normalizedChatKey);
+                var username = ResolveFeishuUsername(normalizedChatKey, operatorUserId);
+                await _feishuChannel.SendMessageAsync(
+                    normalizedChatKey,
+                    $"❌ 提交附件草稿失败: {ex.Message}",
+                    username,
+                    appId);
+            }
+        });
+
+        return toastResponse;
+    }
+
+    private CardActionTriggerResponseDto HandleClearAttachmentDraft(
+        FeishuHelpCardAction action,
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        var senderId = ResolveAttachmentDraftSenderId(operatorUserId);
+        if (string.IsNullOrWhiteSpace(senderId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少当前飞书用户，无法清空附件草稿", "error");
+        }
+
+        var targetChatKey = action.ChatKey ?? chatId;
+        if (string.IsNullOrWhiteSpace(targetChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少会话信息，无法清空附件草稿", "error");
+        }
+
+        var normalizedChatKey = NormalizeChatKey(targetChatKey);
+        var draftService = GetAttachmentDraftService();
+        if (draftService.GetDraft(appId, normalizedChatKey, senderId) == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前没有可清空的附件草稿", "warning");
+        }
+
+        draftService.ClearDraft(appId, normalizedChatKey, senderId);
+        return _cardBuilder.BuildCardActionToastOnlyResponse("✅ 已清空附件草稿", "success");
+    }
+
+    private IFeishuAttachmentDraftService GetAttachmentDraftService()
+    {
+        return _serviceProvider.GetService<IFeishuAttachmentDraftService>()
+            ?? throw new InvalidOperationException("Feishu attachment draft service is not available.");
+    }
+
+    private FeishuAttachmentDraftCardBuilder GetAttachmentDraftCardBuilder()
+    {
+        return _serviceProvider.GetService<FeishuAttachmentDraftCardBuilder>()
+            ?? throw new InvalidOperationException("Feishu attachment draft card builder is not available.");
+    }
+
+    private static string? ResolveAttachmentDraftSenderId(string? operatorUserId)
+    {
+        return string.IsNullOrWhiteSpace(operatorUserId)
+            ? null
+            : operatorUserId.Trim();
+    }
+
+    private MessageDraft BuildMessageDraftFromAttachmentDraft(
+        FeishuAttachmentDraftState draft,
+        string? username)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
+        var attachments = new List<MessageDraftAttachmentInput>(draft.Attachments.Count);
+        foreach (var attachment in draft.Attachments)
+        {
+            var relativePath = attachment.WorkspaceRelativePath?.Trim();
+            if (string.IsNullOrWhiteSpace(relativePath))
+            {
+                throw new InvalidOperationException(
+                    $"Draft attachment '{attachment.DisplayName}' is missing a workspace path.");
+            }
+
+            var fileBytes = _cliExecutor.GetWorkspaceFile(draft.SessionId, relativePath);
+            if (fileBytes == null)
+            {
+                throw new InvalidOperationException(
+                    $"Draft attachment '{attachment.DisplayName}' could not be read from '{relativePath}'.");
+            }
+
+            attachments.Add(new MessageDraftAttachmentInput
+            {
+                Id = string.IsNullOrWhiteSpace(attachment.Id)
+                    ? Guid.NewGuid().ToString("N")
+                    : attachment.Id,
+                FileName = string.IsNullOrWhiteSpace(attachment.DisplayName)
+                    ? Path.GetFileName(relativePath)
+                    : attachment.DisplayName,
+                ContentType = string.IsNullOrWhiteSpace(attachment.MimeType)
+                    ? "application/octet-stream"
+                    : attachment.MimeType,
+                Content = fileBytes
+            });
+        }
+
+        return new MessageDraft
+        {
+            DraftId = string.IsNullOrWhiteSpace(draft.DraftId)
+                ? Guid.NewGuid().ToString("N")
+                : draft.DraftId,
+            SessionId = draft.SessionId,
+            ToolId = draft.ToolId,
+            Channel = MessageSubmissionChannel.Feishu,
+            Text = draft.Text ?? string.Empty,
+            Attachments = attachments,
+            SubmittedBy = username
+        };
     }
 
     private async Task<CardActionTriggerResponseDto> HandleSuperpowersQuickActionAsync(

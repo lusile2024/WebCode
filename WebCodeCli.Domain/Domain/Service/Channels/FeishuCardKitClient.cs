@@ -279,6 +279,46 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return ExtractMessageId(result, "reply text message");
     }
 
+    public async Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+        FeishuIncomingAttachment attachment,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+        ArgumentException.ThrowIfNullOrWhiteSpace(attachment.AttachmentKey);
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var path = string.Equals(attachment.MessageType, "image", StringComparison.OrdinalIgnoreCase)
+            ? $"/open-apis/im/v1/images/{attachment.AttachmentKey}"
+            : $"/open-apis/im/v1/files/{attachment.AttachmentKey}/download";
+
+        var response = await GetAsync(path, token, effectiveOptions, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError(
+                "Download attachment failed: Status={Status}, Key={AttachmentKey}, Content={Content}",
+                response.StatusCode,
+                attachment.AttachmentKey,
+                content);
+            throw new HttpRequestException($"Download attachment failed: {response.StatusCode}");
+        }
+
+        var contentBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+
+        return new FeishuDownloadedAttachment
+        {
+            DisplayName = string.IsNullOrWhiteSpace(attachment.DisplayName)
+                ? attachment.AttachmentKey
+                : attachment.DisplayName,
+            MimeType = string.IsNullOrWhiteSpace(contentType) ? attachment.MimeType : contentType,
+            Content = contentBytes,
+            SizeBytes = contentBytes.LongLength
+        };
+    }
+
     public async Task<FeishuStreamingHandle> CreateStreamingHandleAsync(
         string chatId,
         string? replyMessageId,
@@ -917,6 +957,21 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             Encoding.UTF8,
             "application/json");
 
+        if (!string.IsNullOrEmpty(token))
+        {
+            request.Headers.Add("Authorization", $"Bearer {token}");
+        }
+
+        return await SendAsync(request, options, cancellationToken);
+    }
+
+    private async Task<HttpResponseMessage> GetAsync(
+        string path,
+        string token,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}{path}");
         if (!string.IsNullOrEmpty(token))
         {
             request.Headers.Add("Authorization", $"Bearer {token}");

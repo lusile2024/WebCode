@@ -248,6 +248,83 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
+    public async Task HandleIncomingMessageAsync_TextMessageWithOpenDraft_UpdatesDraftInsteadOfExecutingCli()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var draftService = new FeishuAttachmentDraftService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-open-draft-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+
+        var cliExecutor = new TakeoverCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService(),
+            attachmentDraftService: draftService);
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            var sessionId = service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_open_draft_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            draftService.OpenDraft(
+                "cli_test",
+                "oc_open_draft_chat",
+                "feishu-user-1",
+                sessionId,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                AppId = "cli_test",
+                ChatId = "oc_open_draft_chat",
+                SenderId = "feishu-user-1",
+                SenderName = "luhaiyan",
+                MessageId = "msg-draft-text",
+                Content = "Please include these staged files in one request."
+            });
+
+            var draft = draftService.GetDraft("cli_test", "oc_open_draft_chat", "feishu-user-1");
+
+            Assert.NotNull(draft);
+            Assert.Equal(sessionId, draft!.SessionId);
+            Assert.Equal("codex", draft.ToolId);
+            Assert.Equal("Please include these staged files in one request.", draft.Text);
+            Assert.Empty(cliExecutor.ExecuteCalls);
+            Assert.DoesNotContain(chatSessionService.Messages.Values.SelectMany(messages => messages), message => message.Role == "user");
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HandleIncomingMessageAsync_WhenSupersededAfterStreamingOutput_KeepsExistingCardContent()
     {
         var repository = CreateRepository(out var repositoryProxy);
@@ -1804,11 +1881,13 @@ public class FeishuChannelServiceTests
         IUserContextService userContextService,
         IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
         ISuperpowersCapabilityService? superpowersCapabilityService = null,
-        IGoalCapabilityService? goalCapabilityService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
+        IGoalCapabilityService? goalCapabilityService = null,
+        IFeishuAttachmentDraftService? attachmentDraftService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
         private readonly IGoalCapabilityService _goalCapabilityService = goalCapabilityService ?? new StubGoalCapabilityService();
+        private readonly IFeishuAttachmentDraftService _attachmentDraftService = attachmentDraftService ?? new FeishuAttachmentDraftService();
 
         public object? GetService(Type serviceType)
         {
@@ -1855,6 +1934,11 @@ public class FeishuChannelServiceTests
             if (serviceType == typeof(IGoalCapabilityService))
             {
                 return _goalCapabilityService;
+            }
+
+            if (serviceType == typeof(IFeishuAttachmentDraftService))
+            {
+                return _attachmentDraftService;
             }
 
             return null;
@@ -2082,6 +2166,12 @@ public class FeishuChannelServiceTests
             return Task.FromResult("reply-text");
         }
 
+        public Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+
         public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
             => throw new NotSupportedException();
 
@@ -2126,6 +2216,12 @@ public class FeishuChannelServiceTests
             LastReplyTextContent = content;
             return Task.FromResult($"reply-text-{ReplyTextCallCount}");
         }
+
+        public Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
         public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
         {

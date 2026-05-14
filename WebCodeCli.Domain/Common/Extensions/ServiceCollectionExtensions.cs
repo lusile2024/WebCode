@@ -104,6 +104,7 @@ namespace WebCodeCli.Domain.Common.Extensions
             // 注册帮助功能服务
             services.AddSingleton<FeishuCommandService>();
             services.AddSingleton<FeishuHelpCardBuilder>();
+            services.AddSingleton<FeishuAttachmentDraftCardBuilder>();
             services.AddSingleton<FeishuCardActionService>();
             services.AddSingleton<IFeishuAttachmentDraftService, FeishuAttachmentDraftService>();
             services.AddSingleton<ReplyTtsStorageRootResolver>();
