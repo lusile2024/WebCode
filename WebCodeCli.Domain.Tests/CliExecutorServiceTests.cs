@@ -714,6 +714,25 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public async Task ExecuteStreamAsync_StringOverload_InterfaceDefaultWrapsIntoRequestOverload()
+    {
+        ICliExecutorService service = new RequestOnlyCliExecutorService();
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteStreamAsync("session-default-wrapper", "codex", "review this"))
+        {
+            chunks.Add(chunk);
+        }
+
+        var recordedRequest = Assert.Single(((RequestOnlyCliExecutorService)service).RecordedRequests);
+        Assert.Equal("session-default-wrapper", recordedRequest.SessionId);
+        Assert.Equal("codex", recordedRequest.ToolId);
+        Assert.Equal("review this", recordedRequest.PromptText);
+        Assert.Empty(recordedRequest.ReferenceAttachments);
+        Assert.Contains(chunks, chunk => chunk.IsCompleted && !chunk.IsError);
+    }
+
+    [Fact]
     public void CodexAdapter_BuildArguments_WhenResuming_UsesExecResumeSyntax()
     {
         var adapter = new CodexAdapter();
@@ -4159,6 +4178,49 @@ args = ["mcp", "serve"]
         public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
 
         public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
+    }
+
+    private sealed class RequestOnlyCliExecutorService : ICliExecutorService
+    {
+        public List<CliExecutionRequest> RecordedRequests { get; } = [];
+
+        public ICliToolAdapter? GetAdapter(CliToolConfig tool) => throw new NotSupportedException();
+        public ICliToolAdapter? GetAdapterById(string toolId) => throw new NotSupportedException();
+        public bool SupportsStreamParsing(CliToolConfig tool) => throw new NotSupportedException();
+        public string? GetCliThreadId(string sessionId) => throw new NotSupportedException();
+        public void SetCliThreadId(string sessionId, string threadId) => throw new NotSupportedException();
+        public Task ResetSessionRuntimeAsync(string sessionId, bool clearCliThreadId = true, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task StopSessionExecutionAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(CliExecutionRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            RecordedRequests.Add(request);
+            yield return new StreamOutputChunk { IsCompleted = true };
+            await Task.CompletedTask;
+        }
+        public bool SupportsLowInterruptionContinue(string toolId) => throw new NotSupportedException();
+        public bool CanStartLowInterruptionContinue(string sessionId, string toolId) => throw new NotSupportedException();
+        public IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(string sessionId, string toolId, string? prompt = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public List<CliToolConfig> GetAvailableTools(string? username = null) => throw new NotSupportedException();
+        public CliToolConfig? GetTool(string toolId, string? username = null) => throw new NotSupportedException();
+        public bool ValidateTool(string toolId, string? username = null) => throw new NotSupportedException();
+        public void CleanupSessionWorkspace(string sessionId) => throw new NotSupportedException();
+        public void CleanupExpiredWorkspaces() => throw new NotSupportedException();
+        public string GetSessionWorkspacePath(string sessionId) => throw new NotSupportedException();
+        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null) => throw new NotSupportedException();
+        public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null) => throw new NotSupportedException();
+        public byte[]? GetWorkspaceFile(string sessionId, string relativePath) => throw new NotSupportedException();
+        public byte[]? GetWorkspaceZip(string sessionId) => throw new NotSupportedException();
+        public Task<bool> UploadFileToWorkspaceAsync(string sessionId, string fileName, byte[] fileContent, string? relativePath = null) => throw new NotSupportedException();
+        public Task<bool> CreateFolderInWorkspaceAsync(string sessionId, string folderPath) => throw new NotSupportedException();
+        public Task<bool> DeleteWorkspaceItemAsync(string sessionId, string relativePath, bool isDirectory) => throw new NotSupportedException();
+        public Task<bool> MoveFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
+        public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
+        public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName) => throw new NotSupportedException();
+        public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
+        public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
     }
 
     private sealed class StubSessionOutputService : ISessionOutputService

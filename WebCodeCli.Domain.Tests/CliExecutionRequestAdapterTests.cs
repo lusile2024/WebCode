@@ -6,6 +6,25 @@ namespace WebCodeCli.Domain.Tests;
 public class CliExecutionRequestAdapterTests
 {
     [Fact]
+    public void CodexAdapter_GetAttachmentCapabilities_DeclaresNativeImageSupport()
+    {
+        var adapter = new CodexAdapter();
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+
+        var capabilities = adapter.GetAttachmentCapabilities(tool);
+
+        Assert.True(capabilities.SupportsNativeAttachments);
+        Assert.True(capabilities.SupportsMultipleNativeAttachments);
+        Assert.Contains(MessageAttachmentKind.Image, capabilities.NativeKinds);
+    }
+
+    [Fact]
     public void CodexAdapter_BuildArguments_RequestOverload_EncodesNativeImagesAndReferencePreamble()
     {
         var adapter = new CodexAdapter();
@@ -54,5 +73,70 @@ public class CliExecutionRequestAdapterTests
         Assert.Contains("[WEBCODE_REFERENCE_ATTACHMENTS]", arguments, StringComparison.Ordinal);
         Assert.Contains(".webcode/message-inputs/submission-1/notes.pdf", arguments, StringComparison.Ordinal);
         Assert.Contains("Review the staged files.", arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClaudeCodeAdapter_BuildArguments_RequestOverload_IncludesReferenceAttachmentPreamble()
+    {
+        var adapter = new ClaudeCodeAdapter();
+        var tool = new CliToolConfig
+        {
+            Id = "claude-code",
+            Name = "Claude Code",
+            Command = "claude",
+            Enabled = true
+        };
+        var request = CreateReferenceOnlyRequest("claude-code");
+
+        var arguments = adapter.BuildArguments(tool, request);
+
+        Assert.Contains("[WEBCODE_REFERENCE_ATTACHMENTS]", arguments, StringComparison.Ordinal);
+        Assert.Contains(".webcode/message-inputs/submission-1/notes.txt", arguments, StringComparison.Ordinal);
+        Assert.Contains("Review the staged files.", arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenCodeAdapter_BuildArguments_RequestOverload_IncludesReferenceAttachmentPreamble()
+    {
+        var adapter = new OpenCodeAdapter();
+        var tool = new CliToolConfig
+        {
+            Id = "opencode",
+            Name = "OpenCode",
+            Command = "opencode",
+            Enabled = true
+        };
+        var request = CreateReferenceOnlyRequest("opencode");
+
+        var arguments = adapter.BuildArguments(tool, request);
+
+        Assert.Contains("[WEBCODE_REFERENCE_ATTACHMENTS]", arguments, StringComparison.Ordinal);
+        Assert.Contains(".webcode/message-inputs/submission-1/notes.txt", arguments, StringComparison.Ordinal);
+        Assert.Contains("Review the staged files.", arguments, StringComparison.Ordinal);
+    }
+
+    private static CliExecutionRequest CreateReferenceOnlyRequest(string toolId)
+    {
+        return new CliExecutionRequest
+        {
+            SessionId = "session-123",
+            ToolId = toolId,
+            PromptText = "Review the staged files.",
+            SessionContext = new CliSessionContext
+            {
+                SessionId = "session-123",
+                WorkingDirectory = Path.GetTempPath()
+            },
+            ReferenceAttachments =
+            [
+                new CliExecutionAttachment
+                {
+                    DisplayName = "notes.txt",
+                    Kind = MessageAttachmentKind.Text,
+                    AbsolutePath = @"D:\attachments\notes.txt",
+                    WorkspaceRelativePath = ".webcode/message-inputs/submission-1/notes.txt"
+                }
+            ]
+        };
     }
 }
