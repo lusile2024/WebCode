@@ -31,6 +31,11 @@ public class FeishuIncomingMessage
     public string Content { get; set; } = string.Empty;
 
     /// <summary>
+    /// 瑙ｆ瀽鍚庣殑闄勪欢鍒楄〃
+    /// </summary>
+    public List<FeishuIncomingAttachment> Attachments { get; set; } = new();
+
+    /// <summary>
     /// 发送者 ID
     /// </summary>
     public string SenderId { get; set; } = string.Empty;
