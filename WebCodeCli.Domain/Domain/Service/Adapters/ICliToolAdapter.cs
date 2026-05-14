@@ -25,6 +25,12 @@ public interface ICliToolAdapter
     /// </summary>
     bool SupportsStreamParsing { get; }
 
+    CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+        => CliAttachmentCapabilities.ReferenceOnly();
+
+    string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+        => BuildArguments(tool, request.PromptText, request.SessionContext);
+
     /// <summary>
     /// 构建命令行参数
     /// </summary>

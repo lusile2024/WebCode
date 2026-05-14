@@ -73,6 +73,11 @@ public interface ICliExecutorService
         string userPrompt,
         CancellationToken cancellationToken = default);
 
+    IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
+        CliExecutionRequest request,
+        CancellationToken cancellationToken = default)
+        => ExecuteStreamAsync(request.SessionId, request.ToolId, request.PromptText, cancellationToken);
+
     /// <summary>
     /// 判断工具是否支持少打断执行
     /// </summary>

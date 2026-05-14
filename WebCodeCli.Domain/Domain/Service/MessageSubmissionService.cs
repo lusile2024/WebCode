@@ -281,9 +281,9 @@ public class MessageSubmissionService : IMessageSubmissionService
     private CliAttachmentCapabilities ResolveAttachmentCapabilities(CliToolConfig tool)
     {
         var adapter = _cliAdapterFactory.GetAdapter(tool);
-        if (adapter is CodexAdapter)
+        if (adapter != null)
         {
-            return CliAttachmentCapabilities.ForNativeKinds(MessageAttachmentKind.Image);
+            return adapter.GetAttachmentCapabilities(tool);
         }
 
         return CliAttachmentCapabilities.ReferenceOnly();

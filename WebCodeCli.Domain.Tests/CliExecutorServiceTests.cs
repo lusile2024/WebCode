@@ -645,6 +645,75 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public async Task ExecuteStreamAsync_RequestOverload_PassesExecutionRequestToAdapter()
+    {
+        const string sessionId = "session-request-overload";
+        const string relativePath = ".webcode/message-inputs/submission-1/notes.txt";
+        var tool = new CliToolConfig
+        {
+            Id = "recording-request-tool",
+            Name = "Recording Request Tool",
+            Command = "powershell.exe",
+            Enabled = true,
+            TimeoutSeconds = 5
+        };
+        var adapter = new RecordingExecutionRequestAdapter();
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(
+                new StubChatSessionRepository(
+                [
+                    new ChatSessionEntity
+                    {
+                        SessionId = sessionId,
+                        Username = "luhaiyan",
+                        ToolId = tool.Id,
+                        WorkspacePath = Path.GetTempPath(),
+                        CreatedAt = DateTime.Now,
+                        UpdatedAt = DateTime.Now
+                    }
+                ]),
+                new StubSessionOutputService()),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(adapter),
+            new StubCcSwitchService());
+
+        var request = new CliExecutionRequest
+        {
+            SessionId = sessionId,
+            ToolId = tool.Id,
+            PromptText = "Use the staged reference attachment.",
+            ReferenceAttachments =
+            [
+                new CliExecutionAttachment
+                {
+                    DisplayName = "notes.txt",
+                    Kind = MessageAttachmentKind.Text,
+                    AbsolutePath = @"D:\attachments\notes.txt",
+                    WorkspaceRelativePath = relativePath
+                }
+            ]
+        };
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteStreamAsync(request))
+        {
+            chunks.Add(chunk);
+        }
+
+        var recordedRequest = Assert.Single(adapter.RecordedRequests);
+        var recordedAttachment = Assert.Single(recordedRequest.ReferenceAttachments);
+        Assert.Equal(relativePath, recordedAttachment.WorkspaceRelativePath);
+        Assert.Contains(chunks, chunk => chunk.IsCompleted && !chunk.IsError);
+    }
+
+    [Fact]
     public void CodexAdapter_BuildArguments_WhenResuming_UsesExecResumeSyntax()
     {
         var adapter = new CodexAdapter();
@@ -661,8 +730,15 @@ public class CliExecutorServiceTests
             CliThreadId = "thread-123",
             WorkingDirectory = Path.GetTempPath()
         };
+        var request = new CliExecutionRequest
+        {
+            SessionId = "session-resume",
+            ToolId = "codex",
+            PromptText = "/goal resume",
+            SessionContext = context
+        };
 
-        var arguments = adapter.BuildArguments(tool, "/goal resume", context);
+        var arguments = adapter.BuildArguments(tool, request);
 
         Assert.Equal(
             "exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json thread-123 \"/goal resume\"",
@@ -687,8 +763,15 @@ public class CliExecutorServiceTests
             WorkingDirectory = Path.GetTempPath(),
             LaunchModelOverride = "claude-sonnet-4"
         };
+        var request = new CliExecutionRequest
+        {
+            SessionId = "session-claude-model",
+            ToolId = "claude-code",
+            PromptText = "hello",
+            SessionContext = context
+        };
 
-        var arguments = adapter.BuildArguments(tool, "hello", context);
+        var arguments = adapter.BuildArguments(tool, request);
 
         Assert.Contains("--model \"claude-sonnet-4\"", arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("old-model", arguments, StringComparison.Ordinal);
@@ -713,8 +796,15 @@ public class CliExecutorServiceTests
             WorkingDirectory = Path.GetTempPath(),
             LaunchModelOverride = "openai/gpt-5.4"
         };
+        var request = new CliExecutionRequest
+        {
+            SessionId = "session-opencode-model",
+            ToolId = "opencode",
+            PromptText = "hello",
+            SessionContext = context
+        };
 
-        var arguments = adapter.BuildArguments(tool, "hello", context);
+        var arguments = adapter.BuildArguments(tool, request);
 
         Assert.Contains("--model \"openai/gpt-5.4\"", arguments, StringComparison.Ordinal);
         Assert.DoesNotContain("old/provider-model", arguments, StringComparison.Ordinal);
@@ -3797,6 +3887,12 @@ args = ["mcp", "serve"]
         public bool CanHandle(CliToolConfig tool)
             => string.Equals(tool.Id, "adapter-error-tool", StringComparison.OrdinalIgnoreCase);
 
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => CliAttachmentCapabilities.ReferenceOnly();
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+            => tool.ArgumentTemplate;
+
         public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
             => tool.ArgumentTemplate;
 
@@ -3850,6 +3946,12 @@ args = ["mcp", "serve"]
         public bool CanHandle(CliToolConfig tool)
             => string.Equals(tool.Id, toolId, StringComparison.OrdinalIgnoreCase);
 
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => _inner.GetAttachmentCapabilities(tool);
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+            => request.PromptText;
+
         public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
             => prompt;
 
@@ -3879,6 +3981,12 @@ args = ["mcp", "serve"]
 
         public bool CanHandle(CliToolConfig tool)
             => string.Equals(tool.Id, toolId, StringComparison.OrdinalIgnoreCase);
+
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => _inner.GetAttachmentCapabilities(tool);
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+            => tool.ArgumentTemplate;
 
         public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
             => tool.ArgumentTemplate;
@@ -3913,6 +4021,15 @@ args = ["mcp", "serve"]
 
         public bool CanHandle(CliToolConfig tool)
             => string.Equals(tool.Id, "recording-low-interruption-tool", StringComparison.OrdinalIgnoreCase);
+
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => CliAttachmentCapabilities.ReferenceOnly();
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+        {
+            BuildArgumentsCallCount++;
+            return "-NoProfile -Command \"Write-Output 'normal-path'\"";
+        }
 
         public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
         {
@@ -3980,11 +4097,56 @@ args = ["mcp", "serve"]
         public bool CanHandle(CliToolConfig tool)
             => string.Equals(tool.Id, "codex-like-stdin", StringComparison.OrdinalIgnoreCase);
 
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => CliAttachmentCapabilities.ReferenceOnly();
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+            => throw new NotSupportedException();
+
         public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
             => throw new NotSupportedException();
 
         public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
             => "-NoProfile -Command \"$inputText = [Console]::In.ReadToEnd(); Write-Output $inputText\"";
+
+        public CliOutputEvent? ParseOutputLine(string line) => null;
+
+        public string? ExtractSessionId(CliOutputEvent outputEvent) => null;
+
+        public string? ExtractAssistantMessage(CliOutputEvent outputEvent) => null;
+
+        public string GetEventTitle(CliOutputEvent outputEvent) => outputEvent.Title ?? string.Empty;
+
+        public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
+
+        public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
+    }
+
+    private sealed class RecordingExecutionRequestAdapter : ICliToolAdapter
+    {
+        public string[] SupportedToolIds => ["recording-request-tool"];
+
+        public bool SupportsStreamParsing => false;
+
+        public List<CliExecutionRequest> RecordedRequests { get; } = [];
+
+        public bool CanHandle(CliToolConfig tool)
+            => string.Equals(tool.Id, "recording-request-tool", StringComparison.OrdinalIgnoreCase);
+
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => CliAttachmentCapabilities.ReferenceOnly();
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+        {
+            RecordedRequests.Add(request);
+            return "-NoProfile -Command \"Write-Output 'request-overload'\"";
+        }
+
+        public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+            => throw new NotSupportedException();
+
+        public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+            => throw new NotSupportedException();
 
         public CliOutputEvent? ParseOutputLine(string line) => null;
 
