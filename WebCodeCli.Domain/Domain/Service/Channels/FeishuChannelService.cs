@@ -329,6 +329,41 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 return;
             }
 
+            if (message.Attachments.Count > 0)
+            {
+                if (string.IsNullOrWhiteSpace(message.SenderId))
+                {
+                    await ReplyMessageAsync(
+                        message.MessageId,
+                        "⚠️ 收到附件，但无法识别当前飞书用户，未能打开附件草稿。",
+                        message.SenderName,
+                        message.AppId);
+                    return;
+                }
+
+                string attachmentDraftSessionId;
+                try
+                {
+                    attachmentDraftSessionId = GetCurrentSession(message);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    await ReplyMessageAsync(message.MessageId, $"鈿狅笍 {ex.Message}", message.SenderName, message.AppId);
+                    return;
+                }
+
+                var attachmentDraftToolId = ResolveToolId(message.ChatId, message.SenderName);
+                var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
+                var attachmentDraft = _attachmentDraftService.OpenDraft(
+                    message.AppId,
+                    message.ChatId,
+                    message.SenderId,
+                    attachmentDraftSessionId,
+                    attachmentDraftToolId);
+                await UpdateOpenAttachmentDraftAsync(attachmentDraft, message, normalizedPrompt, effectiveOptions);
+                return;
+            }
+
             string sessionId;
             try
             {

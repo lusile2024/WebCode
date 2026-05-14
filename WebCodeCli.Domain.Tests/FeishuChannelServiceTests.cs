@@ -538,6 +538,84 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
+    public async Task HandleIncomingMessageAsync_AttachmentMessageWithoutOpenDraft_StartsVisibleDraftInsteadOfExecutingCli()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new DraftAttachmentRecordingFeishuCardKitClient();
+        var chatSessionService = new RecordingChatSessionService();
+        var draftService = new FeishuAttachmentDraftService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-auto-open-draft-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new TakeoverCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService(),
+            attachmentDraftService: draftService);
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            var sessionId = service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_attachment_without_draft_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                AppId = "cli_test",
+                ChatId = "oc_attachment_without_draft_chat",
+                SenderId = "feishu-user-no-draft",
+                SenderName = "luhaiyan",
+                MessageId = "msg-attachment-without-draft",
+                Content = string.Empty,
+                Attachments =
+                [
+                    new FeishuIncomingAttachment
+                    {
+                        MessageType = "file",
+                        AttachmentKey = "file-without-draft",
+                        DisplayName = "notes.txt",
+                        MimeType = "text/plain"
+                    }
+                ]
+            });
+
+            var draft = draftService.GetDraft("cli_test", "oc_attachment_without_draft_chat", "feishu-user-no-draft");
+            Assert.NotNull(draft);
+            Assert.Equal(sessionId, draft!.SessionId);
+            Assert.Single(draft.Attachments);
+            Assert.Equal(0, cliExecutor.ExecuteCalls.Count);
+            Assert.Equal(1, cardKit.SendRawCardCallCount);
+            Assert.Contains("submit_attachment_draft", cardKit.LastRawCardJson!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HandleIncomingMessageAsync_WhenSupersededAfterStreamingOutput_KeepsExistingCardContent()
     {
         var repository = CreateRepository(out var repositoryProxy);
@@ -2154,6 +2232,11 @@ public class FeishuChannelServiceTests
                 return _attachmentDraftService;
             }
 
+            if (serviceType == typeof(FeishuAttachmentDraftCardBuilder))
+            {
+                return new FeishuAttachmentDraftCardBuilder();
+            }
+
             return null;
         }
 
@@ -2582,6 +2665,10 @@ public class FeishuChannelServiceTests
     {
         public FeishuOptions? LastDownloadOptionsOverride { get; private set; }
 
+        public int SendRawCardCallCount { get; private set; }
+
+        public string? LastRawCardJson { get; private set; }
+
         public override Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
             FeishuIncomingAttachment attachment,
             CancellationToken cancellationToken = default,
@@ -2602,7 +2689,11 @@ public class FeishuChannelServiceTests
             string cardJson,
             CancellationToken cancellationToken = default,
             FeishuOptions? optionsOverride = null)
-            => Task.FromResult("raw-card-1");
+        {
+            SendRawCardCallCount++;
+            LastRawCardJson = cardJson;
+            return Task.FromResult("raw-card-1");
+        }
     }
 
     private static string? TryGetActionName(object value)
