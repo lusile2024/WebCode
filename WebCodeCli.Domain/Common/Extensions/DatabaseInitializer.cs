@@ -189,6 +189,7 @@ public static class DatabaseInitializer
             
             // 创建聊天消息表
             db.CodeFirst.InitTables<ChatMessageEntity>();
+            db.CodeFirst.InitTables<ChatMessageAttachmentEntity>();
             
             // 创建会话输出状态表
             db.CodeFirst.InitTables<SessionOutputEntity>();
@@ -236,6 +237,7 @@ public static class DatabaseInitializer
             EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotRelativePath", "varchar(512) NULL", logger);
             EnsureColumnIfNotExists(db, "ChatSession", "CcSwitchSnapshotSyncedAt", "datetime NULL", logger);
             EnsureColumnIfNotExists(db, "ChatSession", "ToolLaunchOverridesJson", "TEXT NULL", logger);
+            EnsureColumnIfNotExists(db, "ChatMessage", "MessageId", "varchar(64) NOT NULL DEFAULT ''", logger);
             BackfillCliThreadIdsFromImportedTitles(db, logger);
         }
         catch (Exception ex)
@@ -323,6 +325,12 @@ public static class DatabaseInitializer
             
             // ChatMessage: SessionId 索引（按会话查询消息）
             CreateIndexIfNotExists(db, "ChatMessage", "IX_ChatMessage_SessionId", 
+                new[] { "SessionId" }, logger);
+
+            CreateIndexIfNotExists(db, "ChatMessageAttachment", "IX_ChatMessageAttachment_MessageId",
+                new[] { "MessageId" }, logger);
+
+            CreateIndexIfNotExists(db, "ChatMessageAttachment", "IX_ChatMessageAttachment_SessionId",
                 new[] { "SessionId" }, logger);
             
             // ChatMessage: Username + SessionId 索引

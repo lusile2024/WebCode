@@ -12,6 +12,52 @@ namespace WebCodeCli.Domain.Tests;
 public class SessionHistoryManagerTests
 {
     [Fact]
+    public async Task SaveSessionImmediateAsync_RoundTripsMessageAttachments()
+    {
+        var manager = CreateManager();
+        var session = new SessionHistory
+        {
+            SessionId = "session-attachments",
+            Title = "Attachment session",
+            WorkspacePath = @"D:\VSWorkshop\WebCode\artifacts\session-attachments",
+            ToolId = "codex",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Id = "msg-user-1",
+                    Role = "user",
+                    Content = "Review these files",
+                    Attachments =
+                    [
+                        new MessageAttachment
+                        {
+                            Id = "att-image-1",
+                            DisplayName = "diagram.png",
+                            MimeType = "image/png",
+                            Extension = ".png",
+                            SizeBytes = 12,
+                            Kind = MessageAttachmentKind.Image,
+                            WorkspaceRelativePath = ".webcode/message-inputs/submission-1/diagram.png"
+                        }
+                    ]
+                }
+            ]
+        };
+
+        await manager.SaveSessionImmediateAsync(session);
+        manager.ClearCache();
+
+        var reloaded = await manager.GetSessionAsync("session-attachments");
+
+        var userMessage = Assert.Single(reloaded!.Messages);
+        Assert.Equal("msg-user-1", userMessage.Id);
+        var attachment = Assert.Single(userMessage.Attachments);
+        Assert.Equal("att-image-1", attachment.Id);
+        Assert.Equal(".webcode/message-inputs/submission-1/diagram.png", attachment.WorkspaceRelativePath);
+    }
+
+    [Fact]
     public async Task SaveSessionImmediateAsync_RoundTripsToolLaunchOverrides()
     {
         var sessionRepository = new InMemoryChatSessionRepository();
@@ -19,6 +65,7 @@ public class SessionHistoryManagerTests
         var manager = new SessionHistoryManager(
             sessionRepository,
             messageRepository,
+            new InMemoryChatMessageAttachmentRepository(),
             new StubUserContextService(),
             NullLogger<SessionHistoryManager>.Instance);
 
@@ -69,6 +116,7 @@ public class SessionHistoryManagerTests
         var manager = new SessionHistoryManager(
             sessionRepository,
             new InMemoryChatMessageRepository(),
+            new InMemoryChatMessageAttachmentRepository(),
             new StubUserContextService(),
             NullLogger<SessionHistoryManager>.Instance);
 
@@ -111,6 +159,7 @@ public class SessionHistoryManagerTests
         var manager = new SessionHistoryManager(
             sessionRepository,
             new InMemoryChatMessageRepository(),
+            new InMemoryChatMessageAttachmentRepository(),
             new StubUserContextService(),
             NullLogger<SessionHistoryManager>.Instance);
 
@@ -118,6 +167,19 @@ public class SessionHistoryManagerTests
 
         Assert.NotNull(session);
         Assert.Empty(session!.ToolLaunchOverrides);
+    }
+
+    private static SessionHistoryManager CreateManager(
+        InMemoryChatSessionRepository? sessionRepository = null,
+        InMemoryChatMessageRepository? messageRepository = null,
+        InMemoryChatMessageAttachmentRepository? attachmentRepository = null)
+    {
+        return new SessionHistoryManager(
+            sessionRepository ?? new InMemoryChatSessionRepository(),
+            messageRepository ?? new InMemoryChatMessageRepository(),
+            attachmentRepository ?? new InMemoryChatMessageAttachmentRepository(),
+            new StubUserContextService(),
+            NullLogger<SessionHistoryManager>.Instance);
     }
 
     private sealed class StubUserContextService : IUserContextService
@@ -301,6 +363,73 @@ public class SessionHistoryManagerTests
         public Task<bool> InsertMessagesAsync(List<ChatMessageEntity> messages)
         {
             _messages.AddRange(messages);
+            return Task.FromResult(true);
+        }
+    }
+
+    private sealed class InMemoryChatMessageAttachmentRepository : IChatMessageAttachmentRepository
+    {
+        private readonly List<ChatMessageAttachmentEntity> _attachments = [];
+
+        public SqlSugarScope GetDB() => throw new NotSupportedException();
+        public List<ChatMessageAttachmentEntity> GetList() => [.. _attachments];
+        public Task<List<ChatMessageAttachmentEntity>> GetListAsync() => Task.FromResult(GetList());
+        public List<ChatMessageAttachmentEntity> GetList(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().Where(whereExpression).ToList();
+        public Task<List<ChatMessageAttachmentEntity>> GetListAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(GetList(whereExpression));
+        public int Count(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().Count(whereExpression);
+        public Task<int> CountAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(Count(whereExpression));
+        public PageList<ChatMessageAttachmentEntity> GetPageList(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public PageList<P> GetPageList<P>(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public Task<PageList<ChatMessageAttachmentEntity>> GetPageListAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public Task<PageList<P>> GetPageListAsync<P>(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page) => throw new NotSupportedException();
+        public PageList<ChatMessageAttachmentEntity> GetPageList(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page, Expression<Func<ChatMessageAttachmentEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public Task<PageList<ChatMessageAttachmentEntity>> GetPageListAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page, Expression<Func<ChatMessageAttachmentEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public PageList<P> GetPageList<P>(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page, Expression<Func<ChatMessageAttachmentEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public Task<PageList<P>> GetPageListAsync<P>(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression, PageModel page, Expression<Func<ChatMessageAttachmentEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public PageList<ChatMessageAttachmentEntity> GetPageList(List<IConditionalModel> conditionalList, PageModel page) => throw new NotSupportedException();
+        public Task<PageList<ChatMessageAttachmentEntity>> GetPageListAsync(List<IConditionalModel> conditionalList, PageModel page) => throw new NotSupportedException();
+        public PageList<ChatMessageAttachmentEntity> GetPageList(List<IConditionalModel> conditionalList, PageModel page, Expression<Func<ChatMessageAttachmentEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public Task<PageList<ChatMessageAttachmentEntity>> GetPageListAsync(List<IConditionalModel> conditionalList, PageModel page, Expression<Func<ChatMessageAttachmentEntity, object>> orderByExpression = null, OrderByType orderByType = OrderByType.Asc) => throw new NotSupportedException();
+        public ChatMessageAttachmentEntity GetById(dynamic id) => throw new NotSupportedException();
+        public Task<ChatMessageAttachmentEntity> GetByIdAsync(dynamic id) => throw new NotSupportedException();
+        public ChatMessageAttachmentEntity GetSingle(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().Single(whereExpression);
+        public Task<ChatMessageAttachmentEntity> GetSingleAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(GetSingle(whereExpression));
+        public ChatMessageAttachmentEntity GetFirst(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().First(whereExpression);
+        public Task<ChatMessageAttachmentEntity> GetFirstAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(GetFirst(whereExpression));
+        public bool Insert(ChatMessageAttachmentEntity obj) { _attachments.Add(obj); return true; }
+        public Task<bool> InsertAsync(ChatMessageAttachmentEntity obj) => Task.FromResult(Insert(obj));
+        public bool InsertRange(List<ChatMessageAttachmentEntity> objs) { _attachments.AddRange(objs); return true; }
+        public Task<bool> InsertRangeAsync(List<ChatMessageAttachmentEntity> objs) => Task.FromResult(InsertRange(objs));
+        public int InsertReturnIdentity(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public Task<int> InsertReturnIdentityAsync(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public long InsertReturnBigIdentity(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public Task<long> InsertReturnBigIdentityAsync(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public bool DeleteByIds(dynamic[] ids) => throw new NotSupportedException();
+        public Task<bool> DeleteByIdsAsync(dynamic[] ids) => throw new NotSupportedException();
+        public bool Delete(dynamic id) => throw new NotSupportedException();
+        public Task<bool> DeleteAsync(dynamic id) => throw new NotSupportedException();
+        public bool Delete(ChatMessageAttachmentEntity obj) => _attachments.Remove(obj);
+        public Task<bool> DeleteAsync(ChatMessageAttachmentEntity obj) => Task.FromResult(Delete(obj));
+        public bool Delete(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => throw new NotSupportedException();
+        public Task<bool> DeleteAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => throw new NotSupportedException();
+        public bool Update(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public Task<bool> UpdateAsync(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public bool UpdateRange(List<ChatMessageAttachmentEntity> objs) => throw new NotSupportedException();
+        public Task<bool> UpdateRangeAsync(List<ChatMessageAttachmentEntity> objs) => throw new NotSupportedException();
+        public bool InsertOrUpdate(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public Task<bool> InsertOrUpdateAsync(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
+        public bool IsAny(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().Any(whereExpression);
+        public Task<bool> IsAnyAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(IsAny(whereExpression));
+        public Task<List<ChatMessageAttachmentEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_attachments.Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).ToList());
+        public Task<bool> DeleteBySessionIdAndUsernameAsync(string sessionId, string username)
+        {
+            _attachments.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> InsertAttachmentsAsync(List<ChatMessageAttachmentEntity> attachments)
+        {
+            _attachments.AddRange(attachments);
             return Task.FromResult(true);
         }
     }

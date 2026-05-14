@@ -16,6 +16,7 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
 {
     private readonly IChatSessionRepository _sessionRepository;
     private readonly IChatMessageRepository _messageRepository;
+    private readonly IChatMessageAttachmentRepository _messageAttachmentRepository;
     private readonly IUserContextService _userContextService;
     private readonly ILogger<SessionHistoryManager> _logger;
     
@@ -38,11 +39,13 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
     public SessionHistoryManager(
         IChatSessionRepository sessionRepository,
         IChatMessageRepository messageRepository,
+        IChatMessageAttachmentRepository messageAttachmentRepository,
         IUserContextService userContextService,
         ILogger<SessionHistoryManager> logger)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
+        _messageAttachmentRepository = messageAttachmentRepository;
         _userContextService = userContextService;
         _logger = logger;
     }
@@ -71,7 +74,8 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             foreach (var entity in sessionEntities)
             {
                 var messages = await _messageRepository.GetBySessionIdAndUsernameAsync(entity.SessionId, username);
-                sessions.Add(MapToSessionHistory(entity, messages));
+                var attachments = await _messageAttachmentRepository.GetBySessionIdAndUsernameAsync(entity.SessionId, username);
+                sessions.Add(MapToSessionHistory(entity, messages, attachments));
             }
 
             // 更新缓存
@@ -196,12 +200,31 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             }
 
             // 删除旧消息并保存新消息
+            await _messageAttachmentRepository.DeleteBySessionIdAndUsernameAsync(session.SessionId, username);
             await _messageRepository.DeleteBySessionIdAndUsernameAsync(session.SessionId, username);
             
             if (session.Messages != null && session.Messages.Count > 0)
             {
-                var messageEntities = session.Messages.Select(m => MapToMessageEntity(m, session.SessionId, username)).ToList();
+                var messageEntities = new List<ChatMessageEntity>(session.Messages.Count);
+                var attachmentEntities = new List<ChatMessageAttachmentEntity>();
+
+                foreach (var message in session.Messages)
+                {
+                    var messageEntity = MapToMessageEntity(message, session.SessionId, username);
+                    message.Id = messageEntity.MessageId;
+                    messageEntities.Add(messageEntity);
+
+                    if (message.Attachments.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    attachmentEntities.AddRange(message.Attachments.Select(attachment =>
+                        MapToAttachmentEntity(attachment, messageEntity.MessageId, session.SessionId, username)));
+                }
+
                 await _messageRepository.InsertMessagesAsync(messageEntities);
+                await _messageAttachmentRepository.InsertAttachmentsAsync(attachmentEntities);
             }
 
             // 更新缓存
@@ -246,6 +269,7 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             var username = _userContextService.GetCurrentUsername();
             
             // 删除消息
+            await _messageAttachmentRepository.DeleteBySessionIdAndUsernameAsync(sessionId, username);
             await _messageRepository.DeleteBySessionIdAndUsernameAsync(sessionId, username);
             
             // 删除会话
@@ -303,7 +327,8 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             }
 
             var messages = await _messageRepository.GetBySessionIdAndUsernameAsync(sessionId, username);
-            var session = MapToSessionHistory(sessionEntity, messages);
+            var attachments = await _messageAttachmentRepository.GetBySessionIdAndUsernameAsync(sessionId, username);
+            var session = MapToSessionHistory(sessionEntity, messages, attachments);
 
             _sessionCache[sessionId] = session;
 
@@ -478,8 +503,18 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
 
     #region 映射方法
 
-    private SessionHistory MapToSessionHistory(ChatSessionEntity entity, List<ChatMessageEntity> messageEntities)
+    private SessionHistory MapToSessionHistory(
+        ChatSessionEntity entity,
+        List<ChatMessageEntity> messageEntities,
+        List<ChatMessageAttachmentEntity> attachmentEntities)
     {
+        var attachmentsByMessageId = attachmentEntities
+            .GroupBy(x => x.MessageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(MapToAttachment).ToList(),
+                StringComparer.OrdinalIgnoreCase);
+
         return new SessionHistory
         {
             SessionId = entity.SessionId,
@@ -503,9 +538,13 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             ProjectId = entity.ProjectId,
             Messages = messageEntities.Select(m => new ChatMessage
             {
+                Id = string.IsNullOrWhiteSpace(m.MessageId) ? Guid.NewGuid().ToString("N") : m.MessageId,
                 Role = m.Role,
                 Content = m.Content ?? string.Empty,
-                CreatedAt = m.CreatedAt
+                CreatedAt = m.CreatedAt,
+                Attachments = attachmentsByMessageId.TryGetValue(m.MessageId, out var attachments)
+                    ? attachments
+                    : new List<MessageAttachment>()
             }).ToList()
         };
     }
@@ -541,11 +580,53 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
     {
         return new ChatMessageEntity
         {
+            MessageId = string.IsNullOrWhiteSpace(message.Id) ? Guid.NewGuid().ToString("N") : message.Id,
             SessionId = sessionId,
             Username = username,
             Role = message.Role,
             Content = message.Content,
             CreatedAt = message.CreatedAt
+        };
+    }
+
+    private static ChatMessageAttachmentEntity MapToAttachmentEntity(
+        MessageAttachment attachment,
+        string messageId,
+        string sessionId,
+        string username)
+    {
+        return new ChatMessageAttachmentEntity
+        {
+            MessageId = messageId,
+            SessionId = sessionId,
+            Username = username,
+            AttachmentId = attachment.Id,
+            DisplayName = attachment.DisplayName,
+            MimeType = attachment.MimeType,
+            Extension = attachment.Extension,
+            SizeBytes = attachment.SizeBytes,
+            Kind = attachment.Kind.ToString(),
+            WorkspaceRelativePath = attachment.WorkspaceRelativePath,
+            CreatedAt = attachment.CreatedAt
+        };
+    }
+
+    private static MessageAttachment MapToAttachment(ChatMessageAttachmentEntity attachmentEntity)
+    {
+        var kind = Enum.TryParse<MessageAttachmentKind>(attachmentEntity.Kind, true, out var parsedKind)
+            ? parsedKind
+            : MessageAttachmentKind.Text;
+
+        return new MessageAttachment
+        {
+            Id = attachmentEntity.AttachmentId,
+            DisplayName = attachmentEntity.DisplayName,
+            MimeType = attachmentEntity.MimeType,
+            Extension = attachmentEntity.Extension,
+            SizeBytes = attachmentEntity.SizeBytes,
+            Kind = kind,
+            WorkspaceRelativePath = attachmentEntity.WorkspaceRelativePath,
+            CreatedAt = attachmentEntity.CreatedAt
         };
     }
 
