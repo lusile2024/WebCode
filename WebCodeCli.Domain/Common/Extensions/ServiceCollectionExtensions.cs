@@ -9,6 +9,7 @@ using SqlSugar;
 using System.Reflection;
 using System;
 using WebCodeCli.Domain.Domain.Service;
+using WebCodeCli.Domain.Repositories.Base.ChatSession;
 
 namespace WebCodeCli.Domain.Common.Extensions
 {
@@ -53,7 +54,11 @@ namespace WebCodeCli.Domain.Common.Extensions
                 }
             }
 
-           return services;
+            services.AddScoped<IAttachmentStagingService, AttachmentStagingService>();
+            services.AddScoped<IMessageSubmissionService, MessageSubmissionService>();
+            services.AddScoped<IChatMessageAttachmentRepository, ChatMessageAttachmentRepository>();
+
+            return services;
         }
 
         /// <summary>
