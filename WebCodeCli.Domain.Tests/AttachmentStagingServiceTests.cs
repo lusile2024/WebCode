@@ -47,6 +47,56 @@ public class AttachmentStagingServiceTests
         }
     }
 
+    [Fact]
+    public async Task StageAsync_WhenDifferentSubmissionIdsNormalizeToSameDirectory_ThrowsCollisionError()
+    {
+        var workspaceRoot = Path.Combine(
+            Path.GetTempPath(),
+            "WebCodeCli.Domain.Tests",
+            nameof(AttachmentStagingServiceTests),
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceRoot);
+
+        try
+        {
+            var cliExecutor = new StubCliExecutorService(workspaceRoot);
+            var service = new AttachmentStagingService(cliExecutor, NullLogger<AttachmentStagingService>.Instance);
+
+            await service.StageAsync(
+                "session-123",
+                "submission:123/with?chars",
+                [
+                    new MessageDraftAttachmentInput
+                    {
+                        FileName = "diagram.png",
+                        ContentType = "image/png",
+                        Content = [0x01]
+                    }
+                ]);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StageAsync(
+                "session-123",
+                "submission_123_with*chars",
+                [
+                    new MessageDraftAttachmentInput
+                    {
+                        FileName = "notes.txt",
+                        ContentType = "text/plain",
+                        Content = [0x02]
+                    }
+                ]));
+
+            Assert.Contains("collision", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(workspaceRoot))
+            {
+                Directory.Delete(workspaceRoot, recursive: true);
+            }
+        }
+    }
+
     private sealed class StubCliExecutorService(string workspaceRoot) : ICliExecutorService
     {
         public ICliToolAdapter? GetAdapter(CliToolConfig tool) => throw new NotSupportedException();

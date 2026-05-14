@@ -43,6 +43,41 @@ public class MessageSubmissionServiceTests
     }
 
     [Fact]
+    public async Task PrepareAsync_WhenAttachmentContentIsNull_ThrowsValidationError()
+    {
+        var workspaceRoot = CreateWorkspaceRoot();
+
+        try
+        {
+            var service = CreateService(workspaceRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.PrepareAsync(new MessageDraft
+            {
+                DraftId = "submission-123",
+                SessionId = "session-123",
+                ToolId = "codex",
+                Channel = MessageSubmissionChannel.Web,
+                Text = "Review this attachment",
+                Attachments =
+                [
+                    new MessageDraftAttachmentInput
+                    {
+                        FileName = "diagram.png",
+                        ContentType = "image/png",
+                        Content = null!
+                    }
+                ]
+            }));
+
+            Assert.Contains("content", exception.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteWorkspaceRoot(workspaceRoot);
+        }
+    }
+
+    [Fact]
     public async Task PrepareAsync_WhenTextAndMixedCapabilitiesAttachmentsProvided_ReturnsPreparedSubmissionWithPartialDowngradeWarning()
     {
         var workspaceRoot = CreateWorkspaceRoot();

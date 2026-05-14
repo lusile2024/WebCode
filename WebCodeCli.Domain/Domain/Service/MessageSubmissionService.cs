@@ -256,6 +256,12 @@ public class MessageSubmissionService : IMessageSubmissionService
     {
         foreach (var attachment in attachments)
         {
+            if (attachment.Content == null)
+            {
+                throw new InvalidOperationException(
+                    $"Attachment '{attachment.FileName}' content is required.");
+            }
+
             if (attachment.Content.Length == 0)
             {
                 throw new InvalidOperationException(

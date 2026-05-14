@@ -10,6 +10,7 @@ public class AttachmentStagingService : IAttachmentStagingService
 {
     internal const string HiddenRootDirectoryName = ".webcode";
     internal const string MessageInputDirectoryName = "message-inputs";
+    private const string SubmissionMarkerFileName = ".submission-id";
 
     private readonly ICliExecutorService _cliExecutorService;
     private readonly ILogger<AttachmentStagingService> _logger;
@@ -51,6 +52,7 @@ public class AttachmentStagingService : IAttachmentStagingService
 
         Directory.CreateDirectory(submissionRoot);
         TryHideDirectory(hiddenRoot);
+        EnsureSubmissionDirectoryReservation(submissionRoot, submissionId, submissionDirectoryName);
 
         var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var stagedAttachments = new List<StagedMessageAttachment>(attachments.Count);
@@ -58,6 +60,12 @@ public class AttachmentStagingService : IAttachmentStagingService
         foreach (var attachment in attachments)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (attachment.Content == null)
+            {
+                throw new InvalidOperationException(
+                    $"Attachment '{attachment.FileName}' content is required.");
+            }
 
             var displayName = string.IsNullOrWhiteSpace(attachment.FileName)
                 ? "attachment"
@@ -173,6 +181,33 @@ public class AttachmentStagingService : IAttachmentStagingService
     private static string BuildWorkspaceRelativePath(string submissionDirectoryName, string stagedFileName)
     {
         return $"{BuildSubmissionRootRelativePath(submissionDirectoryName)}/{stagedFileName}";
+    }
+
+    private static void EnsureSubmissionDirectoryReservation(
+        string submissionRoot,
+        string rawSubmissionId,
+        string normalizedSubmissionDirectoryName)
+    {
+        var markerPath = Path.Combine(submissionRoot, SubmissionMarkerFileName);
+        if (File.Exists(markerPath))
+        {
+            var existingSubmissionId = File.ReadAllText(markerPath);
+            if (!string.Equals(existingSubmissionId, rawSubmissionId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Submission id normalization collision detected: '{rawSubmissionId}' maps to '{normalizedSubmissionDirectoryName}', which is already reserved for a different submission.");
+            }
+
+            return;
+        }
+
+        if (Directory.EnumerateFileSystemEntries(submissionRoot).Any())
+        {
+            throw new InvalidOperationException(
+                $"Submission id normalization collision detected: '{rawSubmissionId}' maps to '{normalizedSubmissionDirectoryName}', but the staging directory already exists without a matching reservation marker.");
+        }
+
+        File.WriteAllText(markerPath, rawSubmissionId);
     }
 
     private static void EnsurePathWithinRoot(string rootPath, string candidatePath, string displayName)
