@@ -5,7 +5,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 
 public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
 {
-    private readonly ConcurrentDictionary<string, FeishuAttachmentDraftState> _drafts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DraftEntry> _drafts = new(StringComparer.Ordinal);
 
     public FeishuAttachmentDraftState StartDraft(string? appId, string chatId, string senderId, FeishuIncomingAttachment attachment)
     {
@@ -14,18 +14,18 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
         ArgumentNullException.ThrowIfNull(attachment);
 
         var now = DateTime.UtcNow;
-        var draft = new FeishuAttachmentDraftState
+        var draft = new DraftEntry
         {
             AppId = NormalizeAppId(appId),
             ChatId = chatId,
             SenderId = senderId,
-            Attachments = [attachment],
+            Attachments = [CloneAttachment(attachment)],
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
 
         _drafts[BuildKey(appId, chatId, senderId)] = draft;
-        return draft;
+        return CreateSnapshot(draft);
     }
 
     public FeishuAttachmentDraftState? GetDraft(string? appId, string chatId, string senderId)
@@ -34,7 +34,7 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
         ArgumentException.ThrowIfNullOrWhiteSpace(senderId);
 
         return _drafts.TryGetValue(BuildKey(appId, chatId, senderId), out var draft)
-            ? draft
+            ? CreateSnapshot(draft)
             : null;
     }
 
@@ -48,7 +48,7 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
         {
             draft.Text = text ?? string.Empty;
             draft.UpdatedAtUtc = DateTime.UtcNow;
-            return draft;
+            return CreateSnapshot(draft);
         }
     }
 
@@ -61,9 +61,9 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
         var draft = GetOrCreateDraft(appId, chatId, senderId);
         lock (draft)
         {
-            draft.Attachments.Add(attachment);
+            draft.Attachments.Add(CloneAttachment(attachment));
             draft.UpdatedAtUtc = DateTime.UtcNow;
-            return draft;
+            return CreateSnapshot(draft);
         }
     }
 
@@ -75,14 +75,14 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
         _drafts.TryRemove(BuildKey(appId, chatId, senderId), out _);
     }
 
-    private FeishuAttachmentDraftState GetOrCreateDraft(string? appId, string chatId, string senderId)
+    private DraftEntry GetOrCreateDraft(string? appId, string chatId, string senderId)
     {
         return _drafts.GetOrAdd(
             BuildKey(appId, chatId, senderId),
             _ =>
             {
                 var now = DateTime.UtcNow;
-                return new FeishuAttachmentDraftState
+                return new DraftEntry
                 {
                     AppId = NormalizeAppId(appId),
                     ChatId = chatId,
@@ -93,6 +93,35 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
             });
     }
 
+    private static FeishuAttachmentDraftState CreateSnapshot(DraftEntry draft)
+    {
+        lock (draft)
+        {
+            return new FeishuAttachmentDraftState
+            {
+                AppId = draft.AppId,
+                ChatId = draft.ChatId,
+                SenderId = draft.SenderId,
+                Text = draft.Text,
+                Attachments = draft.Attachments.Select(CloneAttachment).ToList(),
+                CreatedAtUtc = draft.CreatedAtUtc,
+                UpdatedAtUtc = draft.UpdatedAtUtc
+            };
+        }
+    }
+
+    private static FeishuIncomingAttachment CloneAttachment(FeishuIncomingAttachment attachment)
+    {
+        return new FeishuIncomingAttachment
+        {
+            MessageType = attachment.MessageType,
+            AttachmentKey = attachment.AttachmentKey,
+            DisplayName = attachment.DisplayName,
+            MimeType = attachment.MimeType,
+            SizeBytes = attachment.SizeBytes
+        };
+    }
+
     private static string BuildKey(string? appId, string chatId, string senderId)
     {
         return string.Join("::", NormalizeAppId(appId), chatId, senderId);
@@ -101,5 +130,22 @@ public class FeishuAttachmentDraftService : IFeishuAttachmentDraftService
     private static string NormalizeAppId(string? appId)
     {
         return appId ?? string.Empty;
+    }
+
+    private sealed class DraftEntry
+    {
+        public string AppId { get; set; } = string.Empty;
+
+        public string ChatId { get; set; } = string.Empty;
+
+        public string SenderId { get; set; } = string.Empty;
+
+        public string Text { get; set; } = string.Empty;
+
+        public List<FeishuIncomingAttachment> Attachments { get; set; } = new();
+
+        public DateTime CreatedAtUtc { get; set; }
+
+        public DateTime UpdatedAtUtc { get; set; }
     }
 }

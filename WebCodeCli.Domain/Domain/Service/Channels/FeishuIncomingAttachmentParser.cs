@@ -16,6 +16,11 @@ public class FeishuIncomingAttachmentParser
         {
             using var document = JsonDocument.Parse(rawContent);
             var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return [];
+            }
+
             return messageType switch
             {
                 "image" => ParseImage(root),
@@ -87,6 +92,11 @@ public class FeishuIncomingAttachmentParser
 
     private static string GetString(JsonElement root, string propertyName)
     {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return string.Empty;
+        }
+
         return root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString() ?? string.Empty
             : string.Empty;
@@ -94,6 +104,11 @@ public class FeishuIncomingAttachmentParser
 
     private static long? GetInt64(JsonElement root, string propertyName)
     {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
         if (!root.TryGetProperty(propertyName, out var property))
         {
             return null;
