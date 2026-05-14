@@ -76,10 +76,16 @@ public class MessageSubmissionServiceTests
             });
 
             Assert.Equal("Review all attached files", prepared.UserMessage.Content);
+            Assert.True(prepared.UserMessage.IsCompleted);
             Assert.Equal(2, prepared.UserMessage.Attachments.Count);
+            Assert.Equal("session-123", prepared.SessionId);
+            Assert.Equal("codex", prepared.ToolId);
+            Assert.Equal(2, prepared.Attachments.Count);
+            Assert.Equal(".webcode/message-inputs/submission-123", prepared.StagingRootRelativePath);
             Assert.Single(prepared.ExecutionRequest.NativeAttachments);
             Assert.Single(prepared.ExecutionRequest.ReferenceAttachments);
             Assert.Contains(prepared.Warnings, warning => warning.Code == "partial-downgrade");
+            Assert.Contains(prepared.ExecutionRequest.Warnings, warning => warning.Code == "partial-downgrade");
         }
         finally
         {

@@ -1,3 +1,5 @@
+using WebCodeCli.Domain.Domain.Model;
+
 namespace WebCodeCli.Domain.Domain.Service.Adapters;
 
 public class CliExecutionRequest
@@ -13,4 +15,6 @@ public class CliExecutionRequest
     public List<CliExecutionAttachment> NativeAttachments { get; set; } = new();
 
     public List<CliExecutionAttachment> ReferenceAttachments { get; set; } = new();
+
+    public List<MessageSubmissionWarning> Warnings { get; set; } = new();
 }

@@ -176,15 +176,24 @@ public class MessageSubmissionService : IMessageSubmissionService
             });
         }
 
+        var normalizedAttachments = stagedAttachments.Select(staged => staged.Metadata).ToList();
+        var stagingRootRelativePath = BuildStagingRootRelativePath(draft.DraftId);
+
         var prepared = new PreparedMessageSubmission
         {
+            SessionId = draft.SessionId,
+            ToolId = draft.ToolId,
+            Text = trimmedText,
+            Attachments = normalizedAttachments,
+            StagingRootRelativePath = stagingRootRelativePath,
             UserMessage = new ChatMessage
             {
                 Role = "user",
                 Content = trimmedText,
                 CliToolId = draft.ToolId,
                 CreatedAt = DateTime.UtcNow,
-                Attachments = stagedAttachments.Select(staged => staged.Metadata).ToList()
+                IsCompleted = true,
+                Attachments = normalizedAttachments
             },
             ExecutionRequest = new CliExecutionRequest
             {
@@ -193,7 +202,8 @@ public class MessageSubmissionService : IMessageSubmissionService
                 PromptText = trimmedText,
                 SessionContext = sessionContext,
                 NativeAttachments = nativeAttachments,
-                ReferenceAttachments = referenceAttachments
+                ReferenceAttachments = referenceAttachments,
+                Warnings = warnings.ToList()
             },
             Warnings = warnings
         };
@@ -271,5 +281,10 @@ public class MessageSubmissionService : IMessageSubmissionService
         }
 
         return CliAttachmentCapabilities.ReferenceOnly();
+    }
+
+    private static string BuildStagingRootRelativePath(string submissionId)
+    {
+        return $".webcode/message-inputs/{submissionId}";
     }
 }
