@@ -8,8 +8,8 @@ namespace WebCodeCli.Domain.Domain.Service;
 [ServiceDescription(typeof(IAttachmentStagingService), ServiceLifetime.Scoped)]
 public class AttachmentStagingService : IAttachmentStagingService
 {
-    private const string HiddenRootDirectoryName = ".webcode";
-    private const string MessageInputDirectoryName = "message-inputs";
+    internal const string HiddenRootDirectoryName = ".webcode";
+    internal const string MessageInputDirectoryName = "message-inputs";
 
     private readonly ICliExecutorService _cliExecutorService;
     private readonly ILogger<AttachmentStagingService> _logger;
@@ -46,7 +46,7 @@ public class AttachmentStagingService : IAttachmentStagingService
         var workspaceFullPath = Path.GetFullPath(workspaceRoot);
         var hiddenRoot = Path.Combine(workspaceFullPath, HiddenRootDirectoryName);
         var messageInputsRoot = Path.Combine(hiddenRoot, MessageInputDirectoryName);
-        var submissionDirectoryName = NormalizePathSegment(submissionId, "submission");
+        var submissionDirectoryName = NormalizeSubmissionDirectoryName(submissionId);
         var submissionRoot = Path.Combine(messageInputsRoot, submissionDirectoryName);
 
         Directory.CreateDirectory(submissionRoot);
@@ -147,6 +147,16 @@ public class AttachmentStagingService : IAttachmentStagingService
         return sanitized;
     }
 
+    internal static string NormalizeSubmissionDirectoryName(string submissionId)
+    {
+        return NormalizePathSegment(submissionId, "submission");
+    }
+
+    internal static string BuildSubmissionRootRelativePath(string submissionId)
+    {
+        return $"{HiddenRootDirectoryName}/{MessageInputDirectoryName}/{NormalizeSubmissionDirectoryName(submissionId)}";
+    }
+
     private static string NormalizePathSegment(string segment, string fallback)
     {
         var sanitizedChars = segment
@@ -162,7 +172,7 @@ public class AttachmentStagingService : IAttachmentStagingService
 
     private static string BuildWorkspaceRelativePath(string submissionDirectoryName, string stagedFileName)
     {
-        return $"{HiddenRootDirectoryName}/{MessageInputDirectoryName}/{submissionDirectoryName}/{stagedFileName}";
+        return $"{BuildSubmissionRootRelativePath(submissionDirectoryName)}/{stagedFileName}";
     }
 
     private static void EnsurePathWithinRoot(string rootPath, string candidatePath, string displayName)

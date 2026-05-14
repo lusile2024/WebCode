@@ -177,7 +177,7 @@ public class MessageSubmissionService : IMessageSubmissionService
         }
 
         var normalizedAttachments = stagedAttachments.Select(staged => staged.Metadata).ToList();
-        var stagingRootRelativePath = BuildStagingRootRelativePath(draft.DraftId);
+        var stagingRootRelativePath = AttachmentStagingService.BuildSubmissionRootRelativePath(draft.DraftId);
 
         var prepared = new PreparedMessageSubmission
         {
@@ -281,10 +281,5 @@ public class MessageSubmissionService : IMessageSubmissionService
         }
 
         return CliAttachmentCapabilities.ReferenceOnly();
-    }
-
-    private static string BuildStagingRootRelativePath(string submissionId)
-    {
-        return $".webcode/message-inputs/{submissionId}";
     }
 }

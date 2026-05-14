@@ -46,6 +46,8 @@ public class MessageSubmissionServiceTests
     public async Task PrepareAsync_WhenTextAndMixedCapabilitiesAttachmentsProvided_ReturnsPreparedSubmissionWithPartialDowngradeWarning()
     {
         var workspaceRoot = CreateWorkspaceRoot();
+        const string draftId = "submission:123/with?chars";
+        const string normalizedStagingRoot = ".webcode/message-inputs/submission_123_with_chars";
 
         try
         {
@@ -53,7 +55,7 @@ public class MessageSubmissionServiceTests
 
             var prepared = await service.PrepareAsync(new MessageDraft
             {
-                DraftId = "submission-123",
+                DraftId = draftId,
                 SessionId = "session-123",
                 ToolId = "codex",
                 Channel = MessageSubmissionChannel.Web,
@@ -81,7 +83,10 @@ public class MessageSubmissionServiceTests
             Assert.Equal("session-123", prepared.SessionId);
             Assert.Equal("codex", prepared.ToolId);
             Assert.Equal(2, prepared.Attachments.Count);
-            Assert.Equal(".webcode/message-inputs/submission-123", prepared.StagingRootRelativePath);
+            Assert.Equal(normalizedStagingRoot, prepared.StagingRootRelativePath);
+            Assert.All(
+                prepared.Attachments,
+                attachment => Assert.StartsWith(normalizedStagingRoot + "/", attachment.WorkspaceRelativePath, StringComparison.Ordinal));
             Assert.Single(prepared.ExecutionRequest.NativeAttachments);
             Assert.Single(prepared.ExecutionRequest.ReferenceAttachments);
             Assert.Contains(prepared.Warnings, warning => warning.Code == "partial-downgrade");
