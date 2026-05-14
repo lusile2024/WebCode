@@ -33,6 +33,7 @@ public class WorkspaceFileNode
 public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 {
     [Inject] private ICliExecutorService CliExecutorService { get; set; } = default!;
+    [Inject] private IMessageSubmissionService MessageSubmissionService { get; set; } = default!;
     [Inject] private IChatSessionService ChatSessionService { get; set; } = default!;
     [Inject] private ICliToolEnvironmentService CliToolEnvironmentService { get; set; } = default!;
     [Inject] private IAuthenticationService AuthenticationService { get; set; } = default!;
@@ -195,9 +196,12 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
     
     // 文件上传
     private bool _isUploading = false;
+    private bool _isMessageAttachmentUploading = false;
     private const long MaxFileSize = 100 * 1024 * 1024; // 100MB
+    private const int MaxMessageAttachmentCount = 10;
     private string _selectedUploadFolder = string.Empty; // 选中的上传文件夹
     private List<string> _availableFolders = new(); // 可用的文件夹列表
+    private readonly MessageAttachmentComposerState _messageAttachmentComposer = new();
     
     // 创建文件夹
     private bool _showCreateFolderDialog = false;
@@ -1991,7 +1995,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
     private async Task SendMessageCoreAsync(string? rawMessage, bool clearComposerInput)
     {
-        if (string.IsNullOrWhiteSpace(rawMessage) || _isLoading)
+        if (string.IsNullOrWhiteSpace(rawMessage) || _isLoading || _isMessageAttachmentUploading)
         {
             return;
         }
@@ -2024,20 +2028,6 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             // 忽略保存历史错误
         }
 
-        // 添加用户消息到会话
-        var userMessage = new ChatMessage
-        {
-            Role = "user",
-            Content = message,
-            CliToolId = _selectedToolId,
-            IsCompleted = true
-        };
-        _messages.Add(userMessage);
-        ChatSessionService.AddMessage(_sessionId, userMessage);
-
-        StateHasChanged();
-        await ScrollToBottom();
-
         if (await TryHandleHistoryCommandAsync(message))
         {
             _isLoading = false;
@@ -2058,12 +2048,31 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         };
 
         var contentBuilder = new StringBuilder();
+        var shouldClearPendingAttachments = false;
 
         try
         {
-            // 直接调用服务执行 CLI，使用流式处理
+            var preparedSubmission = await MessageSubmissionService.PrepareAsync(
+                new MessageDraft
+                {
+                    SessionId = _sessionId,
+                    ToolId = _selectedToolId,
+                    Channel = MessageSubmissionChannel.Web,
+                    Text = message,
+                    Attachments = [.. _messageAttachmentComposer.PendingAttachments],
+                    SubmittedBy = ResolveSubmittedBy()
+                });
+
+            var userMessage = preparedSubmission.UserMessage;
+            _messages.Add(userMessage);
+            ChatSessionService.AddMessage(_sessionId, userMessage);
+
+            StateHasChanged();
+            await ScrollToBottom();
+
             await foreach (var chunk in CliExecutorService.ExecuteStreamAsync(
-                _sessionId, _selectedToolId, message, default))
+                preparedSubmission.ExecutionRequest,
+                default))
             {
                 if (chunk.IsError)
                 {
@@ -2097,6 +2106,8 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                     {
                         assistantMessage.Content = contentBuilder.ToString();
                     }
+
+                    shouldClearPendingAttachments = true;
                     
                     _messages.Add(assistantMessage);
                     ChatSessionService.AddMessage(_sessionId, assistantMessage);
@@ -2166,6 +2177,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             
             _isLoading = false;
             _currentAssistantMessage = string.Empty;
+            if (shouldClearPendingAttachments)
+            {
+                _messageAttachmentComposer.Clear();
+            }
             StateHasChanged();
             await ScrollToBottom();
             
@@ -2315,6 +2330,10 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
             _isLoading = false;
             _currentAssistantMessage = string.Empty;
+            if (shouldClearPendingAttachments)
+            {
+                _messageAttachmentComposer.Clear();
+            }
             StateHasChanged();
             await ScrollToBottom();
             await SaveCurrentSessionAsync();
@@ -4120,6 +4139,67 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         }
     }
 
+    private async Task HandleMessageAttachmentUpload(InputFileChangeEventArgs e)
+    {
+        if (_isMessageAttachmentUploading)
+        {
+            return;
+        }
+
+        var remainingSlots = MaxMessageAttachmentCount - _messageAttachmentComposer.PendingAttachments.Count;
+        if (remainingSlots <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _isMessageAttachmentUploading = true;
+            StateHasChanged();
+
+            var files = e.GetMultipleFiles(remainingSlots);
+            var updatedAttachments = _messageAttachmentComposer.PendingAttachments.ToList();
+
+            foreach (var file in files)
+            {
+                if (file.Size > MaxFileSize)
+                {
+                    Console.WriteLine($"消息附件过大: {file.Name} ({FormatFileSize(file.Size)}), 最大允许 {FormatFileSize(MaxFileSize)}");
+                    continue;
+                }
+
+                using var stream = file.OpenReadStream(MaxFileSize);
+                using var memoryStream = new MemoryStream();
+                await stream.CopyToAsync(memoryStream);
+
+                updatedAttachments.Add(new MessageDraftAttachmentInput
+                {
+                    FileName = file.Name,
+                    ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+                    Content = memoryStream.ToArray()
+                });
+            }
+
+            _messageAttachmentComposer.Replace(updatedAttachments);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"处理消息附件失败: {ex.Message}");
+        }
+        finally
+        {
+            _isMessageAttachmentUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task RemovePendingMessageAttachment(string attachmentId)
+    {
+        _messageAttachmentComposer.Remove(attachmentId);
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
     private string FormatFileSize(long bytes)
     {
         string[] sizes = { "B", "KB", "MB", "GB" };
@@ -4131,6 +4211,16 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             len = len / 1024;
         }
         return $"{len:0.##} {sizes[order]}";
+    }
+
+    private string ResolveSubmittedBy()
+    {
+        if (!string.IsNullOrWhiteSpace(_currentUsername))
+        {
+            return _currentUsername;
+        }
+
+        return UserContextService.GetCurrentUsername();
     }
 
     private async Task HandleLogout()

@@ -587,6 +587,21 @@
                                         }
                                     </div>
                                 }
+                                @if (message.Attachments.Any())
+                                {
+                                    <div class="mt-2 flex flex-wrap gap-2">
+                                        @foreach (var attachment in message.Attachments)
+                                        {
+                                            <span class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-[11px] text-slate-700"
+                                                  title="@attachment.DisplayName">
+                                                <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
+                                                </svg>
+                                                <span class="truncate max-w-[180px]">@attachment.DisplayName</span>
+                                            </span>
+                                        }
+                                    </div>
+                                }
                                 <div class="flex items-center justify-between mt-1">
                                     <div class="@(message.Role == "user" ? "text-blue-200" : "text-gray-400") text-xs">
                                         @message.CreatedAt.ToString("HH:mm")
@@ -930,6 +945,50 @@
                 }
                 
                 <!-- 技能选择器弹出层 -->
+                <div class="mb-2 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[11px] font-medium text-gray-600">Message attachments</span>
+                        <label class="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition-colors cursor-pointer hover:bg-gray-100">
+                            @if (_isMessageAttachmentUploading)
+                            {
+                                <div class="animate-spin h-3.5 w-3.5 border-2 border-gray-600 rounded-full border-t-transparent"></div>
+                            }
+                            else
+                            {
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
+                                </svg>
+                            }
+                            <span>Add attachments</span>
+                            <InputFile OnChange="HandleMessageAttachmentUpload"
+                                       disabled="@(_isLoading || _isMessageAttachmentUploading)"
+                                       multiple
+                                       class="hidden" />
+                        </label>
+                    </div>
+                    @if (_messageAttachmentComposer.HasAttachments)
+                    {
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            @foreach (var attachment in _messageAttachmentComposer.PendingAttachments)
+                            {
+                                <div class="inline-flex max-w-full items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[11px] text-blue-900 shadow-sm"
+                                     title="@attachment.FileName">
+                                    <span class="truncate max-w-[160px]">@attachment.FileName</span>
+                                    <span class="text-blue-600/80">@FormatFileSize(attachment.Content.LongLength)</span>
+                                    <button type="button"
+                                            @onclick="() => RemovePendingMessageAttachment(attachment.Id)"
+                                            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-blue-700 hover:bg-blue-100 transition-colors"
+                                            aria-label="Remove attachment">
+                                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
                 @if (_showSkillPicker)
                 {
                     <div class="mb-2 bg-white rounded-xl shadow-lg border border-gray-200 max-h-60 overflow-hidden animate-slideUp">
@@ -999,7 +1058,7 @@
                                   class="w-full px-4 py-3 bg-gray-100 border-0 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical text-sm input-no-scrollbar"></textarea>
                     </div>
                     <button @onclick="SendMessage"
-                            disabled="@(_isLoading || string.IsNullOrWhiteSpace(_inputMessage))"
+                            disabled="@(_isLoading || _isMessageAttachmentUploading || string.IsNullOrWhiteSpace(_inputMessage))"
                             class="w-12 h-12 flex-shrink-0 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-gray-300 text-white rounded-full flex items-center justify-center transition-colors active:scale-95">
                         @if (_isLoading)
                         {

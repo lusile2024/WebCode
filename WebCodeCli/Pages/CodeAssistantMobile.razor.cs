@@ -26,6 +26,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     #region 服务注入
     
     [Inject] private ICliExecutorService CliExecutorService { get; set; } = default!;
+    [Inject] private IMessageSubmissionService MessageSubmissionService { get; set; } = default!;
     [Inject] private IChatSessionService ChatSessionService { get; set; } = default!;
     [Inject] private ICliToolEnvironmentService CliToolEnvironmentService { get; set; } = default!;
     [Inject] private IAuthenticationService AuthenticationService { get; set; } = default!;
@@ -187,6 +188,10 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private string _currentAssistantMessage = string.Empty;
     private string _sessionId = Guid.NewGuid().ToString();
     private bool _showQuickActions = false;
+    private bool _isMessageAttachmentUploading = false;
+    private readonly MessageAttachmentComposerState _messageAttachmentComposer = new();
+    private const int MaxMessageAttachmentCount = 10;
+    private const long MaxMessageAttachmentSizeBytes = 100 * 1024 * 1024;
     
     // 消息详情展开状态（内嵌输出）
     private HashSet<int> _expandedMessageIndices = new();
@@ -836,7 +841,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         bool clearComposerInput,
         bool closeTransientPanels)
     {
-        if (string.IsNullOrWhiteSpace(rawMessage) || _isLoading)
+        if (string.IsNullOrWhiteSpace(rawMessage) || _isLoading || _isMessageAttachmentUploading)
             return;
 
         var userMessage = rawMessage.Trim();
@@ -859,20 +864,9 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             _progressTracker.Start();
         }
 
-        _messages.Add(new ChatMessage
-        {
-            Role = "user",
-            Content = userMessage,
-            CreatedAt = DateTime.Now,
-            CliToolId = _selectedToolId,
-            IsCompleted = true
-        });
-
         _isLoading = true;
         _currentAssistantMessage = string.Empty;
         StateHasChanged();
-
-        await ScrollToBottom();
 
         if (await TryHandleHistoryCommandAsync(userMessage))
         {
@@ -885,13 +879,27 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         }
 
         var contentBuilder = new StringBuilder();
+        var shouldClearPendingAttachments = false;
 
         try
         {
+            var preparedSubmission = await MessageSubmissionService.PrepareAsync(
+                new MessageDraft
+                {
+                    SessionId = _sessionId,
+                    ToolId = _selectedToolId,
+                    Channel = MessageSubmissionChannel.Mobile,
+                    Text = userMessage,
+                    Attachments = [.. _messageAttachmentComposer.PendingAttachments],
+                    SubmittedBy = ResolveSubmittedBy()
+                });
+
+            _messages.Add(preparedSubmission.UserMessage);
+            StateHasChanged();
+            await ScrollToBottom();
+
             await foreach (var chunk in CliExecutorService.ExecuteStreamAsync(
-                _sessionId,
-                _selectedToolId,
-                userMessage))
+                preparedSubmission.ExecutionRequest))
             {
                 if (chunk.IsError)
                 {
@@ -931,6 +939,8 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
                             IsCompleted = true
                         });
                     }
+
+                    shouldClearPendingAttachments = true;
                     break;
                 }
                 else
@@ -989,6 +999,10 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
 
             _isLoading = false;
             _currentAssistantMessage = string.Empty;
+            if (shouldClearPendingAttachments)
+            {
+                _messageAttachmentComposer.Clear();
+            }
             StateHasChanged();
             await ScrollToBottom();
             await SaveCurrentSession();
@@ -4124,6 +4138,67 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             StateHasChanged();
         }
     }
+
+    private async Task HandleMessageAttachmentUpload(InputFileChangeEventArgs e)
+    {
+        if (_isMessageAttachmentUploading)
+        {
+            return;
+        }
+
+        var remainingSlots = MaxMessageAttachmentCount - _messageAttachmentComposer.PendingAttachments.Count;
+        if (remainingSlots <= 0)
+        {
+            return;
+        }
+
+        _isMessageAttachmentUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            var files = e.GetMultipleFiles(remainingSlots);
+            var updatedAttachments = _messageAttachmentComposer.PendingAttachments.ToList();
+
+            foreach (var file in files)
+            {
+                if (file.Size > MaxMessageAttachmentSizeBytes)
+                {
+                    Console.WriteLine($"消息附件过大: {file.Name} ({FormatFileSize(file.Size)})");
+                    continue;
+                }
+
+                using var stream = file.OpenReadStream(MaxMessageAttachmentSizeBytes);
+                using var memoryStream = new MemoryStream();
+                await stream.CopyToAsync(memoryStream);
+
+                updatedAttachments.Add(new MessageDraftAttachmentInput
+                {
+                    FileName = file.Name,
+                    ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+                    Content = memoryStream.ToArray()
+                });
+            }
+
+            _messageAttachmentComposer.Replace(updatedAttachments);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"处理消息附件失败: {ex.Message}");
+        }
+        finally
+        {
+            _isMessageAttachmentUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task RemovePendingMessageAttachment(string attachmentId)
+    {
+        _messageAttachmentComposer.Remove(attachmentId);
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
     
     private string FormatFileSize(long bytes)
     {
@@ -4131,6 +4206,16 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
         if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
         return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    private string ResolveSubmittedBy()
+    {
+        if (!string.IsNullOrWhiteSpace(_currentUsername))
+        {
+            return _currentUsername;
+        }
+
+        return UserContextService.GetCurrentUsername();
     }
     
     #endregion
