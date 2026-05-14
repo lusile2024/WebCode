@@ -201,6 +201,86 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task SubmitAttachmentDraftAction_ClearsDraftBeforePreparedSubmissionCompletes()
+    {
+        const string chatId = "oc_attachment_draft_chat";
+        const string activeSessionId = "session-attachment-draft";
+        const string senderId = "ou_test_user";
+        const string appId = "cli_test";
+
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-attachment-draft-submit-blocked-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+
+        try
+        {
+            var cliExecutor = new RecordingCliExecutorService();
+            cliExecutor.SetSessionWorkspacePath(activeSessionId, workspacePath);
+
+            var attachmentPath = Path.Combine(
+                workspacePath,
+                ".webcode",
+                "message-inputs",
+                "draft-submit-2",
+                "notes.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(attachmentPath)!);
+            await File.WriteAllTextAsync(attachmentPath, "staged attachment body");
+
+            var draftService = new FeishuAttachmentDraftService();
+            draftService.OpenDraft(appId, chatId, senderId, activeSessionId, "codex");
+            draftService.UpdateText(appId, chatId, senderId, "Please summarize the attachment.");
+            draftService.AddStagedAttachment(
+                appId,
+                chatId,
+                senderId,
+                new MessageAttachment
+                {
+                    Id = "attachment-1",
+                    DisplayName = "notes.txt",
+                    MimeType = "text/plain",
+                    Extension = ".txt",
+                    SizeBytes = "staged attachment body".Length,
+                    Kind = MessageAttachmentKind.Text,
+                    WorkspaceRelativePath = ".webcode/message-inputs/draft-submit-2/notes.txt"
+                });
+
+            var preparedSubmissionService = new StubMessageSubmissionService();
+            var feishuChannel = new StubFeishuChannelService(activeSessionId)
+            {
+                BlockPreparedSubmissionExecution = true
+            };
+            var serviceProvider = new TestServiceProvider(
+                messageSubmissionService: preparedSubmissionService,
+                attachmentDraftService: draftService);
+            var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+            var response = await service.HandleCardActionAsync(
+                """{"action":"submit_attachment_draft"}""",
+                chatId: chatId,
+                operatorUserId: senderId,
+                appId: appId);
+
+            var executedSubmission = await feishuChannel.WaitForPreparedSubmissionAsync(TimeSpan.FromSeconds(3));
+
+            try
+            {
+                Assert.Equal("🚀 已开始提交附件草稿...", ExtractToastContent(response));
+                Assert.Equal(chatId, executedSubmission.ChatId);
+                Assert.Null(draftService.GetDraft(appId, chatId, senderId));
+            }
+            finally
+            {
+                feishuChannel.ReleasePreparedSubmissionExecution();
+                await feishuChannel.WaitForPreparedSubmissionCompletionAsync(TimeSpan.FromSeconds(3));
+            }
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task OpenAttachmentDraftAction_UsesCurrentSessionAndReturnsDraftCard()
     {
         const string chatId = "oc_attachment_draft_chat";
@@ -4734,10 +4814,14 @@ public class FeishuCardActionServiceTests
     {
         private readonly TaskCompletionSource<(string ChatId, string Content, string? Username, string? AppId)> _messageSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource<(PreparedMessageSubmission Submission, string ChatId, string? ReplyToMessageId, string? Username, string? AppId)> _preparedSubmissionExecuted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _preparedSubmissionCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _preparedSubmissionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool IsRunning => true;
 
         public bool SessionExecutionActive { get; set; }
+
+        public bool BlockPreparedSubmissionExecution { get; set; }
 
         public string? CreatedWorkspacePath { get; private set; }
 
@@ -4791,8 +4875,23 @@ public class FeishuCardActionServiceTests
             string? appId = null,
             CancellationToken cancellationToken = default)
         {
+            return ExecutePreparedSubmissionCoreAsync(submission, chatId, replyToMessageId, username, appId);
+        }
+
+        private async Task ExecutePreparedSubmissionCoreAsync(
+            PreparedMessageSubmission submission,
+            string chatId,
+            string? replyToMessageId,
+            string? username,
+            string? appId)
+        {
             _preparedSubmissionExecuted.TrySetResult((submission, chatId, replyToMessageId, username, appId));
-            return Task.CompletedTask;
+            if (BlockPreparedSubmissionExecution)
+            {
+                await _preparedSubmissionRelease.Task;
+            }
+
+            _preparedSubmissionCompleted.TrySetResult();
         }
 
         public string? GetCurrentSession(string chatKey, string? username = null) => currentSessionId;
@@ -4851,6 +4950,18 @@ public class FeishuCardActionServiceTests
             using var cts = new CancellationTokenSource(timeout);
             using var _ = cts.Token.Register(() => _preparedSubmissionExecuted.TrySetCanceled(cts.Token));
             return await _preparedSubmissionExecuted.Task;
+        }
+
+        public void ReleasePreparedSubmissionExecution()
+        {
+            _preparedSubmissionRelease.TrySetResult();
+        }
+
+        public async Task WaitForPreparedSubmissionCompletionAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _preparedSubmissionCompleted.TrySetCanceled(cts.Token));
+            await _preparedSubmissionCompleted.Task;
         }
     }
 

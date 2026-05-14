@@ -696,12 +696,12 @@ public class FeishuCardActionService
                 using var scope = _serviceProvider.CreateScope();
                 var submissionService = scope.ServiceProvider.GetRequiredService<IMessageSubmissionService>();
                 var preparedSubmission = await submissionService.PrepareAsync(messageDraft);
+                draftService.ClearDraft(appId, normalizedChatKey, senderId);
                 await _feishuChannel.ExecutePreparedSubmissionAsync(
                     preparedSubmission,
                     normalizedChatKey,
                     username: username,
                     appId: appId);
-                draftService.ClearDraft(appId, normalizedChatKey, senderId);
             }
             catch (Exception ex)
             {
