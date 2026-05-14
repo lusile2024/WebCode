@@ -2028,6 +2028,19 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
             // 忽略保存历史错误
         }
 
+        var userMessage = new ChatMessage
+        {
+            Role = "user",
+            Content = message,
+            CliToolId = _selectedToolId,
+            IsCompleted = true
+        };
+        _messages.Add(userMessage);
+        ChatSessionService.AddMessage(_sessionId, userMessage);
+
+        StateHasChanged();
+        await ScrollToBottom();
+
         if (await TryHandleHistoryCommandAsync(message))
         {
             _isLoading = false;
@@ -2063,12 +2076,11 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
                     SubmittedBy = ResolveSubmittedBy()
                 });
 
-            var userMessage = preparedSubmission.UserMessage;
-            _messages.Add(userMessage);
-            ChatSessionService.AddMessage(_sessionId, userMessage);
-
+            userMessage.Content = preparedSubmission.UserMessage.Content;
+            userMessage.Attachments = preparedSubmission.UserMessage.Attachments;
+            userMessage.CreatedAt = preparedSubmission.UserMessage.CreatedAt;
+            userMessage.CliToolId = preparedSubmission.UserMessage.CliToolId;
             StateHasChanged();
-            await ScrollToBottom();
 
             await foreach (var chunk in CliExecutorService.ExecuteStreamAsync(
                 preparedSubmission.ExecutionRequest,

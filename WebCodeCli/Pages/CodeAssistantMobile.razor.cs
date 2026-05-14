@@ -864,9 +864,20 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
             _progressTracker.Start();
         }
 
+        var userMessageModel = new ChatMessage
+        {
+            Role = "user",
+            Content = userMessage,
+            CreatedAt = DateTime.Now,
+            CliToolId = _selectedToolId,
+            IsCompleted = true
+        };
+        _messages.Add(userMessageModel);
+
         _isLoading = true;
         _currentAssistantMessage = string.Empty;
         StateHasChanged();
+        await ScrollToBottom();
 
         if (await TryHandleHistoryCommandAsync(userMessage))
         {
@@ -894,9 +905,11 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
                     SubmittedBy = ResolveSubmittedBy()
                 });
 
-            _messages.Add(preparedSubmission.UserMessage);
+            userMessageModel.Content = preparedSubmission.UserMessage.Content;
+            userMessageModel.Attachments = preparedSubmission.UserMessage.Attachments;
+            userMessageModel.CreatedAt = preparedSubmission.UserMessage.CreatedAt;
+            userMessageModel.CliToolId = preparedSubmission.UserMessage.CliToolId;
             StateHasChanged();
-            await ScrollToBottom();
 
             await foreach (var chunk in CliExecutorService.ExecuteStreamAsync(
                 preparedSubmission.ExecutionRequest))
