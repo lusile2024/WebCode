@@ -907,7 +907,6 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
 
             userMessageModel.Content = preparedSubmission.UserMessage.Content;
             userMessageModel.Attachments = preparedSubmission.UserMessage.Attachments;
-            userMessageModel.CreatedAt = preparedSubmission.UserMessage.CreatedAt;
             userMessageModel.CliToolId = preparedSubmission.UserMessage.CliToolId;
             StateHasChanged();
 
@@ -3005,6 +3004,7 @@ public partial class CodeAssistantMobile : ComponentBase, IAsyncDisposable
     private async Task LoadSessionFromDrawer(string sessionId)
     {
         _isLoadingSession = true;
+        _messageAttachmentComposer.Clear();
         StateHasChanged();
         
         try

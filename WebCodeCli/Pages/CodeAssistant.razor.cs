@@ -2078,7 +2078,6 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
 
             userMessage.Content = preparedSubmission.UserMessage.Content;
             userMessage.Attachments = preparedSubmission.UserMessage.Attachments;
-            userMessage.CreatedAt = preparedSubmission.UserMessage.CreatedAt;
             userMessage.CliToolId = preparedSubmission.UserMessage.CliToolId;
             StateHasChanged();
 
@@ -5674,6 +5673,7 @@ public partial class CodeAssistant : ComponentBase, IAsyncDisposable
         try
         {
             _isLoadingSession = true;
+            _messageAttachmentComposer.Clear();
             StateHasChanged();
 
             var startTime = DateTime.Now;
