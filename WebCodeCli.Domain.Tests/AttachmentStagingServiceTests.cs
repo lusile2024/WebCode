@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using Microsoft.Extensions.Logging.Abstractions;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
@@ -94,6 +96,81 @@ public class AttachmentStagingServiceTests
             {
                 Directory.Delete(workspaceRoot, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task ReservationMarker_WhenDifferentRawIdsRace_OnlyOneReservationSucceeds()
+    {
+        var method = typeof(AttachmentStagingService).GetMethod(
+            "EnsureSubmissionDirectoryReservation",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+
+        var doubleSuccessObserved = false;
+        var normalizedSubmissionDirectoryName = "submission_123_with_chars";
+
+        for (var attempt = 0; attempt < 100 && !doubleSuccessObserved; attempt++)
+        {
+            var workspaceRoot = Path.Combine(
+                Path.GetTempPath(),
+                "WebCodeCli.Domain.Tests",
+                nameof(AttachmentStagingServiceTests),
+                Guid.NewGuid().ToString("N"));
+            var submissionRoot = Path.Combine(workspaceRoot, normalizedSubmissionDirectoryName);
+            Directory.CreateDirectory(submissionRoot);
+
+            try
+            {
+                using var start = new ManualResetEventSlim(false);
+
+                var firstTask = Task.Run(() => InvokeReservation(
+                    method!,
+                    submissionRoot,
+                    "submission:123/with?chars",
+                    normalizedSubmissionDirectoryName,
+                    start));
+                var secondTask = Task.Run(() => InvokeReservation(
+                    method!,
+                    submissionRoot,
+                    "submission_123_with*chars",
+                    normalizedSubmissionDirectoryName,
+                    start));
+
+                start.Set();
+                var results = await Task.WhenAll(firstTask, secondTask);
+                doubleSuccessObserved = results.All(result => result == null);
+            }
+            finally
+            {
+                if (Directory.Exists(workspaceRoot))
+                {
+                    Directory.Delete(workspaceRoot, recursive: true);
+                }
+            }
+        }
+
+        Assert.False(doubleSuccessObserved, "Expected atomic reservation to reject one concurrent submitter.");
+    }
+
+    private static Exception? InvokeReservation(
+        MethodInfo method,
+        string submissionRoot,
+        string rawSubmissionId,
+        string normalizedSubmissionDirectoryName,
+        ManualResetEventSlim start)
+    {
+        start.Wait();
+
+        try
+        {
+            method.Invoke(null, [submissionRoot, rawSubmissionId, normalizedSubmissionDirectoryName]);
+            return null;
+        }
+        catch (TargetInvocationException ex)
+        {
+            return ex.InnerException ?? ex;
         }
     }
 

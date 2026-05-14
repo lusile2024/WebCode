@@ -1,3 +1,5 @@
+using System.Text;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WebCodeCli.Domain.Common.Extensions;
@@ -189,9 +191,21 @@ public class AttachmentStagingService : IAttachmentStagingService
         string normalizedSubmissionDirectoryName)
     {
         var markerPath = Path.Combine(submissionRoot, SubmissionMarkerFileName);
-        if (File.Exists(markerPath))
+        try
         {
-            var existingSubmissionId = File.ReadAllText(markerPath);
+            using var stream = new FileStream(markerPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            writer.Write(rawSubmissionId);
+            writer.Flush();
+            return;
+        }
+        catch (IOException)
+        {
+        }
+
+        var existingSubmissionId = TryReadReservationMarker(markerPath);
+        if (existingSubmissionId != null)
+        {
             if (!string.Equals(existingSubmissionId, rawSubmissionId, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -201,13 +215,52 @@ public class AttachmentStagingService : IAttachmentStagingService
             return;
         }
 
-        if (Directory.EnumerateFileSystemEntries(submissionRoot).Any())
+        if (Directory.EnumerateFileSystemEntries(submissionRoot).Any(entry => !PathsEqual(entry, markerPath)))
         {
             throw new InvalidOperationException(
                 $"Submission id normalization collision detected: '{rawSubmissionId}' maps to '{normalizedSubmissionDirectoryName}', but the staging directory already exists without a matching reservation marker.");
         }
 
-        File.WriteAllText(markerPath, rawSubmissionId);
+        throw new InvalidOperationException(
+            $"Submission id normalization collision detected: '{rawSubmissionId}' maps to '{normalizedSubmissionDirectoryName}', but the reservation marker could not be claimed safely.");
+    }
+
+    private static string? TryReadReservationMarker(string markerPath)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            if (!File.Exists(markerPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                return File.ReadAllText(markerPath);
+            }
+            catch (IOException) when (attempt < 4)
+            {
+                Thread.Sleep(10);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 4)
+            {
+                Thread.Sleep(10);
+            }
+        }
+
+        return null;
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        return string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            comparison);
     }
 
     private static void EnsurePathWithinRoot(string rootPath, string candidatePath, string displayName)
