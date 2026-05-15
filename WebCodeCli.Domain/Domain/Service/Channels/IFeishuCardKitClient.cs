@@ -89,6 +89,14 @@ public interface IFeishuCardKitClient
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null);
 
+    Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+        FeishuIncomingAttachment attachment,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
     /// <summary>
     /// 创建流式回复句柄
     /// </summary>
@@ -180,4 +188,15 @@ public interface IFeishuCardKitClient
         string resourceType,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null);
+}
+
+public class FeishuDownloadedAttachment
+{
+    public string DisplayName { get; set; } = string.Empty;
+
+    public string MimeType { get; set; } = "application/octet-stream";
+
+    public byte[] Content { get; set; } = [];
+
+    public long SizeBytes { get; set; }
 }

@@ -1954,11 +1954,13 @@ public class FeishuChannelServiceTests
         IUserContextService userContextService,
         IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
         ISuperpowersCapabilityService? superpowersCapabilityService = null,
-        IGoalCapabilityService? goalCapabilityService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
+        IGoalCapabilityService? goalCapabilityService = null,
+        IFeishuAttachmentDraftService? attachmentDraftService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
         private readonly IGoalCapabilityService _goalCapabilityService = goalCapabilityService ?? new StubGoalCapabilityService();
+        private readonly IFeishuAttachmentDraftService _attachmentDraftService = attachmentDraftService ?? new FeishuAttachmentDraftService();
 
         public object? GetService(Type serviceType)
         {
@@ -2005,6 +2007,16 @@ public class FeishuChannelServiceTests
             if (serviceType == typeof(IGoalCapabilityService))
             {
                 return _goalCapabilityService;
+            }
+
+            if (serviceType == typeof(IFeishuAttachmentDraftService))
+            {
+                return _attachmentDraftService;
+            }
+
+            if (serviceType == typeof(FeishuAttachmentDraftCardBuilder))
+            {
+                return new FeishuAttachmentDraftCardBuilder();
             }
 
             return null;
@@ -2232,6 +2244,12 @@ public class FeishuChannelServiceTests
             return Task.FromResult("reply-text");
         }
 
+        public Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+
         public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
             => throw new NotSupportedException();
 
@@ -2253,7 +2271,7 @@ public class FeishuChannelServiceTests
             => throw new NotSupportedException();
     }
 
-    private sealed class StreamingRecordingFeishuCardKitClient : IFeishuCardKitClient
+    private class StreamingRecordingFeishuCardKitClient : IFeishuCardKitClient
     {
         public List<StreamingHandleRecord> Handles { get; } = new();
 
@@ -2297,6 +2315,12 @@ public class FeishuChannelServiceTests
             LastReplyTextContent = content;
             return Task.FromResult($"reply-text-{ReplyTextCallCount}");
         }
+
+        public virtual Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
 
         public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
         {
@@ -2348,7 +2372,7 @@ public class FeishuChannelServiceTests
                 throttleMs: 0));
         }
 
-        public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public virtual Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
 
         public Task<string> ReplyElementsCardAsync(string replyMessageId, FeishuNetSdk.Im.Dtos.ElementsCardV2Dto card, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
@@ -2455,6 +2479,49 @@ public class FeishuChannelServiceTests
                     .ToList()
             };
         }
+    }
+
+    private sealed class DraftAttachmentRecordingFeishuCardKitClient : StreamingRecordingFeishuCardKitClient
+    {
+        public FeishuOptions? LastDownloadOptionsOverride { get; private set; }
+
+        public int SendRawCardCallCount { get; private set; }
+
+        public string? LastRawCardJson { get; private set; }
+
+        public override Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+        {
+            LastDownloadOptionsOverride = optionsOverride;
+            return Task.FromResult(new FeishuDownloadedAttachment
+            {
+                DisplayName = attachment.DisplayName,
+                MimeType = attachment.MimeType,
+                Content = "draft body"u8.ToArray(),
+                SizeBytes = "draft body"u8.Length
+            });
+        }
+
+        public override Task<string> SendRawCardAsync(
+            string chatId,
+            string cardJson,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+        {
+            SendRawCardCallCount++;
+            LastRawCardJson = cardJson;
+            return Task.FromResult("raw-card-1");
+        }
+    }
+
+    private static string? TryGetActionName(object value)
+    {
+        var element = JsonSerializer.SerializeToElement(value);
+        return element.TryGetProperty("action", out var actionElement)
+            ? actionElement.GetString()
+            : null;
     }
 
     private sealed class StreamingHandleRecord

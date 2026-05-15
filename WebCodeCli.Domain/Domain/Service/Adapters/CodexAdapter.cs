@@ -25,6 +25,9 @@ public class CodexAdapter : ICliToolAdapter
 
     public bool SupportsStreamParsing => true;
 
+    public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+        => CliAttachmentCapabilities.ForNativeKinds(MessageAttachmentKind.Image);
+
     public bool CanHandle(CliToolConfig tool)
     {
         if (tool == null) return false;
@@ -33,11 +36,10 @@ public class CodexAdapter : ICliToolAdapter
                (tool.Command?.Contains("codex", StringComparison.OrdinalIgnoreCase) ?? false);
     }
 
-    public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+    public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
     {
-        var escapedPrompt = EscapeJsonString(prompt);
-
-        // 获取参数模板：优先使用配置的 ArgumentTemplate，为空则使用默认值
+        var context = request.SessionContext ?? new CliSessionContext();
+        var escapedPrompt = EscapeJsonString(request.BuildPromptText());
         var useConfiguredTemplate = !string.IsNullOrWhiteSpace(tool.ArgumentTemplate);
         var template = useConfiguredTemplate
             ? tool.ArgumentTemplate
@@ -45,18 +47,30 @@ public class CodexAdapter : ICliToolAdapter
                 ? DefaultResumeArgumentTemplate
                 : DefaultArgumentTemplate;
 
-        // 构建会话恢复参数
         var sessionArg = string.Empty;
         if (context.IsResume && !string.IsNullOrEmpty(context.CliThreadId))
         {
             sessionArg = $"resume {context.CliThreadId}";
         }
 
-        // 替换模板占位符
-        return NormalizeArguments(template
+        var nativeAttachmentArguments = BuildNativeAttachmentArguments(request.NativeAttachments);
+        var templateWithAttachments = InjectAttachmentArguments(template, nativeAttachmentArguments);
+
+        return NormalizeArguments(templateWithAttachments
             .Replace("{prompt}", escapedPrompt)
             .Replace("{cliThreadId}", context.CliThreadId ?? string.Empty)
-            .Replace("{session}", sessionArg));
+            .Replace("{session}", sessionArg)
+            .Replace("{attachments}", nativeAttachmentArguments));
+    }
+
+    public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+    {
+        return BuildArguments(tool, new CliExecutionRequest
+        {
+            ToolId = tool.Id,
+            PromptText = prompt,
+            SessionContext = context
+        });
     }
 
     public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
@@ -745,6 +759,62 @@ public class CodexAdapter : ICliToolAdapter
             .Replace("\n", "\\n")
             .Replace("\r", "\\r")
             .Replace("\t", "\\t");
+    }
+
+    private static string BuildNativeAttachmentArguments(IEnumerable<CliExecutionAttachment> attachments)
+    {
+        var builder = new StringBuilder();
+
+        foreach (var attachment in attachments)
+        {
+            if (attachment.Kind != MessageAttachmentKind.Image || string.IsNullOrWhiteSpace(attachment.AbsolutePath))
+            {
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.Append(' ');
+            }
+
+            builder.Append("-i \"")
+                .Append(EscapeCommandArgument(attachment.AbsolutePath))
+                .Append('"');
+        }
+
+        return builder.ToString();
+    }
+
+    private static string InjectAttachmentArguments(string template, string attachmentArguments)
+    {
+        if (template.Contains("{attachments}", StringComparison.Ordinal))
+        {
+            return template.Replace("{attachments}", attachmentArguments, StringComparison.Ordinal);
+        }
+
+        if (string.IsNullOrWhiteSpace(attachmentArguments))
+        {
+            return template;
+        }
+
+        if (template.Contains("\"{prompt}\"", StringComparison.Ordinal))
+        {
+            return template.Replace("\"{prompt}\"", $"{attachmentArguments} \"{{prompt}}\"", StringComparison.Ordinal);
+        }
+
+        if (template.Contains("{prompt}", StringComparison.Ordinal))
+        {
+            return template.Replace("{prompt}", $"{attachmentArguments} {{prompt}}", StringComparison.Ordinal);
+        }
+
+        return $"{template} {attachmentArguments}";
+    }
+
+    private static string EscapeCommandArgument(string input)
+    {
+        return string.IsNullOrEmpty(input)
+            ? input
+            : input.Replace("\"", "\\\"");
     }
 
     private static string NormalizeArguments(string arguments)

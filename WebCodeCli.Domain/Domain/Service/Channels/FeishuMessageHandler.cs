@@ -19,6 +19,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 /// </summary>
 public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1EventBodyDto>, ImMessageReceiveV1EventBodyDto>, IDisposable
 {
+    private static readonly FeishuIncomingAttachmentParser AttachmentParser = new();
     private readonly FeishuOptions _options;
     private readonly ILogger<FeishuMessageHandler> _logger;
     private readonly IServiceProvider _serviceProvider;
@@ -117,6 +118,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
 
         // 解析消息内容
         var content = ParseMessageContent(message.Content, message.MessageType);
+        var attachments = AttachmentParser.Parse(message.MessageType, message.Content);
 
         // 获取发送者信息（优先使用 union_id，便于跨应用稳定绑定）
         var senderId = eventDto.Sender.SenderId.UnionId
@@ -222,6 +224,7 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             Content = content,
             RawContent = message.Content,
             MessageType = message.MessageType,
+            Attachments = attachments.ToList(),
             SenderId = senderId,
             SenderName = boundWebUsername,
             ChatName = message.ChatType == "p2p" ? boundWebUsername : message.ChatId,

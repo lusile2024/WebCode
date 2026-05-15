@@ -71,7 +71,20 @@ public interface ICliExecutorService
         string sessionId,
         string toolId,
         string userPrompt,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default)
+        => ExecuteStreamAsync(
+            new CliExecutionRequest
+            {
+                SessionId = sessionId,
+                ToolId = toolId,
+                PromptText = userPrompt
+            },
+            cancellationToken);
+
+    IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
+        CliExecutionRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Implement the request-based ExecuteStreamAsync overload.");
 
     /// <summary>
     /// 判断工具是否支持少打断执行

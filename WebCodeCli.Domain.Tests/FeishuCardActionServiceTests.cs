@@ -4547,6 +4547,12 @@ public class FeishuCardActionServiceTests
         public Task<string> ReplyTextMessageAsync(string replyMessageId, string content, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
 
+        public Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+            FeishuIncomingAttachment attachment,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+
         public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null)
         {
             LastStreamingChrome = chrome;
@@ -4707,10 +4713,15 @@ public class FeishuCardActionServiceTests
     private sealed class StubFeishuChannelService(string? currentSessionId) : IFeishuChannelService
     {
         private readonly TaskCompletionSource<(string ChatId, string Content, string? Username, string? AppId)> _messageSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<(PreparedMessageSubmission Submission, string ChatId, string? ReplyToMessageId, string? Username, string? AppId)> _preparedSubmissionExecuted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _preparedSubmissionCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _preparedSubmissionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool IsRunning => true;
 
         public bool SessionExecutionActive { get; set; }
+
+        public bool BlockPreparedSubmissionExecution { get; set; }
 
         public string? CreatedWorkspacePath { get; private set; }
 
@@ -4755,6 +4766,33 @@ public class FeishuCardActionServiceTests
             => throw new NotSupportedException();
 
         public Task HandleIncomingMessageAsync(FeishuIncomingMessage message) => throw new NotSupportedException();
+
+        public Task ExecutePreparedSubmissionAsync(
+            PreparedMessageSubmission submission,
+            string chatId,
+            string? replyToMessageId = null,
+            string? username = null,
+            string? appId = null,
+            CancellationToken cancellationToken = default)
+        {
+            return ExecutePreparedSubmissionCoreAsync(submission, chatId, replyToMessageId, username, appId);
+        }
+
+        private async Task ExecutePreparedSubmissionCoreAsync(
+            PreparedMessageSubmission submission,
+            string chatId,
+            string? replyToMessageId,
+            string? username,
+            string? appId)
+        {
+            _preparedSubmissionExecuted.TrySetResult((submission, chatId, replyToMessageId, username, appId));
+            if (BlockPreparedSubmissionExecution)
+            {
+                await _preparedSubmissionRelease.Task;
+            }
+
+            _preparedSubmissionCompleted.TrySetResult();
+        }
 
         public string? GetCurrentSession(string chatKey, string? username = null) => currentSessionId;
 
@@ -4805,6 +4843,25 @@ public class FeishuCardActionServiceTests
             using var cts = new CancellationTokenSource(timeout);
             using var _ = cts.Token.Register(() => _messageSent.TrySetCanceled(cts.Token));
             return await _messageSent.Task;
+        }
+
+        public async Task<(PreparedMessageSubmission Submission, string ChatId, string? ReplyToMessageId, string? Username, string? AppId)> WaitForPreparedSubmissionAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _preparedSubmissionExecuted.TrySetCanceled(cts.Token));
+            return await _preparedSubmissionExecuted.Task;
+        }
+
+        public void ReleasePreparedSubmissionExecution()
+        {
+            _preparedSubmissionRelease.TrySetResult();
+        }
+
+        public async Task WaitForPreparedSubmissionCompletionAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            using var _ = cts.Token.Register(() => _preparedSubmissionCompleted.TrySetCanceled(cts.Token));
+            await _preparedSubmissionCompleted.Task;
         }
     }
 
@@ -4928,6 +4985,36 @@ public class FeishuCardActionServiceTests
         }
     }
 
+    private sealed class StubMessageSubmissionService : IMessageSubmissionService
+    {
+        public MessageDraft? LastDraft { get; private set; }
+
+        public Task<PreparedMessageSubmission> PrepareAsync(MessageDraft draft, CancellationToken cancellationToken = default)
+        {
+            LastDraft = draft;
+
+            return Task.FromResult(new PreparedMessageSubmission
+            {
+                SessionId = draft.SessionId,
+                ToolId = draft.ToolId,
+                Text = draft.Text,
+                Attachments =
+                [
+                    .. draft.Attachments.Select(attachment => new MessageAttachment
+                    {
+                        Id = attachment.Id,
+                        DisplayName = attachment.FileName,
+                        MimeType = attachment.ContentType,
+                        Extension = Path.GetExtension(attachment.FileName),
+                        SizeBytes = attachment.Content?.LongLength ?? 0,
+                        Kind = MessageAttachmentKind.Text,
+                        WorkspaceRelativePath = attachment.FileName
+                    })
+                ]
+            });
+        }
+    }
+
     private sealed class TestServiceProvider : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly StubFeishuUserBindingService _bindingService = new();
@@ -4942,6 +5029,8 @@ public class FeishuCardActionServiceTests
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService;
         private readonly IGoalCapabilityService _goalCapabilityService;
         private readonly IReplyTtsOrchestrator? _replyTtsOrchestrator;
+        private readonly IMessageSubmissionService _messageSubmissionService;
+        private readonly IFeishuAttachmentDraftService _attachmentDraftService;
 
         public TestServiceProvider(
             TestUserContextService? userContextService = null,
@@ -4953,7 +5042,9 @@ public class FeishuCardActionServiceTests
             ISuperpowersCapabilityService? superpowersCapabilityService = null,
             IGoalCapabilityService? goalCapabilityService = null,
             IReplyTtsOrchestrator? replyTtsOrchestrator = null,
-            StubUserFeishuBotConfigService? feishuBotConfigService = null)
+            StubUserFeishuBotConfigService? feishuBotConfigService = null,
+            IMessageSubmissionService? messageSubmissionService = null,
+            IFeishuAttachmentDraftService? attachmentDraftService = null)
         {
             _feishuBotConfigService = feishuBotConfigService ?? new StubUserFeishuBotConfigService();
             _userContextService = userContextService ?? new TestUserContextService();
@@ -4965,6 +5056,8 @@ public class FeishuCardActionServiceTests
             _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
             _goalCapabilityService = goalCapabilityService ?? new StubGoalCapabilityService();
             _replyTtsOrchestrator = replyTtsOrchestrator;
+            _messageSubmissionService = messageSubmissionService ?? new StubMessageSubmissionService();
+            _attachmentDraftService = attachmentDraftService ?? new FeishuAttachmentDraftService();
         }
 
         public object? GetService(Type serviceType)
@@ -5032,6 +5125,21 @@ public class FeishuCardActionServiceTests
             if (serviceType == typeof(IReplyTtsOrchestrator))
             {
                 return _replyTtsOrchestrator;
+            }
+
+            if (serviceType == typeof(IMessageSubmissionService))
+            {
+                return _messageSubmissionService;
+            }
+
+            if (serviceType == typeof(IFeishuAttachmentDraftService))
+            {
+                return _attachmentDraftService;
+            }
+
+            if (serviceType == typeof(FeishuAttachmentDraftCardBuilder))
+            {
+                return new FeishuAttachmentDraftCardBuilder();
             }
 
             return null;

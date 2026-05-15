@@ -393,6 +393,28 @@ public class CliExecutorService : ICliExecutorService
         string userPrompt,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        await foreach (var chunk in ExecuteStreamAsync(
+            new CliExecutionRequest
+            {
+                SessionId = sessionId,
+                ToolId = toolId,
+                PromptText = userPrompt
+            },
+            cancellationToken))
+        {
+            yield return chunk;
+        }
+    }
+
+    public async IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
+        CliExecutionRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var sessionId = request.SessionId;
+        var toolId = request.ToolId;
+        var userPrompt = request.PromptText;
         var username = ResolveUsernameForToolOperation(null, sessionId);
         var tool = GetTool(toolId, username);
         if (tool == null && await HasValidCcSwitchSnapshotAsync(sessionId, toolId))
@@ -444,9 +466,8 @@ public class CliExecutorService : ICliExecutorService
         try
         {
             await foreach (var chunk in ExecuteProcessStreamAsync(
-                sessionId,
+                request,
                 tool,
-                userPrompt,
                 goalRuntimeEnabled,
                 cancellationToken))
             {
@@ -546,7 +567,17 @@ public class CliExecutorService : ICliExecutorService
 
         try
         {
-            await foreach (var chunk in ExecuteOneTimeProcessAsync(sessionId, tool, string.Empty, true, prompt, cancellationToken))
+            await foreach (var chunk in ExecuteOneTimeProcessAsync(
+                new CliExecutionRequest
+                {
+                    SessionId = sessionId,
+                    ToolId = toolId,
+                    PromptText = string.Empty
+                },
+                tool,
+                true,
+                prompt,
+                cancellationToken))
             {
                 yield return chunk;
             }
@@ -573,12 +604,13 @@ public class CliExecutorService : ICliExecutorService
     }
 
     private async IAsyncEnumerable<StreamOutputChunk> ExecuteProcessStreamAsync(
-        string sessionId,
+        CliExecutionRequest request,
         CliToolConfig tool,
-        string userPrompt,
         bool goalRuntimeEnabled,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var sessionId = request.SessionId;
+        var userPrompt = request.PromptText;
         var adapter = _adapterFactory.GetAdapter(tool);
         if (goalRuntimeEnabled && IsNativeCodexGoalRuntimeTool(tool))
         {
@@ -608,7 +640,7 @@ public class CliExecutorService : ICliExecutorService
         if (usePersistentProcess && !ShouldUseOneTimeExecutionDespitePersistentMode(tool, adapter))
         {
             _logger.LogInformation("【持久化进程模式】工具: {Tool}, UsePersistentProcess={Flag}", tool.Name, tool.UsePersistentProcess);
-            await foreach (var chunk in ExecutePersistentProcessAsync(sessionId, tool, userPrompt, cancellationToken))
+            await foreach (var chunk in ExecutePersistentProcessAsync(request, tool, cancellationToken))
             {
                 yield return chunk;
             }
@@ -634,7 +666,7 @@ public class CliExecutorService : ICliExecutorService
                     tool.UsePersistentProcess);
             }
 
-            await foreach (var chunk in ExecuteOneTimeProcessAsync(sessionId, tool, userPrompt, false, null, cancellationToken))
+            await foreach (var chunk in ExecuteOneTimeProcessAsync(request, tool, false, null, cancellationToken))
             {
                 yield return chunk;
             }
@@ -645,11 +677,12 @@ public class CliExecutorService : ICliExecutorService
     /// 浣跨敤鎸佷箙鍖栬繘绋嬫墽琛?
     /// </summary>
     private async IAsyncEnumerable<StreamOutputChunk> ExecutePersistentProcessAsync(
-        string sessionId,
+        CliExecutionRequest request,
         CliToolConfig tool,
-        string userPrompt,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var sessionId = request.SessionId;
+        var userPrompt = request.PromptText;
         var launchBlockingMessage = await GetLaunchBlockingMessageAsync(tool.Id, sessionId, cancellationToken);
         if (launchBlockingMessage != null)
         {
@@ -711,6 +744,7 @@ public class CliExecutorService : ICliExecutorService
             cliThreadId,
             environmentVariables,
             cancellationToken);
+        var requestWithContext = request.WithSessionContext(sessionContext);
         
         _logger.LogInformation("浣跨敤鎸佷箙鍖栬繘绋嬫ā寮忔墽琛?CLI 宸ュ叿: {Tool}, 浼氳瘽: {Session}, 宸ヤ綔鐩綍: {Workspace}, 鍛戒护: {Command}, CLI Thread: {CliThread}, 閫傞厤鍣? {Adapter}", 
             tool.Name, sessionId, sessionWorkspace, resolvedCommand, cliThreadId ?? "New Session", adapter?.GetType().Name ?? "None");
@@ -782,9 +816,9 @@ public class CliExecutorService : ICliExecutorService
         string actualInput;
         if (hasAdapter)
         {
-            actualInput = adapter!.BuildArguments(tool, userPrompt, sessionContext);
+            actualInput = adapter!.BuildArguments(tool, requestWithContext);
             _logger.LogInformation("浣跨敤閫傞厤鍣?{Adapter} 鏋勫缓鍛戒护: PID={ProcessId}, IsResume={IsResume}, Prompt闀垮害={Length}", 
-                adapter.GetType().Name, processInfo.Process.Id, sessionContext.IsResume, userPrompt.Length);
+                adapter.GetType().Name, processInfo.Process.Id, sessionContext.IsResume, requestWithContext.PromptText.Length);
         }
         else
         {
@@ -1369,13 +1403,14 @@ public class CliExecutorService : ICliExecutorService
     /// 浣跨敤涓€娆℃€ц繘绋嬫墽琛岋紙鍘熸湁閫昏緫锛?
     /// </summary>
     private async IAsyncEnumerable<StreamOutputChunk> ExecuteOneTimeProcessAsync(
-        string sessionId,
+        CliExecutionRequest request,
         CliToolConfig tool,
-        string userPrompt,
         bool useLowInterruption,
         string? lowInterruptionPrompt = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var sessionId = request.SessionId;
+        var userPrompt = request.PromptText;
         var launchBlockingMessage = await GetLaunchBlockingMessageAsync(tool.Id, sessionId, cancellationToken);
         if (launchBlockingMessage != null)
         {
@@ -1422,6 +1457,7 @@ public class CliExecutorService : ICliExecutorService
             cliThreadId,
             environmentVariables,
             cancellationToken);
+        var requestWithContext = request.WithSessionContext(sessionContext);
 
         // 鏋勫缓鍙傛暟锛屼娇鐢ㄩ€傞厤鍣紙濡傛灉鏈夛級
         string arguments;
@@ -1436,7 +1472,7 @@ public class CliExecutorService : ICliExecutorService
         }
         else if (hasAdapter)
         {
-            arguments = adapter!.BuildArguments(tool, userPrompt, sessionContext);
+            arguments = adapter!.BuildArguments(tool, requestWithContext);
             _logger.LogInformation("使用适配器 {Adapter} 构建命令, IsResume={IsResume}", adapter.GetType().Name, sessionContext.IsResume);
         }
         else

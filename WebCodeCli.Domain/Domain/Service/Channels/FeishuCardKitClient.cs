@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FeishuNetSdk.Im.Dtos;
@@ -17,6 +18,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IFeishuCardKitClient), ServiceLifetime.Scoped)]
 public class FeishuCardKitClient : IFeishuCardKitClient
 {
+    private const int CardUpdateMaxAttempts = 2;
     private readonly FeishuOptions _defaultOptions;
     private readonly ILogger<FeishuCardKitClient> _logger;
     private readonly HttpClient _httpClient;
@@ -332,6 +334,46 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return (content, fileName, mimeType);
     }
 
+    public async Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(
+        FeishuIncomingAttachment attachment,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+        ArgumentException.ThrowIfNullOrWhiteSpace(attachment.AttachmentKey);
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var path = string.Equals(attachment.MessageType, "image", StringComparison.OrdinalIgnoreCase)
+            ? $"/open-apis/im/v1/images/{attachment.AttachmentKey}"
+            : $"/open-apis/im/v1/files/{attachment.AttachmentKey}/download";
+
+        var response = await GetAsync(path, token, effectiveOptions, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError(
+                "Download attachment failed: Status={Status}, Key={AttachmentKey}, Content={Content}",
+                response.StatusCode,
+                attachment.AttachmentKey,
+                content);
+            throw new HttpRequestException($"Download attachment failed: {response.StatusCode}");
+        }
+
+        var contentBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+
+        return new FeishuDownloadedAttachment
+        {
+            DisplayName = string.IsNullOrWhiteSpace(attachment.DisplayName)
+                ? attachment.AttachmentKey
+                : attachment.DisplayName,
+            MimeType = string.IsNullOrWhiteSpace(contentType) ? attachment.MimeType : contentType,
+            Content = contentBytes,
+            SizeBytes = contentBytes.LongLength
+        };
+    }
+
     public async Task<FeishuStreamingHandle> CreateStreamingHandleAsync(
         string chatId,
         string? replyMessageId,
@@ -417,6 +459,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         {
             var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
             var cardData = BuildStreamingCardData(content, title, chrome, includeHeader: !string.IsNullOrWhiteSpace(title));
+            var updateUuid = CreateCardUpdateUuid(cardId, sequence);
 
             var payload = new
             {
@@ -425,30 +468,59 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                     type = "card_json",
                     data = JsonSerializer.Serialize(cardData)
                 },
-                sequence
+                sequence,
+                uuid = updateUuid
             };
 
-            var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
-            var result = await ParseResponseAsync(response, cancellationToken);
-            EnsureBusinessSuccess(result, "Update CardKit card");
-
-            if (result.TryGetProperty("code", out var codeProp))
+            for (var attempt = 1; attempt <= CardUpdateMaxAttempts; attempt++)
             {
-                var code = codeProp.GetInt32();
-                if (code == 0) return true;
+                try
+                {
+                    var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
+                    var result = await ParseResponseAsync(response, cancellationToken);
+                    EnsureBusinessSuccess(result, "Update CardKit card");
 
-                _logger.LogWarning(
-                    "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
-                    cardId, sequence, code,
-                    result.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : "Unknown");
-                return false;
+                    if (result.TryGetProperty("code", out var codeProp))
+                    {
+                        var code = codeProp.GetInt32();
+                        if (code == 0) return true;
+
+                        _logger.LogWarning(
+                            "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
+                            cardId, sequence, code,
+                            result.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : "Unknown");
+                        return false;
+                    }
+
+                    return false;
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    if (attempt < CardUpdateMaxAttempts)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "更新卡片超时，准备重试 (cardId={CardId}, seq={Sequence}, attempt={Attempt}/{MaxAttempts}, uuid={Uuid})",
+                            cardId,
+                            sequence,
+                            attempt,
+                            CardUpdateMaxAttempts,
+                            updateUuid);
+                        continue;
+                    }
+
+                    _logger.LogWarning(
+                        ex,
+                        "更新卡片超时，已跳过本次更新但保持流式卡片继续推送 (cardId={CardId}, seq={Sequence}, attempt={Attempt}/{MaxAttempts}, uuid={Uuid})",
+                        cardId,
+                        sequence,
+                        attempt,
+                        CardUpdateMaxAttempts,
+                        updateUuid);
+                    return true;
+                }
             }
 
-            return false;
-        }
-        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(ex, "更新卡片超时 (cardId={CardId}, seq={Sequence})", cardId, sequence);
             return false;
         }
         catch (Exception ex)
@@ -456,6 +528,12 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             _logger.LogError(ex, "Update card failed (cardId={CardId}, seq={Sequence})", cardId, sequence);
             return false;
         }
+    }
+
+    private static string CreateCardUpdateUuid(string cardId, int sequence)
+    {
+        var input = Encoding.UTF8.GetBytes($"{cardId}:{sequence}");
+        return Convert.ToHexString(SHA256.HashData(input));
     }
 
     private object BuildStreamingCardData(
@@ -970,6 +1048,21 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             Encoding.UTF8,
             "application/json");
 
+        if (!string.IsNullOrEmpty(token))
+        {
+            request.Headers.Add("Authorization", $"Bearer {token}");
+        }
+
+        return await SendAsync(request, options, cancellationToken);
+    }
+
+    private async Task<HttpResponseMessage> GetAsync(
+        string path,
+        string token,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl}{path}");
         if (!string.IsNullOrEmpty(token))
         {
             request.Headers.Add("Authorization", $"Bearer {token}");
