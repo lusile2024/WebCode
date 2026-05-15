@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -324,12 +325,26 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
             var toolId = ResolveToolId(message.ChatId, message.SenderName);
             var normalizedPrompt = FeishuPromptNormalizer.Normalize(message.Content);
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
+
+            if (IsAttachmentMessageType(message.MessageType))
+            {
+                await HandleAttachmentMessageAsync(
+                    sessionId,
+                    toolId,
+                    message,
+                    normalizedPrompt,
+                    effectiveOptions);
+                return;
+            }
+
+            var cliPrompt = normalizedPrompt;
 
             // 娣诲姞鐢ㄦ埛娑堟伅鍒颁細璇?
             _chatSessionService.AddMessage(sessionId, new ChatMessage
             {
                 Role = "user",
-                Content = normalizedPrompt,
+                Content = cliPrompt,
                 CliToolId = toolId,
                 CreatedAt = DateTime.UtcNow
             });
@@ -338,7 +353,6 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             TryAttachSuperpowersQuickActions(streamingChrome, sessionId, toolId, showStopAction: true);
 
             // Create the streaming reply and show the thinking state immediately.
-            var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
             var handle = await _cardKit.CreateStreamingHandleAsync(
                 message.ChatId,
                 null,
@@ -363,7 +377,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             var externalHistoryBackfillTask = RunExternalHistoryBackfillAsync(
                 sessionId,
                 toolId,
-                normalizedPrompt,
+                cliPrompt,
                 effectiveOptions.ThinkingMessage,
                 () => activeExecution.GetLatestRenderedContent(),
                 content =>
@@ -383,8 +397,6 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             {
                 await SupersedeExecutionAsync(previousExecution, message.MessageId);
             }
-
-            var cliPrompt = normalizedPrompt;
 
             try
             {
@@ -445,6 +457,53 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
         _logger.LogInformation("[FeishuChannel] HandleIncomingMessageAsync 被调用");
         await OnMessageReceivedAsync(message);
+    }
+
+    private async Task HandleAttachmentMessageAsync(
+        string sessionId,
+        string toolId,
+        FeishuIncomingMessage message,
+        string normalizedPrompt,
+        FeishuOptions effectiveOptions)
+    {
+        var attachment = await StageIncomingAttachmentAsync(sessionId, message, effectiveOptions);
+        if (attachment == null)
+        {
+            _logger.LogWarning(
+                "[FeishuChannel] 无法处理附件消息: MessageId={MessageId}, MessageType={MessageType}",
+                message.MessageId,
+                message.MessageType);
+            await ReplyMessageAsync(message.MessageId, "⚠️ 附件解析失败，请重新发送。", message.SenderName, message.AppId);
+            return;
+        }
+
+        var defaultInstruction = ShouldAppendAttachmentPromptText(
+            message,
+            normalizedPrompt,
+            new IncomingAttachmentDescriptor(attachment.ResourceType, attachment.FileKey))
+            ? normalizedPrompt
+            : string.Empty;
+        var cardJson = FeishuAttachmentSubmissionCardHelper.BuildSubmissionCardJson(
+            sessionId,
+            message.ChatId,
+            toolId,
+            attachment.ResourceType,
+            attachment.FileName,
+            attachment.AbsolutePath,
+            attachment.MimeType,
+            defaultInstruction);
+
+        await _cardKit.ReplyRawCardAsync(
+            message.MessageId,
+            cardJson,
+            optionsOverride: effectiveOptions);
+
+        _logger.LogInformation(
+            "[FeishuChannel] 已回复附件待提交卡片: MessageId={MessageId}, SessionId={SessionId}, ResourceType={ResourceType}, FilePath={FilePath}",
+            message.MessageId,
+            sessionId,
+            attachment.ResourceType,
+            attachment.AbsolutePath);
     }
 
     /// <summary>
@@ -963,6 +1022,169 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 ex.Message));
         }
     }
+
+    private async Task<StagedIncomingAttachment?> StageIncomingAttachmentAsync(
+        string sessionId,
+        FeishuIncomingMessage message,
+        FeishuOptions effectiveOptions)
+    {
+        if (!IsAttachmentMessageType(message.MessageType))
+        {
+            return null;
+        }
+
+        var attachment = TryParseIncomingAttachment(message);
+        if (attachment == null)
+        {
+            _logger.LogWarning(
+                "[FeishuChannel] 无法从入站附件消息解析资源信息: MessageId={MessageId}, MessageType={MessageType}, RawContent={RawContent}",
+                message.MessageId,
+                message.MessageType,
+                message.RawContent);
+            return null;
+        }
+
+        var download = await _cardKit.DownloadMessageResourceAsync(
+            message.MessageId,
+            attachment.FileKey,
+            attachment.ResourceType,
+            optionsOverride: effectiveOptions);
+
+        var relativeDirectory = Path.Combine(".webcode", "feishu-inputs");
+        var sanitizedFileName = SanitizeFileName(download.FileName);
+        if (string.IsNullOrWhiteSpace(sanitizedFileName))
+        {
+            sanitizedFileName = $"{attachment.ResourceType}-{attachment.FileKey}";
+        }
+
+        var stagedFileName = $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{sanitizedFileName}";
+        var uploaded = await _cliExecutor.UploadFileToWorkspaceAsync(
+            sessionId,
+            stagedFileName,
+            download.Content,
+            relativeDirectory);
+
+        if (!uploaded)
+        {
+            throw new InvalidOperationException($"Failed to stage Feishu attachment into workspace for message {message.MessageId}.");
+        }
+
+        var workspacePath = _cliExecutor.GetSessionWorkspacePath(sessionId);
+        var absolutePath = Path.Combine(workspacePath, relativeDirectory, stagedFileName);
+
+        return new StagedIncomingAttachment(
+            attachment.ResourceType,
+            attachment.FileKey,
+            sanitizedFileName,
+            download.MimeType,
+            absolutePath);
+    }
+
+    private static bool IsAttachmentMessageType(string? messageType)
+    {
+        return string.Equals(messageType, "image", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(messageType, "file", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IncomingAttachmentDescriptor? TryParseIncomingAttachment(FeishuIncomingMessage message)
+    {
+        if (string.IsNullOrWhiteSpace(message.RawContent))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(message.RawContent);
+            var root = document.RootElement;
+
+            if (string.Equals(message.MessageType, "image", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!root.TryGetProperty("image_key", out var imageKeyElement))
+                {
+                    return null;
+                }
+
+                var imageKey = imageKeyElement.GetString();
+                if (string.IsNullOrWhiteSpace(imageKey))
+                {
+                    return null;
+                }
+
+                return new IncomingAttachmentDescriptor("image", imageKey);
+            }
+
+            if (string.Equals(message.MessageType, "file", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!root.TryGetProperty("file_key", out var fileKeyElement))
+                {
+                    return null;
+                }
+
+                var fileKey = fileKeyElement.GetString();
+                if (string.IsNullOrWhiteSpace(fileKey))
+                {
+                    return null;
+                }
+
+                return new IncomingAttachmentDescriptor("file", fileKey);
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return string.Empty;
+        }
+
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sanitized = new string(fileName.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray());
+        return sanitized.Trim();
+    }
+
+    private static bool ShouldAppendAttachmentPromptText(
+        FeishuIncomingMessage message,
+        string normalizedPrompt,
+        IncomingAttachmentDescriptor attachment)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPrompt))
+        {
+            return false;
+        }
+
+        var trimmedPrompt = normalizedPrompt.Trim();
+        var trimmedRawContent = message.RawContent?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(trimmedRawContent) &&
+            string.Equals(trimmedPrompt, trimmedRawContent, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (trimmedPrompt.StartsWith("{", StringComparison.Ordinal) &&
+            trimmedPrompt.Contains(attachment.FileKey, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private sealed record IncomingAttachmentDescriptor(string ResourceType, string FileKey);
+
+    private sealed record StagedIncomingAttachment(
+        string ResourceType,
+        string FileKey,
+        string FileName,
+        string MimeType,
+        string AbsolutePath);
 
     private static string BuildSupersededCardContent(ActiveSessionExecution execution)
     {

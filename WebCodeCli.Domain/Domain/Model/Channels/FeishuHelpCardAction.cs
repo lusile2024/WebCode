@@ -8,6 +8,7 @@ namespace WebCodeCli.Domain.Domain.Model.Channels;
 /// </summary>
 public class FeishuHelpCardAction
 {
+    public const string SubmitAttachmentPromptAction = "submit_attachment_prompt";
     public const string SubmitSuperpowersQuickInputAction = "submit_superpowers_quick_input";
     public const string SubmitGoalQuickInputAction = "submit_goal_quick_input";
     public const string StatusGoalAction = "status_goal";
@@ -149,4 +150,16 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("send_as_new_card")]
     public bool SendAsNewCard { get; set; }
+
+    [JsonPropertyName("attachment_type")]
+    public string? AttachmentType { get; set; }
+
+    [JsonPropertyName("attachment_name")]
+    public string? AttachmentName { get; set; }
+
+    [JsonPropertyName("attachment_path")]
+    public string? AttachmentPath { get; set; }
+
+    [JsonPropertyName("attachment_mime_type")]
+    public string? AttachmentMimeType { get; set; }
 }

@@ -49,10 +49,6 @@ public class CliExecutorService : ICliExecutorService
     private readonly Dictionary<string, Process> _activeSessionProcesses = new();
     private readonly object _activeProcessLock = new();
 
-    // Codex 閰嶇疆鏂囦欢缂撳瓨锛堥伩鍏嶆瘡娆℃墽琛岄兘閲嶆柊鐢熸垚锛?
-    private string? _lastCodexConfigHash;
-    private readonly object _codexConfigLock = new();
-
     // Windows 涓嬩负 Claude Code 閫夋嫨鍙敤鐨勮緝楂樼増鏈?Node.js
     private string? _preferredNodeExecutablePath;
     private readonly object _preferredNodeExecutableLock = new();
@@ -700,12 +696,6 @@ public class CliExecutorService : ICliExecutorService
         // 鑾峰彇鐜鍙橀噺(浼樺厛浠庢暟鎹簱)
         var environmentVariables = await GetToolEnvironmentVariablesAsync(tool.Id);
 
-        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
-            && !_ccSwitchService.IsManagedTool(tool.Id))
-        {
-            GenerateCodexConfigFile(environmentVariables);
-        }
-        
         // 鑾峰彇閫傞厤鍣?
         var adapter = _adapterFactory.GetAdapter(tool);
         bool hasAdapter = adapter != null;
@@ -1423,12 +1413,6 @@ public class CliExecutorService : ICliExecutorService
         }
         
         var environmentVariables = await GetToolEnvironmentVariablesAsync(tool.Id);
-
-        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
-            && !_ccSwitchService.IsManagedTool(tool.Id))
-        {
-            GenerateCodexConfigFile(environmentVariables);
-        }
 
         // 鏋勫缓浼氳瘽涓婁笅鏂?
         var sessionContext = await BuildCliSessionContextAsync(
@@ -2899,12 +2883,6 @@ public class CliExecutorService : ICliExecutorService
         }
 
         var environmentVariables = await GetToolEnvironmentVariablesAsync(tool.Id);
-        if (string.Equals(tool.Id, "codex", StringComparison.OrdinalIgnoreCase)
-            && !_ccSwitchService.IsManagedTool(tool.Id))
-        {
-            GenerateCodexConfigFile(environmentVariables);
-        }
-
         var sessionContext = await BuildCliSessionContextAsync(
             sessionId,
             tool.Id,
@@ -4092,7 +4070,6 @@ public class CliExecutorService : ICliExecutorService
         {
             await PrepareManagedCodexLaunchConfigAsync(
                 sessionWorkspace,
-                environmentVariables,
                 launchOverride,
                 cancellationToken);
             await SyncCodexThreadArtifactsAsync(sessionWorkspace, cliThreadId, cancellationToken);
@@ -4141,7 +4118,6 @@ public class CliExecutorService : ICliExecutorService
 
     private async Task PrepareManagedCodexLaunchConfigAsync(
         string sessionWorkspace,
-        Dictionary<string, string> environmentVariables,
         SessionToolLaunchOverride? launchOverride,
         CancellationToken cancellationToken)
     {
@@ -4165,9 +4141,8 @@ public class CliExecutorService : ICliExecutorService
         }
         else
         {
-            baseContent = BuildCodexConfigContent(
-                environmentVariables,
-                enableGoalsFeature: await ShouldEnableCodexGoalsAsync(sessionWorkspace, cancellationToken));
+            throw new InvalidOperationException(
+                "Managed Codex launch requires a synchronized session config snapshot. WebCode will not generate config.toml.");
         }
 
         baseContent = StripUnsupportedProjectCodexConfigSections(baseContent);
@@ -4854,62 +4829,6 @@ public class CliExecutorService : ICliExecutorService
         }
     }
 
-    /// <summary>
-    /// 涓?Codex CLI 鍔ㄦ€佺敓鎴愰厤缃枃浠?
-    /// Codex CLI 浼樺厛璇诲彇閰嶇疆鏂囦欢鑰岄潪鐜鍙橀噺锛屽洜姝ら渶瑕佸湪鎵ц鍓嶆牴鎹暟鎹簱涓殑鐜鍙橀噺鐢熸垚閰嶇疆鏂囦欢
-    /// 浣跨敤鍝堝笇鍊肩紦瀛橈紝鍙湪閰嶇疆鍙樺寲鏃舵墠閲嶆柊鐢熸垚鏂囦欢
-    /// </summary>
-    private void GenerateCodexConfigFile(Dictionary<string, string> envVars)
-    {
-        try
-        {
-            var configContent = BuildCodexConfigContent(
-                envVars,
-                enableGoalsFeature: ShouldEnableCodexGoalsSync());
-            var configHash = configContent.GetHashCode().ToString();
-            
-            // 妫€鏌ラ厤缃槸鍚﹀彉鍖?
-            lock (_codexConfigLock)
-            {
-                if (_lastCodexConfigHash == configHash)
-                {
-                    _logger.LogDebug("Codex 閰嶇疆鏈彉鍖栵紝璺宠繃鐢熸垚閰嶇疆鏂囦欢");
-                    return;
-                }
-                _lastCodexConfigHash = configHash;
-            }
-            
-            // 纭畾 Codex 閰嶇疆鐩綍
-            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            {
-                // 鍦?Docker 涓彲鑳介渶瑕佷娇鐢?/home/appuser
-                var appUserHome = "/home/appuser";
-                if (Directory.Exists(appUserHome))
-                {
-                    homeDir = appUserHome;
-                }
-            }
-            
-            var codexConfigDir = Path.Combine(homeDir, ".codex");
-            var codexConfigFile = Path.Combine(codexConfigDir, "config.toml");
-            
-            // 纭繚鐩綍瀛樺湪
-            if (!Directory.Exists(codexConfigDir))
-            {
-                Directory.CreateDirectory(codexConfigDir);
-            }
-            
-            // 鍐欏叆閰嶇疆鏂囦欢
-            File.WriteAllText(codexConfigFile, configContent);
-            _logger.LogInformation("宸茬敓鎴?Codex 閰嶇疆鏂囦欢: {Path}", codexConfigFile);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "鐢熸垚 Codex 閰嶇疆鏂囦欢澶辫触");
-        }
-    }
-
     private async Task<string?> GetLaunchBlockingMessageAsync(string toolId, string sessionId, CancellationToken cancellationToken = default)
     {
         var normalizedToolId = NormalizeManagedToolId(toolId);
@@ -5038,72 +4957,6 @@ public class CliExecutorService : ICliExecutorService
             _logger.LogDebug(ex, "妫€娴?Codex /goal 鑳藉姏澶辫触锛屽綋鍓嶄細璇濆皢涓嶆敞鍏?goals feature");
             return false;
         }
-    }
-
-    private bool ShouldEnableCodexGoalsSync()
-    {
-        try
-        {
-            var result = _goalCapabilityService.ProbeAsync(
-                new GoalCapabilityContext
-                {
-                    ToolId = "codex"
-                },
-                forceRefresh: false).GetAwaiter().GetResult();
-
-            return result.State == GoalCapabilityState.Available;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "妫€娴?Codex /goal 鑳藉姏澶辫触锛屽叏灞€閰嶇疆灏嗕笉娉ㄥ叆 goals feature");
-            return false;
-        }
-    }
-
-    private static string BuildCodexConfigContent(Dictionary<string, string> envVars, bool enableGoalsFeature)
-    {
-        var baseUrl = envVars.GetValueOrDefault("CODEX_BASE_URL", "https://api.routin.ai/v1");
-        var model = envVars.GetValueOrDefault("CODEX_MODEL", "gpt-5.4");
-        var providerName = envVars.GetValueOrDefault("CODEX_PROVIDER_NAME", "meteor-ai");
-        var providerId = envVars.GetValueOrDefault("CODEX_MODEL_PROVIDER", providerName);
-        var wireApi = envVars.GetValueOrDefault("CODEX_WIRE_API", "responses");
-        var approvalPolicy = envVars.GetValueOrDefault("CODEX_APPROVAL_POLICY", "never");
-        var reasoningEffort = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_EFFORT", "xhigh");
-        var reasoningSummary = envVars.GetValueOrDefault("CODEX_MODEL_REASONING_SUMMARY", "detailed");
-        var modelVerbosity = envVars.GetValueOrDefault("CODEX_MODEL_VERBOSITY", "high");
-        var sandboxMode = envVars.GetValueOrDefault("CODEX_SANDBOX_MODE", "danger-full-access");
-        var maxContext = envVars.GetValueOrDefault("CODEX_MAX_CONTEXT", "1000000");
-        var contextCompactLimit = envVars.GetValueOrDefault("CODEX_CONTEXT_COMPACT_LIMIT", "800000");
-        var featureFlags = enableGoalsFeature
-            ? "[features]\ngoals = true\n\n"
-            : string.Empty;
-
-        return $@"# Codex CLI 閰嶇疆鏂囦欢锛堢敱 WebCode 鍔ㄦ€佺敓鎴愶級
-
-model = ""{model}""
-model_provider = ""{providerId}""
-disable_response_storage = true
-max_context = {maxContext}
-context_compact_limit = {contextCompactLimit}
-approval_policy = ""{approvalPolicy}""
-sandbox_mode = ""{sandboxMode}""
-
-model_reasoning_effort = ""{reasoningEffort}""
-model_reasoning_summary = ""{reasoningSummary}""
-model_verbosity = ""{modelVerbosity}""
-model_supports_reasoning_summaries = true
-
-[model_providers.""{providerId}""]
-name = ""{providerName}""
-base_url = ""{baseUrl}""
-requires_openai_auth = true
-wire_api = ""{wireApi}""
-
-{featureFlags}
-
-[windows]
-sandbox = ""elevated""
-";
     }
 
     /// <summary>

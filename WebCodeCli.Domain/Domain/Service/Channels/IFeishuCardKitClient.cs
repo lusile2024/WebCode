@@ -164,4 +164,20 @@ public interface IFeishuCardKitClient
         string cardJson,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null);
+
+    /// <summary>
+    /// 下载入站消息中携带的图片或文件资源。
+    /// </summary>
+    /// <param name="messageId">飞书消息 ID</param>
+    /// <param name="fileKey">资源 file_key / image_key</param>
+    /// <param name="resourceType">资源类型，通常为 image 或 file</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <param name="optionsOverride">可选的机器人配置覆盖</param>
+    /// <returns>资源内容、文件名和 MIME 类型</returns>
+    Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
+        string messageId,
+        string fileKey,
+        string resourceType,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null);
 }

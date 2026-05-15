@@ -220,6 +220,8 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
             ChatType = message.ChatType,
             AppId = appId,
             Content = content,
+            RawContent = message.Content,
+            MessageType = message.MessageType,
             SenderId = senderId,
             SenderName = boundWebUsername,
             ChatName = message.ChatType == "p2p" ? boundWebUsername : message.ChatId,

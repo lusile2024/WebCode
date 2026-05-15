@@ -78,6 +78,48 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task DownloadMessageResourceAsync_GetsBinaryBodyAndInfersFileName()
+    {
+        var imageBytes = new byte[] { 1, 2, 3, 4 };
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(imageBytes)
+                {
+                    Headers =
+                    {
+                        ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"),
+                        ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
+                        {
+                            FileName = "\"screen.png\""
+                        }
+                    }
+                }
+            }
+        ]);
+
+        var client = CreateClient(handler);
+
+        var result = await client.DownloadMessageResourceAsync(
+            "om_message_123",
+            "img_v2_123",
+            "image",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(imageBytes, result.Content);
+        Assert.Equal("screen.png", result.FileName);
+        Assert.Equal("image/png", result.MimeType);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/im/v1/messages/om_message_123/resources/img_v2_123"
+        ], handler.RequestPaths);
+        Assert.Equal("type=image", handler.RequestQueries[1]);
+    }
+
+    [Fact]
     public async Task SendTextMessageAsync_SendsTextPayload()
     {
         var handler = new StubHttpMessageHandler(
@@ -827,12 +869,14 @@ public class FeishuCardKitClientTests
         private readonly Queue<HttpResponseMessage> _responses = new(responses);
 
         public List<string> RequestPaths { get; } = [];
+        public List<string> RequestQueries { get; } = [];
         public List<string> RequestBodies { get; } = [];
         public List<string?> RequestContentTypes { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestQueries.Add(request.RequestUri.Query.TrimStart('?'));
             RequestContentTypes.Add(request.Content?.Headers.ContentType?.MediaType);
             RequestBodies.Add(request.Content == null
                 ? string.Empty

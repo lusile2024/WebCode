@@ -3556,48 +3556,59 @@ args = ["mcp", "serve"]
     }
 
     [Fact]
-    public void BuildCodexConfigContent_UsesNewSchema()
+    public async Task PrepareManagedCodexLaunchConfigAsync_WhenNoSnapshotConfigExists_ThrowsInsteadOfGenerating()
     {
-        var envVars = new Dictionary<string, string>
+        var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
         {
-            ["CODEX_BASE_URL"] = "https://api.routin.ai/v1",
-            ["CODEX_MODEL"] = "gpt-5.4",
-            ["CODEX_MODEL_PROVIDER"] = "meteor-ai",
-            ["CODEX_PROVIDER_NAME"] = "meteor-ai",
-            ["CODEX_WIRE_API"] = "responses",
-            ["CODEX_APPROVAL_POLICY"] = "never",
-            ["CODEX_MODEL_REASONING_EFFORT"] = "xhigh",
-            ["CODEX_SANDBOX_MODE"] = "danger-full-access"
-        };
+            var options = Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = tempRoot,
+                Tools = []
+            });
 
-        var configContent = (string)typeof(CliExecutorService)
-            .GetMethod("BuildCodexConfigContent", BindingFlags.Static | BindingFlags.NonPublic)!
-            .Invoke(null, [envVars, false])!;
+            var service = new CliExecutorService(
+                NullLogger<CliExecutorService>.Instance,
+                options,
+                NullLogger<PersistentProcessManager>.Instance,
+                new NullServiceProvider(),
+                new StubChatSessionService(),
+                new StubCliAdapterFactory(),
+                new StubCcSwitchService());
 
-        Assert.Contains("model_provider = \"meteor-ai\"", configContent, StringComparison.Ordinal);
-        Assert.Contains("disable_response_storage = true", configContent, StringComparison.Ordinal);
-        Assert.Contains("max_context = 1000000", configContent, StringComparison.Ordinal);
-        Assert.Contains("context_compact_limit = 800000", configContent, StringComparison.Ordinal);
-        Assert.DoesNotContain("rmcp_client = true", configContent, StringComparison.Ordinal);
-        Assert.Contains("model_verbosity = \"high\"", configContent, StringComparison.Ordinal);
-        Assert.DoesNotContain("[mcp_servers.claude]", configContent, StringComparison.Ordinal);
-        Assert.Contains("[model_providers.\"meteor-ai\"]", configContent, StringComparison.Ordinal);
-        Assert.Contains("requires_openai_auth = true", configContent, StringComparison.Ordinal);
-        Assert.Contains("[windows]", configContent, StringComparison.Ordinal);
-        Assert.DoesNotContain("\nprofile = ", configContent, StringComparison.Ordinal);
-        Assert.DoesNotContain("[profiles.", configContent, StringComparison.Ordinal);
-        Assert.DoesNotContain("env_key =", configContent, StringComparison.Ordinal);
+            var method = typeof(CliExecutorService).GetMethod(
+                "PrepareManagedCodexLaunchConfigAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+            var invocation = (Task)method.Invoke(
+                service,
+                [tempRoot, null!, CancellationToken.None])!;
+
+            var exception = await Record.ExceptionAsync(async () => await invocation);
+
+            Assert.IsType<InvalidOperationException>(exception);
+            Assert.False(File.Exists(Path.Combine(tempRoot, ".codex", "config.toml")));
+            Assert.False(File.Exists(Path.Combine(tempRoot, ".codex", "config.toml.base")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
     }
 
     [Fact]
-    public void BuildCodexConfigContent_WhenGoalsEnabled_AppendsGoalsFeatureFlag()
+    public void CliExecutorService_DoesNotContainLegacyGenerateCodexConfigFile()
     {
-        var configContent = (string)typeof(CliExecutorService)
-            .GetMethod("BuildCodexConfigContent", BindingFlags.Static | BindingFlags.NonPublic)!
-            .Invoke(null, [new Dictionary<string, string>(), true])!;
+        var method = typeof(CliExecutorService).GetMethod(
+            "GenerateCodexConfigFile",
+            BindingFlags.Instance | BindingFlags.NonPublic);
 
-        Assert.Contains("[features]", configContent, StringComparison.Ordinal);
-        Assert.Contains("goals = true", configContent, StringComparison.Ordinal);
+        Assert.Null(method);
     }
 
     [Fact]

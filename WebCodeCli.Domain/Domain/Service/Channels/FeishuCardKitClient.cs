@@ -279,6 +279,59 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return ExtractMessageId(result, "reply text message");
     }
 
+    public async Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
+        string messageId,
+        string fileKey,
+        string resourceType,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+        {
+            throw new ArgumentException("Message id is required.", nameof(messageId));
+        }
+
+        if (string.IsNullOrWhiteSpace(fileKey))
+        {
+            throw new ArgumentException("File key is required.", nameof(fileKey));
+        }
+
+        if (string.IsNullOrWhiteSpace(resourceType))
+        {
+            throw new ArgumentException("Resource type is required.", nameof(resourceType));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var encodedMessageId = Uri.EscapeDataString(messageId);
+        var encodedFileKey = Uri.EscapeDataString(fileKey);
+        var encodedType = Uri.EscapeDataString(resourceType);
+
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{_baseUrl}/open-apis/im/v1/messages/{encodedMessageId}/resources/{encodedFileKey}?type={encodedType}");
+        request.Headers.Add("Authorization", $"Bearer {token}");
+
+        var response = await SendAsync(request, effectiveOptions, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError(
+                "Download Feishu message resource failed: Status={Status}, MessageId={MessageId}, FileKey={FileKey}, Type={Type}, Body={Body}",
+                response.StatusCode,
+                messageId,
+                fileKey,
+                resourceType,
+                body);
+            throw new HttpRequestException($"Download Feishu message resource failed: {response.StatusCode}");
+        }
+
+        var content = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var mimeType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+        var fileName = TryResolveDownloadFileName(response, fileKey, resourceType, mimeType);
+        return (content, fileName, mimeType);
+    }
+
     public async Task<FeishuStreamingHandle> CreateStreamingHandleAsync(
         string chatId,
         string? replyMessageId,
@@ -979,6 +1032,61 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(options.HttpTimeoutSeconds));
         return await _httpClient.SendAsync(request, timeoutCts.Token);
+    }
+
+    private static string TryResolveDownloadFileName(
+        HttpResponseMessage response,
+        string fileKey,
+        string resourceType,
+        string mimeType)
+    {
+        var contentDisposition = response.Content.Headers.ContentDisposition;
+        var fileName = contentDisposition?.FileNameStar ?? contentDisposition?.FileName;
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            return fileName.Trim('"');
+        }
+
+        var extension = GuessFileExtension(resourceType, mimeType);
+        return $"{resourceType}-{fileKey}{extension}";
+    }
+
+    private static string GuessFileExtension(string resourceType, string mimeType)
+    {
+        if (mimeType.Contains("png", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".png";
+        }
+
+        if (mimeType.Contains("jpeg", StringComparison.OrdinalIgnoreCase) ||
+            mimeType.Contains("jpg", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".jpg";
+        }
+
+        if (mimeType.Contains("gif", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".gif";
+        }
+
+        if (mimeType.Contains("webp", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".webp";
+        }
+
+        if (mimeType.Contains("pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".pdf";
+        }
+
+        if (mimeType.Contains("plain", StringComparison.OrdinalIgnoreCase))
+        {
+            return ".txt";
+        }
+
+        return string.Equals(resourceType, "image", StringComparison.OrdinalIgnoreCase)
+            ? ".png"
+            : string.Empty;
     }
 
     private async Task<JsonElement> ParseResponseAsync(

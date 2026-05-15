@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using SqlSugar;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
@@ -240,6 +241,155 @@ public class FeishuChannelServiceTests
             Assert.Contains("已完成", handle.FinalStatusMarkdown);
             Assert.Equal(1, cardKit.ReplyTextCallCount);
             Assert.Equal($"当前会话：superpowers  {sessionId[..8]}\n已完成", cardKit.LastReplyTextContent);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_ImageMessage_RepliesAttachmentSubmissionCardWithoutExecutingCli()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient
+        {
+            DownloadedResource = (Encoding.UTF8.GetBytes("fake-image"), "screen.png", "image/png")
+        };
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-image-message-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_image_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_image_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-image",
+                MessageType = "image",
+                RawContent = """{"image_key":"img_v2_123"}""",
+                Content = """{"image_key":"img_v2_123"}"""
+            });
+
+            Assert.Empty(cliExecutor.ExecuteCalls);
+            Assert.Equal("msg-image", cardKit.LastReplyRawCardMessageId);
+            Assert.NotNull(cardKit.LastReplyRawCardJson);
+            Assert.Contains("\"action\":\"submit_attachment_prompt\"", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains("screen.png", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains(".webcode", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains(FeishuAttachmentSubmissionDefaults.PromptFieldName, cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains(FeishuAttachmentSubmissionDefaults.SubmitButtonName, cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains($"\"max_length\":{FeishuAttachmentSubmissionDefaults.PromptMaxLength}", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains("\"action_type\":\"form_submit\"", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Equal("msg-image", cardKit.LastDownloadedMessageId);
+            Assert.Equal("img_v2_123", cardKit.LastDownloadedFileKey);
+            Assert.Equal("image", cardKit.LastDownloadedResourceType);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HandleIncomingMessageAsync_FileMessage_RepliesAttachmentSubmissionCardWithoutExecutingCli()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient
+        {
+            DownloadedResource = (Encoding.UTF8.GetBytes("fake-file"), "requirements.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        };
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-file-message-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        try
+        {
+            service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_file_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_file_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-file",
+                MessageType = "file",
+                RawContent = """{"file_key":"file_v2_123","file_name":"requirements.docx"}""",
+                Content = """{"file_key":"file_v2_123","file_name":"requirements.docx"}"""
+            });
+
+            Assert.Empty(cliExecutor.ExecuteCalls);
+            Assert.Equal("msg-file", cardKit.LastReplyRawCardMessageId);
+            Assert.NotNull(cardKit.LastReplyRawCardJson);
+            Assert.Contains("\"action\":\"submit_attachment_prompt\"", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains("requirements.docx", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains(".webcode", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains(FeishuAttachmentSubmissionDefaults.PromptFieldName, cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains(FeishuAttachmentSubmissionDefaults.SubmitButtonName, cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Contains("\"action_type\":\"form_submit\"", cardKit.LastReplyRawCardJson, StringComparison.Ordinal);
+            Assert.Equal("msg-file", cardKit.LastDownloadedMessageId);
+            Assert.Equal("file_v2_123", cardKit.LastDownloadedFileKey);
+            Assert.Equal("file", cardKit.LastDownloadedResourceType);
         }
         finally
         {
@@ -2093,6 +2243,14 @@ public class FeishuChannelServiceTests
 
         public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
+
+        public Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
+            string messageId,
+            string fileKey,
+            string resourceType,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
     }
 
     private sealed class StreamingRecordingFeishuCardKitClient : IFeishuCardKitClient
@@ -2103,7 +2261,20 @@ public class FeishuChannelServiceTests
 
         public string? LastReplyTextContent { get; private set; }
 
+        public (byte[] Content, string FileName, string MimeType) DownloadedResource { get; set; }
+            = (Array.Empty<byte>(), "attachment.bin", "application/octet-stream");
+
+        public string? LastDownloadedMessageId { get; private set; }
+
+        public string? LastDownloadedFileKey { get; private set; }
+
+        public string? LastDownloadedResourceType { get; private set; }
+
         public int? FailUpdateOnAttempt { get; set; }
+
+        public string? LastReplyRawCardMessageId { get; private set; }
+
+        public string? LastReplyRawCardJson { get; private set; }
 
         public Task<string> CreateCardAsync(string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
             => Task.FromResult($"card-{Handles.Count + 1}");
@@ -2184,7 +2355,24 @@ public class FeishuChannelServiceTests
             => throw new NotSupportedException();
 
         public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
-            => throw new NotSupportedException();
+        {
+            LastReplyRawCardMessageId = replyMessageId;
+            LastReplyRawCardJson = cardJson;
+            return Task.FromResult($"reply-raw-card-{Handles.Count + 1}");
+        }
+
+        public Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
+            string messageId,
+            string fileKey,
+            string resourceType,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+        {
+            LastDownloadedMessageId = messageId;
+            LastDownloadedFileKey = fileKey;
+            LastDownloadedResourceType = resourceType;
+            return Task.FromResult(DownloadedResource);
+        }
 
         private static FeishuStreamingCardChrome? CloneChrome(FeishuStreamingCardChrome? chrome)
         {

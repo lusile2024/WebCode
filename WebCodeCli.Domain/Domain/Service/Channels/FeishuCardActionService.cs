@@ -241,6 +241,8 @@ public class FeishuCardActionService
                     return await HandleToggleReplyTtsAsync(chatId, operatorUserId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
+                case FeishuHelpCardAction.SubmitAttachmentPromptAction:
+                    return await HandleAttachmentPromptSubmitAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
                 case FeishuHelpCardAction.SubmitSuperpowersQuickInputAction:
                 case FeishuHelpCardAction.ContinueSuperpowersAction:
                 case FeishuHelpCardAction.StopStreamingExecutionAction:
@@ -617,6 +619,75 @@ public class FeishuCardActionService
         });
 
         return toastResponse;
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleAttachmentPromptSubmitAsync(
+        FeishuHelpCardAction action,
+        JsonElement? formValue,
+        string? chatId,
+        string? operatorUserId,
+        string? appId,
+        string? inputValues)
+    {
+        var targetChatKey = action.ChatKey ?? chatId;
+        if (string.IsNullOrWhiteSpace(targetChatKey))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 缺少必要参数", "error");
+        }
+
+        if (string.IsNullOrWhiteSpace(action.SessionId)
+            || string.IsNullOrWhiteSpace(action.AttachmentPath)
+            || string.IsNullOrWhiteSpace(action.AttachmentType))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 附件卡片参数不完整，请重新发送附件", "error");
+        }
+
+        var userInstruction = ResolveQuickInputValue(
+            formValue,
+            FeishuAttachmentSubmissionDefaults.PromptFieldName,
+            inputValues)?.Trim();
+
+        if (string.IsNullOrWhiteSpace(userInstruction))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                FeishuAttachmentSubmissionDefaults.EmptyPromptWarning,
+                "warning");
+        }
+
+        if (userInstruction.Length > FeishuAttachmentSubmissionDefaults.PromptMaxLength)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                FeishuAttachmentSubmissionDefaults.PromptTooLongWarning,
+                "warning");
+        }
+
+        if (_feishuChannel.IsSessionExecutionActive(action.SessionId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前会话已有任务在执行，请等待完成后再试", "warning");
+        }
+
+        var username = ResolveFeishuUsername(NormalizeChatKey(targetChatKey), operatorUserId);
+        var effectiveToolId = await ResolveSessionToolIdAsync(action.SessionId, action.ToolId, targetChatKey, username);
+        var prompt = FeishuAttachmentSubmissionCardHelper.BuildCliPrompt(
+            action.AttachmentType,
+            string.IsNullOrWhiteSpace(action.AttachmentName)
+                ? Path.GetFileName(action.AttachmentPath)
+                : action.AttachmentName,
+            action.AttachmentPath,
+            string.IsNullOrWhiteSpace(action.AttachmentMimeType)
+                ? "application/octet-stream"
+                : action.AttachmentMimeType,
+            userInstruction);
+
+        return await HandleExecuteCommandAsync(
+            formValue: null,
+            commandFromAction: prompt,
+            chatId: targetChatKey,
+            operatorUserId: operatorUserId,
+            inputValues: null,
+            appId: appId,
+            preferredSessionId: action.SessionId,
+            preferredToolId: effectiveToolId);
     }
 
     private async Task<CardActionTriggerResponseDto> HandleSuperpowersQuickActionAsync(

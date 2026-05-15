@@ -126,6 +126,84 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_SubmitAttachmentPrompt_ReturnsWarning_WhenSupplementTextIsEmpty()
+    {
+        const string chatId = "oc_attachment_chat";
+        const string boundSessionId = "session-bound";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        cliExecutor.SetSessionWorkspacePath(boundSessionId, @"D:\repo\superpowers");
+        var feishuChannel = new StubFeishuChannelService("session-other");
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+
+        var response = await service.HandleCardActionAsync(
+            $$"""
+            {"action":"submit_attachment_prompt","chat_key":"{{chatId}}","session_id":"{{boundSessionId}}","tool_id":"codex","attachment_type":"image","attachment_name":"screen.png","attachment_path":"D:\\repo\\superpowers\\.webcode\\feishu-inputs\\20260515-screen.png","attachment_mime_type":"image/png"}
+            """,
+            formValue: new Dictionary<string, object>());
+
+        Assert.Equal(FeishuAttachmentSubmissionDefaults.EmptyPromptWarning, ExtractToastContent(response));
+        Assert.Empty(cliExecutor.ExecutedPrompts);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SubmitAttachmentPrompt_ReturnsWarning_WhenSupplementTextExceedsMaxLength()
+    {
+        const string chatId = "oc_attachment_chat";
+        const string boundSessionId = "session-bound";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        cliExecutor.SetSessionWorkspacePath(boundSessionId, @"D:\repo\superpowers");
+        var feishuChannel = new StubFeishuChannelService("session-other");
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider());
+
+        var response = await service.HandleCardActionAsync(
+            $$"""
+            {"action":"submit_attachment_prompt","chat_key":"{{chatId}}","session_id":"{{boundSessionId}}","tool_id":"codex","attachment_type":"image","attachment_name":"screen.png","attachment_path":"D:\\repo\\superpowers\\.webcode\\feishu-inputs\\20260515-screen.png","attachment_mime_type":"image/png"}
+            """,
+            formValue: new Dictionary<string, object>
+            {
+                [FeishuAttachmentSubmissionDefaults.PromptFieldName] = new string('a', FeishuAttachmentSubmissionDefaults.PromptMaxLength + 1)
+            });
+
+        Assert.Equal(FeishuAttachmentSubmissionDefaults.PromptTooLongWarning, ExtractToastContent(response));
+        Assert.Empty(cliExecutor.ExecutedPrompts);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_SubmitAttachmentPrompt_BuildsAttachmentPromptAndUsesBoundSession()
+    {
+        const string chatId = "oc_attachment_chat";
+        const string boundSessionId = "session-bound";
+        const string attachmentPath = @"D:\repo\superpowers\.webcode\feishu-inputs\20260515-screen.png";
+
+        var cliExecutor = new RecordingCliExecutorService();
+        cliExecutor.SetSessionWorkspacePath(boundSessionId, @"D:\repo\superpowers");
+        var cardKit = new StubFeishuCardKitClient();
+        var feishuChannel = new StubFeishuChannelService("session-other");
+        var service = CreateService(cliExecutor, feishuChannel, new TestServiceProvider(), cardKit);
+
+        await service.HandleCardActionAsync(
+            $$"""
+            {"action":"submit_attachment_prompt","chat_key":"{{chatId}}","session_id":"{{boundSessionId}}","tool_id":"codex","attachment_type":"image","attachment_name":"screen.png","attachment_path":"{{attachmentPath.Replace("\\", "\\\\")}}","attachment_mime_type":"image/png"}
+            """,
+            formValue: new Dictionary<string, object>
+            {
+                [FeishuAttachmentSubmissionDefaults.PromptFieldName] = "检查这个页面为什么点收起再展开才刷新"
+            });
+
+        var usedSessionId = await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(boundSessionId, usedSessionId);
+
+        var prompt = Assert.Single(cliExecutor.ExecutedPrompts);
+        Assert.Contains("[Feishu image attached]", prompt, StringComparison.Ordinal);
+        Assert.Contains("screen.png", prompt, StringComparison.Ordinal);
+        Assert.Contains(attachmentPath, prompt, StringComparison.Ordinal);
+        Assert.Contains("image/png", prompt, StringComparison.Ordinal);
+        Assert.Contains("检查这个页面为什么点收起再展开才刷新", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_CreatesStreamingCardWithRecentSessionMenu()
     {
         const string chatId = "oc_current_chat";
@@ -4524,6 +4602,14 @@ public class FeishuCardActionServiceTests
             => throw new NotSupportedException();
 
         public Task<string> ReplyRawCardAsync(string replyMessageId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+            => throw new NotSupportedException();
+
+        public Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
+            string messageId,
+            string fileKey,
+            string resourceType,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
             => throw new NotSupportedException();
 
         public async Task<(string ChatId, string CardJson)> WaitForRawCardSentAsync(TimeSpan timeout)
