@@ -794,9 +794,51 @@ public class FeishuCardKitClientTests
             operations);
     }
 
-    private static FeishuCardKitClient CreateClient(StubHttpMessageHandler handler)
+    [Fact]
+    public async Task CreateStreamingHandleAsync_RetriesTimedOutUpdateOnceWithSameSequenceAndUuid()
     {
-        var options = Options.Create(new FeishuOptions
+        var handler = new TimeoutOnFirstCardUpdateHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 1,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "initial",
+            "AI 助手",
+            TestContext.Current.CancellationToken);
+
+        await handle.UpdateAsync("first update");
+        await handle.UpdateAsync("second update");
+
+        Assert.False(handle.AreCardUpdatesStopped);
+        Assert.Equal(
+            3,
+            handler.RequestPaths.Count(path => string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal)));
+
+        var updateBodies = handler.RequestPaths
+            .Select((path, index) => new { path, body = handler.RequestBodies[index] })
+            .Where(entry => string.Equals(entry.path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            .Select(entry => JsonDocument.Parse(entry.body))
+            .ToArray();
+
+        Assert.Equal(1, updateBodies[0].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(1, updateBodies[1].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(2, updateBodies[2].RootElement.GetProperty("sequence").GetInt32());
+
+        var firstUuid = updateBodies[0].RootElement.GetProperty("uuid").GetString();
+        Assert.Equal(firstUuid, updateBodies[1].RootElement.GetProperty("uuid").GetString());
+        Assert.NotEqual(firstUuid, updateBodies[2].RootElement.GetProperty("uuid").GetString());
+    }
+
+    private static FeishuCardKitClient CreateClient(HttpMessageHandler handler, FeishuOptions? optionsOverride = null)
+    {
+        var options = Options.Create(optionsOverride ?? new FeishuOptions
         {
             AppId = "app-id",
             AppSecret = "app-secret",
@@ -844,6 +886,56 @@ public class FeishuCardKitClientTests
             }
 
             return _responses.Dequeue();
+        }
+    }
+
+    private sealed class TimeoutOnFirstCardUpdateHandler : HttpMessageHandler
+    {
+        private int _updateCount;
+
+        public List<string> RequestPaths { get; } = [];
+        public List<string> RequestBodies { get; } = [];
+        public List<string?> RequestContentTypes { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestContentTypes.Add(request.Content?.Headers.ContentType?.MediaType);
+            RequestBodies.Add(request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""");
+            }
+
+            if (request.Method == HttpMethod.Put &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            {
+                _updateCount++;
+                if (_updateCount == 1)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
+                }
+
+                return CreateJsonResponse("""{"code":0}""");
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
         }
     }
 }

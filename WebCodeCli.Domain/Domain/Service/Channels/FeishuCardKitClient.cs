@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FeishuNetSdk.Im.Dtos;
@@ -17,6 +18,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IFeishuCardKitClient), ServiceLifetime.Scoped)]
 public class FeishuCardKitClient : IFeishuCardKitClient
 {
+    private const int CardUpdateMaxAttempts = 2;
     private readonly FeishuOptions _defaultOptions;
     private readonly ILogger<FeishuCardKitClient> _logger;
     private readonly HttpClient _httpClient;
@@ -404,6 +406,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         {
             var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
             var cardData = BuildStreamingCardData(content, title, chrome, includeHeader: !string.IsNullOrWhiteSpace(title));
+            var updateUuid = CreateCardUpdateUuid(cardId, sequence);
 
             var payload = new
             {
@@ -412,30 +415,59 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                     type = "card_json",
                     data = JsonSerializer.Serialize(cardData)
                 },
-                sequence
+                sequence,
+                uuid = updateUuid
             };
 
-            var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
-            var result = await ParseResponseAsync(response, cancellationToken);
-            EnsureBusinessSuccess(result, "Update CardKit card");
-
-            if (result.TryGetProperty("code", out var codeProp))
+            for (var attempt = 1; attempt <= CardUpdateMaxAttempts; attempt++)
             {
-                var code = codeProp.GetInt32();
-                if (code == 0) return true;
+                try
+                {
+                    var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
+                    var result = await ParseResponseAsync(response, cancellationToken);
+                    EnsureBusinessSuccess(result, "Update CardKit card");
 
-                _logger.LogWarning(
-                    "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
-                    cardId, sequence, code,
-                    result.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : "Unknown");
-                return false;
+                    if (result.TryGetProperty("code", out var codeProp))
+                    {
+                        var code = codeProp.GetInt32();
+                        if (code == 0) return true;
+
+                        _logger.LogWarning(
+                            "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
+                            cardId, sequence, code,
+                            result.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : "Unknown");
+                        return false;
+                    }
+
+                    return false;
+                }
+                catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    if (attempt < CardUpdateMaxAttempts)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "更新卡片超时，准备重试 (cardId={CardId}, seq={Sequence}, attempt={Attempt}/{MaxAttempts}, uuid={Uuid})",
+                            cardId,
+                            sequence,
+                            attempt,
+                            CardUpdateMaxAttempts,
+                            updateUuid);
+                        continue;
+                    }
+
+                    _logger.LogWarning(
+                        ex,
+                        "更新卡片超时，已跳过本次更新但保持流式卡片继续推送 (cardId={CardId}, seq={Sequence}, attempt={Attempt}/{MaxAttempts}, uuid={Uuid})",
+                        cardId,
+                        sequence,
+                        attempt,
+                        CardUpdateMaxAttempts,
+                        updateUuid);
+                    return true;
+                }
             }
 
-            return false;
-        }
-        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning(ex, "更新卡片超时 (cardId={CardId}, seq={Sequence})", cardId, sequence);
             return false;
         }
         catch (Exception ex)
@@ -443,6 +475,12 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             _logger.LogError(ex, "Update card failed (cardId={CardId}, seq={Sequence})", cardId, sequence);
             return false;
         }
+    }
+
+    private static string CreateCardUpdateUuid(string cardId, int sequence)
+    {
+        var input = Encoding.UTF8.GetBytes($"{cardId}:{sequence}");
+        return Convert.ToHexString(SHA256.HashData(input));
     }
 
     private object BuildStreamingCardData(

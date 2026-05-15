@@ -191,6 +191,53 @@ public class MessageSubmissionServiceTests
         }
     }
 
+    [Fact]
+    public async Task PrepareAsync_WhenSessionWorkspaceIsNotInitialized_CreatesWorkspaceBeforeStagingAttachments()
+    {
+        var workspaceRoot = CreateWorkspaceRoot();
+        const string sessionId = "session-uninitialized-workspace";
+
+        try
+        {
+            var cliExecutor = new WorkspaceInitializingCliExecutorService(workspaceRoot);
+            var stagingService = new AttachmentStagingService(cliExecutor, NullLogger<AttachmentStagingService>.Instance);
+            var service = new MessageSubmissionService(
+                cliExecutor,
+                new CliAdapterFactory(),
+                stagingService,
+                NullLogger<MessageSubmissionService>.Instance);
+
+            var prepared = await service.PrepareAsync(new MessageDraft
+            {
+                DraftId = "submission-initialize-workspace",
+                SessionId = sessionId,
+                ToolId = "codex",
+                Channel = MessageSubmissionChannel.Mobile,
+                Text = "Review this attachment",
+                Attachments =
+                [
+                    new MessageDraftAttachmentInput
+                    {
+                        FileName = "diagram.png",
+                        ContentType = "image/png",
+                        Content = [0x01, 0x02, 0x03]
+                    }
+                ]
+            });
+
+            var expectedWorkspacePath = Path.Combine(workspaceRoot, sessionId);
+            Assert.True(cliExecutor.InitializeCalled);
+            Assert.Equal(expectedWorkspacePath, prepared.ExecutionRequest.SessionContext.WorkingDirectory);
+            Assert.True(Directory.Exists(expectedWorkspacePath));
+            Assert.Equal(expectedWorkspacePath, cliExecutor.GetSessionWorkspacePath(sessionId));
+            Assert.Single(prepared.Attachments);
+        }
+        finally
+        {
+            DeleteWorkspaceRoot(workspaceRoot);
+        }
+    }
+
     private static MessageSubmissionService CreateService(string workspaceRoot)
     {
         var cliExecutor = new StubCliExecutorService(workspaceRoot);
@@ -260,7 +307,11 @@ public class MessageSubmissionServiceTests
         public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
         public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName) => throw new NotSupportedException();
         public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
-        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false)
+        {
+            Directory.CreateDirectory(workspaceRoot);
+            return Task.FromResult(workspaceRoot);
+        }
         public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
     }
 
@@ -299,7 +350,77 @@ public class MessageSubmissionServiceTests
         public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
         public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName) => throw new NotSupportedException();
         public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
-        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false)
+        {
+            Directory.CreateDirectory(workspaceRoot);
+            return Task.FromResult(workspaceRoot);
+        }
+        public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
+    }
+
+    private sealed class WorkspaceInitializingCliExecutorService(string workspaceRoot) : ICliExecutorService
+    {
+        private static readonly CliToolConfig CodexTool = new()
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex"
+        };
+
+        private readonly Dictionary<string, string> _workspacePaths = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool InitializeCalled { get; private set; }
+
+        public ICliToolAdapter? GetAdapter(CliToolConfig tool) => new CodexAdapter();
+        public ICliToolAdapter? GetAdapterById(string toolId) => string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase) ? new CodexAdapter() : null;
+        public bool SupportsStreamParsing(CliToolConfig tool) => true;
+        public string? GetCliThreadId(string sessionId) => null;
+        public void SetCliThreadId(string sessionId, string threadId) => throw new NotSupportedException();
+        public Task ResetSessionRuntimeAsync(string sessionId, bool clearCliThreadId = true, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task StopSessionExecutionAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(string sessionId, string toolId, string userPrompt, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public bool SupportsLowInterruptionContinue(string toolId) => false;
+        public bool CanStartLowInterruptionContinue(string sessionId, string toolId) => false;
+        public IAsyncEnumerable<StreamOutputChunk> ExecuteLowInterruptionContinueStreamAsync(string sessionId, string toolId, string? prompt = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public List<CliToolConfig> GetAvailableTools(string? username = null) => [CodexTool];
+        public CliToolConfig? GetTool(string toolId, string? username = null) => string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase) ? CodexTool : null;
+        public bool ValidateTool(string toolId, string? username = null) => string.Equals(toolId, "codex", StringComparison.OrdinalIgnoreCase);
+        public void CleanupSessionWorkspace(string sessionId) => throw new NotSupportedException();
+        public void CleanupExpiredWorkspaces() => throw new NotSupportedException();
+
+        public string GetSessionWorkspacePath(string sessionId)
+        {
+            if (_workspacePaths.TryGetValue(sessionId, out var workspacePath) && Directory.Exists(workspacePath))
+            {
+                return workspacePath;
+            }
+
+            throw new InvalidOperationException($"Workspace missing for session {sessionId}");
+        }
+
+        public Task<Dictionary<string, string>> GetToolEnvironmentVariablesAsync(string toolId, string? username = null) => Task.FromResult(new Dictionary<string, string>());
+        public Task<CcSwitchSessionSnapshot?> SyncSessionCcSwitchSnapshotAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<CodexThreadProviderSyncResult> SyncCodexThreadProviderAsync(string sessionId, string? toolId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> SaveToolEnvironmentVariablesAsync(string toolId, Dictionary<string, string> envVars, string? username = null) => throw new NotSupportedException();
+        public byte[]? GetWorkspaceFile(string sessionId, string relativePath) => throw new NotSupportedException();
+        public byte[]? GetWorkspaceZip(string sessionId) => throw new NotSupportedException();
+        public Task<bool> UploadFileToWorkspaceAsync(string sessionId, string fileName, byte[] fileContent, string? relativePath = null) => throw new NotSupportedException();
+        public Task<bool> CreateFolderInWorkspaceAsync(string sessionId, string folderPath) => throw new NotSupportedException();
+        public Task<bool> DeleteWorkspaceItemAsync(string sessionId, string relativePath, bool isDirectory) => throw new NotSupportedException();
+        public Task<bool> MoveFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
+        public Task<bool> CopyFileInWorkspaceAsync(string sessionId, string sourcePath, string targetPath) => throw new NotSupportedException();
+        public Task<bool> RenameFileInWorkspaceAsync(string sessionId, string oldPath, string newName) => throw new NotSupportedException();
+        public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
+
+        public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false)
+        {
+            InitializeCalled = true;
+            var workspacePath = Path.Combine(workspaceRoot, sessionId);
+            Directory.CreateDirectory(workspacePath);
+            _workspacePaths[sessionId] = workspacePath;
+            return Task.FromResult(workspacePath);
+        }
+
         public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
     }
 

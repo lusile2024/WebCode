@@ -106,7 +106,7 @@ public class MessageSubmissionService : IMessageSubmissionService
             throw new InvalidOperationException($"CLI tool '{draft.ToolId}' is not available.");
         }
 
-        var workspacePath = _cliExecutorService.GetSessionWorkspacePath(draft.SessionId);
+        var workspacePath = await _cliExecutorService.InitializeSessionWorkspaceAsync(draft.SessionId);
         var sessionContext = new CliSessionContext
         {
             SessionId = draft.SessionId,

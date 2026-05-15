@@ -15,6 +15,9 @@ namespace WebCodeCli.Domain.Domain.Service;
 [ServiceDescription(typeof(ISessionHistoryManager), ServiceLifetime.Scoped)]
 public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
 {
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SessionSaveLocks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly SemaphoreSlim AnonymousSessionSaveLock = new(1, 1);
+
     private readonly IChatSessionRepository _sessionRepository;
     private readonly IChatMessageRepository _messageRepository;
     private readonly IChatMessageAttachmentRepository _messageAttachmentRepository;
@@ -57,9 +60,10 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
     public async Task<List<SessionHistory>> LoadSessionsAsync()
     {
         var startTime = DateTime.Now;
-        
+
         try
         {
+
             // 检查缓存是否有效
             if (_allSessionsCache != null && 
                 DateTime.Now - _cacheTimestamp < _cacheExpiration)
@@ -175,10 +179,13 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             throw new ArgumentNullException(nameof(session));
         }
 
-        var startTime = DateTime.Now;
+        var sessionSaveLock = GetSessionSaveLock(session.SessionId);
+        await sessionSaveLock.WaitAsync();
+        using var sessionSaveLockHandle = new SemaphoreReleaser(sessionSaveLock);
 
         try
         {
+            var startTime = DateTime.Now;
             // 限制消息数量
             TrimMessages(session);
 
@@ -194,7 +201,9 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
             await ExecuteWithTransactionIfAvailableAsync(async () =>
             {
                 var sessionEntity = MapToSessionEntity(session, username);
-            var sessionSuccess = await _sessionRepository.InsertOrUpdateAsync(sessionEntity);
+            var sessionSuccess = existingSession == null
+                ? await _sessionRepository.InsertAsync(sessionEntity)
+                : await _sessionRepository.UpdateAsync(sessionEntity);
 
             if (!sessionSuccess)
             {
@@ -686,11 +695,36 @@ public class SessionHistoryManager : ISessionHistoryManager, IAsyncDisposable
         }
     }
 
+    private static SemaphoreSlim GetSessionSaveLock(string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return AnonymousSessionSaveLock;
+        }
+
+        return SessionSaveLocks.GetOrAdd(sessionId.Trim(), static _ => new SemaphoreSlim(1, 1));
+    }
+
     private static string ResolveLogicalMessageId(ChatMessageEntity messageEntity)
     {
         return string.IsNullOrWhiteSpace(messageEntity.MessageId)
             ? $"legacy-msg-{messageEntity.Id}"
             : messageEntity.MessageId;
+    }
+
+    private readonly struct SemaphoreReleaser : IDisposable
+    {
+        private readonly SemaphoreSlim _semaphore;
+
+        public SemaphoreReleaser(SemaphoreSlim semaphore)
+        {
+            _semaphore = semaphore;
+        }
+
+        public void Dispose()
+        {
+            _semaphore.Release();
+        }
     }
 
     private sealed class SessionDeleteNotFoundException(string sessionId)

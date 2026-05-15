@@ -1,6 +1,8 @@
+using AntSK.Domain.Repositories.Base;
 using System.Linq.Expressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using SqlSugar;
+using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Model;
@@ -11,6 +13,102 @@ namespace WebCodeCli.Domain.Tests;
 
 public class SessionHistoryManagerTests
 {
+    [Fact]
+    public async Task SaveSessionImmediateAsync_CreatesNewSessionInFreshSqliteDatabase()
+    {
+        var testRoot = Path.Combine(Path.GetTempPath(), "SessionHistoryManagerTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testRoot);
+        var dbPath = Path.Combine(testRoot, "WebCodeCli.db");
+        var scope = CreateSqliteScope(dbPath);
+        var originalSessionScope = Repository<ChatSessionEntity>.SqlScope;
+        var originalMessageScope = Repository<ChatMessageEntity>.SqlScope;
+        var originalAttachmentScope = Repository<ChatMessageAttachmentEntity>.SqlScope;
+
+        Repository<ChatSessionEntity>.SqlScope = scope;
+        Repository<ChatMessageEntity>.SqlScope = scope;
+        Repository<ChatMessageAttachmentEntity>.SqlScope = scope;
+        scope.InitializeChatSessionTables();
+
+        try
+        {
+            var manager = new SessionHistoryManager(
+                new ChatSessionRepository(),
+                new ChatMessageRepository(),
+                new ChatMessageAttachmentRepository(),
+                new StubUserContextService(),
+                NullLogger<SessionHistoryManager>.Instance);
+
+            var session = new SessionHistory
+            {
+                SessionId = "fresh-sqlite-session",
+                Title = "Fresh sqlite session",
+                WorkspacePath = testRoot,
+                ToolId = "codex",
+                Messages = []
+            };
+
+            await manager.SaveSessionImmediateAsync(session);
+            manager.ClearCache();
+
+            var reloaded = await manager.GetSessionAsync("fresh-sqlite-session");
+
+            Assert.NotNull(reloaded);
+            Assert.Equal("fresh-sqlite-session", reloaded!.SessionId);
+            Assert.Equal(testRoot, reloaded.WorkspacePath);
+            Assert.Empty(reloaded.Messages);
+        }
+        finally
+        {
+            Repository<ChatSessionEntity>.SqlScope = originalSessionScope;
+            Repository<ChatMessageEntity>.SqlScope = originalMessageScope;
+            Repository<ChatMessageAttachmentEntity>.SqlScope = originalAttachmentScope;
+            scope.Dispose();
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SaveSessionImmediateAsync_WhenConcurrentManagersSaveSameSession_DoesNotOverlapDeletePhase()
+    {
+        const string sessionId = "shared-session";
+        var sessionRepository = new InMemoryChatSessionRepository(
+        [
+            new ChatSessionEntity
+            {
+                SessionId = sessionId,
+                Username = "default",
+                Title = "Shared session",
+                ToolId = "codex",
+                WorkspacePath = @"D:\repo\superpowers",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            }
+        ]);
+        var messageRepository = new InMemoryChatMessageRepository();
+        var attachmentRepository = new BlockingInMemoryChatMessageAttachmentRepository();
+        var firstManager = CreateManager(sessionRepository, messageRepository, attachmentRepository);
+        var secondManager = CreateManager(sessionRepository, messageRepository, attachmentRepository);
+
+        var firstSaveTask = firstManager.SaveSessionImmediateAsync(CreateSession(sessionId, "First title", "first message"));
+        await attachmentRepository.WaitForFirstDeleteAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        var secondSaveTask = secondManager.SaveSessionImmediateAsync(CreateSession(sessionId, "Second title", "second message"));
+        await Task.Delay(200);
+        Assert.False(attachmentRepository.ConcurrentDeleteObserved);
+        attachmentRepository.ReleaseFirstDelete();
+
+        await Task.WhenAll(firstSaveTask, secondSaveTask);
+
+        firstManager.ClearCache();
+        var reloaded = await firstManager.GetSessionAsync(sessionId);
+
+        Assert.False(attachmentRepository.ConcurrentDeleteObserved);
+        Assert.NotNull(reloaded);
+        Assert.Equal("Second title", reloaded!.Title);
+        var message = Assert.Single(reloaded.Messages);
+        Assert.Equal("second message", message.Content);
+    }
+
     [Fact]
     public async Task SaveSessionImmediateAsync_RoundTripsMessageAttachments()
     {
@@ -342,6 +440,37 @@ public class SessionHistoryManagerTests
             NullLogger<SessionHistoryManager>.Instance);
     }
 
+    private static SqlSugarScope CreateSqliteScope(string dbPath)
+    {
+        return new SqlSugarScope(new ConnectionConfig
+        {
+            ConnectionString = $"Data Source={dbPath}",
+            DbType = SqlSugar.DbType.Sqlite,
+            InitKeyType = InitKeyType.Attribute,
+            IsAutoCloseConnection = true
+        });
+    }
+
+    private static SessionHistory CreateSession(string sessionId, string title, string content)
+    {
+        return new SessionHistory
+        {
+            SessionId = sessionId,
+            Title = title,
+            WorkspacePath = @"D:\repo\superpowers",
+            ToolId = "codex",
+            Messages =
+            [
+                new ChatMessage
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Role = "user",
+                    Content = content
+                }
+            ]
+        };
+    }
+
     private sealed class StubUserContextService : IUserContextService
     {
         private string _username = "default";
@@ -361,6 +490,7 @@ public class SessionHistoryManagerTests
     private sealed class InMemoryChatSessionRepository(IEnumerable<ChatSessionEntity>? initialSessions = null) : IChatSessionRepository
     {
         private readonly List<ChatSessionEntity> _sessions = initialSessions?.ToList() ?? [];
+        private readonly object _gate = new();
 
         public SqlSugarScope GetDB() => throw new NotSupportedException();
         public List<ChatSessionEntity> GetList() => [.. _sessions];
@@ -387,7 +517,14 @@ public class SessionHistoryManagerTests
         public Task<ChatSessionEntity> GetSingleAsync(Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(GetSingle(whereExpression));
         public ChatSessionEntity GetFirst(Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().First(whereExpression);
         public Task<ChatSessionEntity> GetFirstAsync(Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(GetFirst(whereExpression));
-        public bool Insert(ChatSessionEntity obj) { _sessions.Add(obj); return true; }
+        public bool Insert(ChatSessionEntity obj)
+        {
+            lock (_gate)
+            {
+                _sessions.Add(obj);
+                return true;
+            }
+        }
         public Task<bool> InsertAsync(ChatSessionEntity obj) => Task.FromResult(Insert(obj));
         public bool InsertRange(List<ChatSessionEntity> objs) { _sessions.AddRange(objs); return true; }
         public Task<bool> InsertRangeAsync(List<ChatSessionEntity> objs) => Task.FromResult(InsertRange(objs));
@@ -403,8 +540,23 @@ public class SessionHistoryManagerTests
         public Task<bool> DeleteAsync(ChatSessionEntity obj) => Task.FromResult(Delete(obj));
         public bool Delete(Expression<Func<ChatSessionEntity, bool>> whereExpression) => throw new NotSupportedException();
         public Task<bool> DeleteAsync(Expression<Func<ChatSessionEntity, bool>> whereExpression) => throw new NotSupportedException();
-        public bool Update(ChatSessionEntity obj) => throw new NotSupportedException();
-        public Task<bool> UpdateAsync(ChatSessionEntity obj) => throw new NotSupportedException();
+        public bool Update(ChatSessionEntity obj)
+        {
+            lock (_gate)
+            {
+                var existing = _sessions.FirstOrDefault(x => string.Equals(x.SessionId, obj.SessionId, StringComparison.OrdinalIgnoreCase));
+                if (existing == null)
+                {
+                    return false;
+                }
+
+                var index = _sessions.IndexOf(existing);
+                _sessions[index] = obj;
+                return true;
+            }
+        }
+
+        public Task<bool> UpdateAsync(ChatSessionEntity obj) => Task.FromResult(Update(obj));
         public bool UpdateRange(List<ChatSessionEntity> objs) => throw new NotSupportedException();
         public Task<bool> UpdateRangeAsync(List<ChatSessionEntity> objs) => throw new NotSupportedException();
         public bool InsertOrUpdate(ChatSessionEntity obj)
@@ -425,7 +577,15 @@ public class SessionHistoryManagerTests
         public bool IsAny(Expression<Func<ChatSessionEntity, bool>> whereExpression) => _sessions.AsQueryable().Any(whereExpression);
         public Task<bool> IsAnyAsync(Expression<Func<ChatSessionEntity, bool>> whereExpression) => Task.FromResult(IsAny(whereExpression));
         public Task<List<ChatSessionEntity>> GetByUsernameAsync(string username) => Task.FromResult(_sessions.Where(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).ToList());
-        public Task<ChatSessionEntity?> GetByIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)));
+        public Task<ChatSessionEntity?> GetByIdAndUsernameAsync(string sessionId, string username)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult(_sessions.FirstOrDefault(x =>
+                    string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
         public Task<bool> DeleteByIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_sessions.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)) > 0);
         public Task<List<ChatSessionEntity>> GetByUsernameOrderByUpdatedAtAsync(string username) => Task.FromResult(_sessions.Where(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.UpdatedAt).ToList());
         public Task<ChatSessionEntity?> GetByUsernameToolAndCliThreadIdAsync(string username, string toolId, string cliThreadId) => Task.FromResult(_sessions.FirstOrDefault(x => string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase) && string.Equals(x.ToolId, toolId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.CliThreadId, cliThreadId, StringComparison.OrdinalIgnoreCase)));
@@ -456,6 +616,7 @@ public class SessionHistoryManagerTests
     private sealed class InMemoryChatMessageRepository(IEnumerable<ChatMessageEntity>? initialMessages = null) : IChatMessageRepository
     {
         private readonly List<ChatMessageEntity> _messages = initialMessages?.ToList() ?? [];
+        private readonly object _gate = new();
 
         public SqlSugarScope GetDB() => throw new NotSupportedException();
         public List<ChatMessageEntity> GetList() => [.. _messages];
@@ -507,7 +668,15 @@ public class SessionHistoryManagerTests
         public bool IsAny(Expression<Func<ChatMessageEntity, bool>> whereExpression) => _messages.AsQueryable().Any(whereExpression);
         public Task<bool> IsAnyAsync(Expression<Func<ChatMessageEntity, bool>> whereExpression) => Task.FromResult(IsAny(whereExpression));
         public Task<List<ChatMessageEntity>> GetBySessionIdAsync(string sessionId) => Task.FromResult(_messages.Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase)).ToList());
-        public Task<List<ChatMessageEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_messages.Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)).ToList());
+        public Task<List<ChatMessageEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult(_messages
+                    .Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase))
+                    .ToList());
+            }
+        }
         public Task<bool> DeleteBySessionIdAsync(string sessionId)
         {
             _messages.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
@@ -516,21 +685,28 @@ public class SessionHistoryManagerTests
 
         public Task<bool> DeleteBySessionIdAndUsernameAsync(string sessionId, string username)
         {
-            _messages.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase));
-            return Task.FromResult(true);
+            lock (_gate)
+            {
+                _messages.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase));
+                return Task.FromResult(true);
+            }
         }
 
         public Task<bool> InsertMessagesAsync(List<ChatMessageEntity> messages)
         {
-            _messages.AddRange(messages);
-            return Task.FromResult(true);
+            lock (_gate)
+            {
+                _messages.AddRange(messages);
+                return Task.FromResult(true);
+            }
         }
     }
 
-    private sealed class InMemoryChatMessageAttachmentRepository(IEnumerable<ChatMessageAttachmentEntity>? initialAttachments = null) : IChatMessageAttachmentRepository
+    private class InMemoryChatMessageAttachmentRepository(IEnumerable<ChatMessageAttachmentEntity>? initialAttachments = null) : IChatMessageAttachmentRepository
     {
         private readonly List<ChatMessageAttachmentEntity> _attachments = initialAttachments?.ToList() ?? [];
         private int _nextId = (initialAttachments?.Select(x => x.Id).DefaultIfEmpty(0).Max() ?? 0) + 1;
+        private readonly object _gate = new();
 
         public SqlSugarScope GetDB() => throw new NotSupportedException();
         public List<ChatMessageAttachmentEntity> GetList() => [.. _attachments];
@@ -581,29 +757,75 @@ public class SessionHistoryManagerTests
         public Task<bool> InsertOrUpdateAsync(ChatMessageAttachmentEntity obj) => throw new NotSupportedException();
         public bool IsAny(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => _attachments.AsQueryable().Any(whereExpression);
         public Task<bool> IsAnyAsync(Expression<Func<ChatMessageAttachmentEntity, bool>> whereExpression) => Task.FromResult(IsAny(whereExpression));
-        public Task<List<ChatMessageAttachmentEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username) => Task.FromResult(_attachments
-            .Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(x => x.CreatedAt)
-            .ThenBy(x => x.Id)
-            .ToList());
+        public Task<List<ChatMessageAttachmentEntity>> GetBySessionIdAndUsernameAsync(string sessionId, string username)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult(_attachments
+                    .Where(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(x => x.CreatedAt)
+                    .ThenBy(x => x.Id)
+                    .ToList());
+            }
+        }
+
         public Task<bool> DeleteBySessionIdAndUsernameAsync(string sessionId, string username)
         {
-            _attachments.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase));
-            return Task.FromResult(true);
+            lock (_gate)
+            {
+                _attachments.RemoveAll(x => string.Equals(x.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase));
+                return Task.FromResult(true);
+            }
         }
 
         public Task<bool> InsertAttachmentsAsync(List<ChatMessageAttachmentEntity> attachments)
         {
-            foreach (var attachment in attachments)
+            lock (_gate)
             {
-                if (attachment.Id <= 0)
+                foreach (var attachment in attachments)
                 {
-                    attachment.Id = _nextId++;
+                    if (attachment.Id <= 0)
+                    {
+                        attachment.Id = _nextId++;
+                    }
                 }
+
+                _attachments.AddRange(attachments);
+                return Task.FromResult(true);
+            }
+        }
+    }
+
+    private sealed class BlockingInMemoryChatMessageAttachmentRepository : InMemoryChatMessageAttachmentRepository, IChatMessageAttachmentRepository
+    {
+        private readonly TaskCompletionSource<bool> _firstDeleteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _allowFirstDeleteToContinue = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _deleteCalls;
+        private int _concurrentDeleteObserved;
+
+        public bool ConcurrentDeleteObserved => Volatile.Read(ref _concurrentDeleteObserved) == 1;
+
+        public Task WaitForFirstDeleteAsync() => _firstDeleteEntered.Task;
+
+        public void ReleaseFirstDelete()
+        {
+            _allowFirstDeleteToContinue.TrySetResult(true);
+        }
+
+        public new async Task<bool> DeleteBySessionIdAndUsernameAsync(string sessionId, string username)
+        {
+            var deleteCallNumber = Interlocked.Increment(ref _deleteCalls);
+            if (deleteCallNumber == 1)
+            {
+                _firstDeleteEntered.TrySetResult(true);
+                await _allowFirstDeleteToContinue.Task;
+            }
+            else if (!_allowFirstDeleteToContinue.Task.IsCompleted)
+            {
+                Interlocked.Exchange(ref _concurrentDeleteObserved, 1);
             }
 
-            _attachments.AddRange(attachments);
-            return Task.FromResult(true);
+            return await base.DeleteBySessionIdAndUsernameAsync(sessionId, username);
         }
     }
 }
