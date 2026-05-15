@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
@@ -23,6 +24,7 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IFeishuChannelService), ServiceLifetime.Singleton)]
 public class FeishuChannelService : BackgroundService, IFeishuChannelService
 {
+    private static readonly FeishuIncomingAttachmentParser IncomingAttachmentParser = new();
     private readonly FeishuOptions _options;
     private readonly ILogger<FeishuChannelService> _logger;
     private readonly IFeishuCardKitClient _cardKit;
@@ -329,6 +331,16 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
             var toolId = ResolveToolId(message.ChatId, message.SenderName);
             var effectiveOptions = await ResolveEffectiveOptionsAsync(message.SenderName, message.ChatId, message.AppId);
+
+            if (await TryHandleInlinePostSubmissionAsync(
+                    sessionId,
+                    toolId,
+                    message,
+                    normalizedPrompt,
+                    effectiveOptions))
+            {
+                return;
+            }
 
             if (IsAttachmentMessageType(message.MessageType))
             {
@@ -693,6 +705,65 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             sessionId,
             attachment.ResourceType,
             attachment.AbsolutePath);
+    }
+
+    private async Task<bool> TryHandleInlinePostSubmissionAsync(
+        string sessionId,
+        string toolId,
+        FeishuIncomingMessage message,
+        string normalizedPrompt,
+        FeishuOptions effectiveOptions,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.Equals(message.MessageType, "post", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var attachments = ResolveIncomingAttachments(message);
+        if (attachments.Count == 0)
+        {
+            return false;
+        }
+
+        var promptText = ExtractInlineAttachmentPromptText(normalizedPrompt);
+        if (string.IsNullOrWhiteSpace(promptText))
+        {
+            return false;
+        }
+
+        var attachmentInputs = await DownloadIncomingAttachmentsAsDraftInputsAsync(
+            message.MessageId,
+            attachments,
+            effectiveOptions,
+            cancellationToken);
+        var preparedSubmission = await PrepareMessageSubmissionAsync(
+            new MessageDraft
+            {
+                SessionId = sessionId,
+                ToolId = toolId,
+                Channel = MessageSubmissionChannel.Feishu,
+                Text = promptText,
+                Attachments = attachmentInputs,
+                SubmittedBy = message.SenderName
+            },
+            cancellationToken);
+
+        await ExecutePreparedSubmissionAsync(
+            preparedSubmission,
+            message.ChatId,
+            message.MessageId,
+            message.SenderName,
+            message.AppId,
+            cancellationToken);
+
+        _logger.LogInformation(
+            "[FeishuChannel] 已将富文本消息中的 {AttachmentCount} 个附件与文本一并直传给 CLI: MessageId={MessageId}, SessionId={SessionId}",
+            attachmentInputs.Count,
+            message.MessageId,
+            sessionId);
+
+        return true;
     }
 
     /// <summary>
@@ -1293,6 +1364,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                string.Equals(messageType, "file", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static List<FeishuIncomingAttachment> ResolveIncomingAttachments(FeishuIncomingMessage message)
+    {
+        if (message.Attachments.Count > 0)
+        {
+            return message.Attachments;
+        }
+
+        var rawPayload = !string.IsNullOrWhiteSpace(message.RawContent)
+            ? message.RawContent
+            : message.Content;
+        return IncomingAttachmentParser.Parse(message.MessageType, rawPayload).ToList();
+    }
+
     private static IncomingAttachmentDescriptor? TryParseIncomingAttachment(FeishuIncomingMessage message)
     {
         if (string.IsNullOrWhiteSpace(message.RawContent))
@@ -1382,6 +1466,109 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
 
         return true;
+    }
+
+    private static string ExtractInlineAttachmentPromptText(string normalizedPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPrompt))
+        {
+            return string.Empty;
+        }
+
+        var normalizedNewLines = normalizedPrompt
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        var lines = normalizedNewLines.Split('\n');
+        var builder = new StringBuilder();
+        var previousLineWasBlank = false;
+
+        foreach (var rawLine in lines)
+        {
+            var cleanedLine = rawLine
+                .Replace("[image]", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("[media]", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Trim();
+
+            if (cleanedLine.Length == 0)
+            {
+                if (builder.Length == 0 || previousLineWasBlank)
+                {
+                    continue;
+                }
+
+                builder.AppendLine();
+                previousLineWasBlank = true;
+                continue;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+
+            builder.Append(cleanedLine);
+            previousLineWasBlank = false;
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private async Task<List<MessageDraftAttachmentInput>> DownloadIncomingAttachmentsAsDraftInputsAsync(
+        string messageId,
+        IReadOnlyList<FeishuIncomingAttachment> attachments,
+        FeishuOptions effectiveOptions,
+        CancellationToken cancellationToken)
+    {
+        var inputs = new List<MessageDraftAttachmentInput>(attachments.Count);
+
+        foreach (var attachment in attachments)
+        {
+            var (content, fileName, mimeType) = await _cardKit.DownloadMessageResourceAsync(
+                messageId,
+                attachment.AttachmentKey,
+                string.Equals(attachment.MessageType, "file", StringComparison.OrdinalIgnoreCase) ? "file" : "image",
+                cancellationToken,
+                effectiveOptions);
+
+            inputs.Add(new MessageDraftAttachmentInput
+            {
+                FileName = string.IsNullOrWhiteSpace(fileName)
+                    ? attachment.AttachmentKey
+                    : fileName,
+                ContentType = string.IsNullOrWhiteSpace(mimeType)
+                    ? attachment.MimeType
+                    : mimeType,
+                Content = content
+            });
+        }
+
+        return inputs;
+    }
+
+    private async Task<PreparedMessageSubmission> PrepareMessageSubmissionAsync(
+        MessageDraft draft,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var scopedProvider = scope.ServiceProvider;
+        var messageSubmissionService = scopedProvider.GetService<IMessageSubmissionService>();
+        if (messageSubmissionService != null)
+        {
+            return await messageSubmissionService.PrepareAsync(draft, cancellationToken);
+        }
+
+        var attachmentStagingService = scopedProvider.GetService<IAttachmentStagingService>()
+            ?? new AttachmentStagingService(_cliExecutor, NullLogger<AttachmentStagingService>.Instance);
+        var cliAdapterFactory = scopedProvider.GetService<ICliAdapterFactory>()
+            ?? new CliAdapterFactory();
+
+        var fallbackMessageSubmissionService = new MessageSubmissionService(
+            _cliExecutor,
+            cliAdapterFactory,
+            attachmentStagingService,
+            NullLogger<MessageSubmissionService>.Instance);
+
+        return await fallbackMessageSubmissionService.PrepareAsync(draft, cancellationToken);
     }
 
     private sealed record IncomingAttachmentDescriptor(string ResourceType, string FileKey);

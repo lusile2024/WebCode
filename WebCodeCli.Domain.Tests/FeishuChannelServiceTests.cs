@@ -398,6 +398,103 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
+    public async Task HandleIncomingMessageAsync_PostMessageWithInlineImageAndText_SubmitsPreparedMessageDirectlyToCli()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new DraftAttachmentRecordingFeishuCardKitClient
+        {
+            DownloadedResource = ("fake-inline-image"u8.ToArray(), "inline-image.png", "image/png")
+        };
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-post-inline-image-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        const string rawPostJson = """
+        {
+          "title": "",
+          "content": [
+            [
+              {
+                "tag": "img",
+                "image_key": "img_v3_inline_001",
+                "width": 432,
+                "height": 908
+              }
+            ],
+            [
+              {
+                "tag": "text",
+                "text": "这是啥？"
+              }
+            ]
+          ]
+        }
+        """;
+
+        try
+        {
+            var sessionId = service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_post_inline_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            await service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                ChatId = "oc_post_inline_chat",
+                SenderName = "luhaiyan",
+                MessageId = "msg-post-inline",
+                MessageType = "post",
+                RawContent = rawPostJson,
+                Content = rawPostJson
+            });
+
+            var call = Assert.Single(cliExecutor.ExecuteCalls);
+            Assert.Equal(sessionId, call.SessionId);
+            Assert.Equal("codex", call.ToolId);
+            Assert.Equal("这是啥？", call.Prompt);
+            Assert.NotNull(call.ExecutionRequest);
+            var nativeAttachment = Assert.Single(call.ExecutionRequest!.NativeAttachments);
+            Assert.Equal(MessageAttachmentKind.Image, nativeAttachment.Kind);
+            Assert.True(File.Exists(nativeAttachment.AbsolutePath));
+            Assert.Contains(".webcode", nativeAttachment.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("msg-post-inline", cardKit.LastDownloadedMessageId);
+            Assert.Equal("img_v3_inline_001", cardKit.LastDownloadedFileKey);
+            Assert.Equal("image", cardKit.LastDownloadedResourceType);
+            Assert.Null(cardKit.LastReplyRawCardJson);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task HandleIncomingMessageAsync_WhenSupersededAfterStreamingOutput_KeepsExistingCardContent()
     {
         var repository = CreateRepository(out var repositoryProxy);
@@ -2885,6 +2982,43 @@ public class FeishuChannelServiceTests
             await Task.CompletedTask;
         }
 
+        public async IAsyncEnumerable<StreamOutputChunk> ExecuteStreamAsync(
+            CliExecutionRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            ExecuteCalls.Add(new ExecutionCall
+            {
+                SessionId = request.SessionId,
+                ToolId = request.ToolId,
+                Prompt = request.PromptText,
+                ExecutionRequest = request
+            });
+
+            if (StreamChunks is { Count: > 0 })
+            {
+                foreach (var chunk in StreamChunks)
+                {
+                    yield return chunk;
+                }
+
+                yield break;
+            }
+
+            yield return new StreamOutputChunk
+            {
+                Content = FinalContent,
+                IsCompleted = false
+            };
+
+            yield return new StreamOutputChunk
+            {
+                Content = string.Empty,
+                IsCompleted = true
+            };
+
+            await Task.CompletedTask;
+        }
+
         public bool SupportsLowInterruptionContinue(string toolId) => SupportsLowInterruption;
 
         public bool CanStartLowInterruptionContinue(string sessionId, string toolId)
@@ -3238,6 +3372,8 @@ public class FeishuChannelServiceTests
         public string Prompt { get; set; } = string.Empty;
 
         public string? ThreadIdAtStart { get; set; }
+
+        public CliExecutionRequest? ExecutionRequest { get; set; }
     }
 
     private sealed class RecordingSessionDirectoryService(ChatSessionRepositoryProxy repository) : ISessionDirectoryService

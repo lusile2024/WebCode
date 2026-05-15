@@ -25,6 +25,7 @@ public class FeishuIncomingAttachmentParser
             {
                 "image" => ParseImage(root),
                 "file" => ParseFile(root),
+                "post" => ParsePost(root),
                 _ => []
             };
         }
@@ -90,6 +91,65 @@ public class FeishuIncomingAttachmentParser
         ];
     }
 
+    private static IReadOnlyList<FeishuIncomingAttachment> ParsePost(JsonElement root)
+    {
+        if (!TryGetPostDocument(root, out var postDocument)
+            || !postDocument.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var attachments = new List<FeishuIncomingAttachment>();
+        var seenAttachmentKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var block in content.EnumerateArray())
+        {
+            if (block.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var node in block.EnumerateArray())
+            {
+                if (node.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var tag = GetString(node, "tag");
+                if (!string.Equals(tag, "img", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var attachmentKey = GetString(node, "image_key");
+                if (string.IsNullOrWhiteSpace(attachmentKey) || !seenAttachmentKeys.Add(attachmentKey))
+                {
+                    continue;
+                }
+
+                var displayName = GetString(node, "file_name");
+                var mimeType = GetString(node, "mime_type");
+                if (string.IsNullOrWhiteSpace(mimeType))
+                {
+                    mimeType = GuessMimeType(displayName, "image");
+                }
+
+                attachments.Add(new FeishuIncomingAttachment
+                {
+                    MessageType = "image",
+                    AttachmentKey = attachmentKey,
+                    DisplayName = string.IsNullOrWhiteSpace(displayName) ? attachmentKey : displayName,
+                    MimeType = mimeType,
+                    SizeBytes = GetInt64(node, "file_size")
+                });
+            }
+        }
+
+        return attachments;
+    }
+
     private static string GetString(JsonElement root, string propertyName)
     {
         if (root.ValueKind != JsonValueKind.Object)
@@ -120,6 +180,37 @@ public class FeishuIncomingAttachmentParser
             JsonValueKind.String when long.TryParse(property.GetString(), out var value) => value,
             _ => null
         };
+    }
+
+    private static bool TryGetPostDocument(JsonElement root, out JsonElement postDocument)
+    {
+        if (IsPostDocument(root))
+        {
+            postDocument = root;
+            return true;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in root.EnumerateObject())
+            {
+                if (IsPostDocument(property.Value))
+                {
+                    postDocument = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        postDocument = default;
+        return false;
+    }
+
+    private static bool IsPostDocument(JsonElement candidate)
+    {
+        return candidate.ValueKind == JsonValueKind.Object
+               && candidate.TryGetProperty("content", out var content)
+               && content.ValueKind == JsonValueKind.Array;
     }
 
     private static string GuessMimeType(string fileName, string fallbackCategory)

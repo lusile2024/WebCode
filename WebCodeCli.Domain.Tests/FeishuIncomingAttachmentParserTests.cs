@@ -49,6 +49,42 @@ public class FeishuIncomingAttachmentParserTests
         Assert.Equal(12345, attachment.SizeBytes);
     }
 
+    [Fact]
+    public void Parse_PostPayloadWithInlineImage_ReturnsStructuredImageAttachment()
+    {
+        var parser = new FeishuIncomingAttachmentParser();
+
+        var attachments = parser.Parse(
+            "post",
+            """
+            {
+              "title": "",
+              "content": [
+                [
+                  {
+                    "tag": "img",
+                    "image_key": "img_v3_inline_001",
+                    "width": 432,
+                    "height": 908
+                  }
+                ],
+                [
+                  {
+                    "tag": "text",
+                    "text": "这是啥？"
+                  }
+                ]
+              ]
+            }
+            """);
+
+        var attachment = Assert.Single(attachments);
+        Assert.Equal("image", attachment.MessageType);
+        Assert.Equal("img_v3_inline_001", attachment.AttachmentKey);
+        Assert.Equal("img_v3_inline_001", attachment.DisplayName);
+        Assert.Equal("image/png", attachment.MimeType);
+    }
+
     [Theory]
     [InlineData("[]")]
     [InlineData("null")]
