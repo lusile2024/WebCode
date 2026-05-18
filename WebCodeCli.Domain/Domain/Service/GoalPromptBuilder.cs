@@ -13,8 +13,14 @@ public static class GoalPromptBuilder
             FeishuHelpCardAction.PauseGoalAction => GoalQuickActionDefaults.PausePrompt,
             FeishuHelpCardAction.ClearGoalAction => GoalQuickActionDefaults.ClearPrompt,
             FeishuHelpCardAction.ResumeGoalAction => GoalQuickActionDefaults.ResumePrompt,
+            FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction => BuildSubagentPlanGoalPrompt(),
             _ => BuildGoalPrompt(input)
         };
+    }
+
+    public static string BuildSubagentPlanGoalPrompt()
+    {
+        return BuildGoalPrompt(SuperpowersQuickActionDefaults.ExecuteGoalPlanPromptInput)!;
     }
 
     public static string? BuildGoalPrompt(string? input)

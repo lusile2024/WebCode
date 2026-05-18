@@ -260,6 +260,7 @@ public class FeishuCardActionService
                 case FeishuHelpCardAction.PauseGoalAction:
                 case FeishuHelpCardAction.ClearGoalAction:
                 case FeishuHelpCardAction.ResumeGoalAction:
+                case FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction:
                     return await HandleGoalQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
                 case FeishuHelpCardAction.TemporarilyExitGoalRuntimeAction:
                     return await HandleTemporarilyExitGoalRuntimeAsync(action.SessionId, action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions);
@@ -900,7 +901,8 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse($"⚠️ {message}", "warning");
         }
 
-        if (string.Equals(action.Action, FeishuHelpCardAction.SubmitGoalQuickInputAction, StringComparison.OrdinalIgnoreCase)
+        if ((string.Equals(action.Action, FeishuHelpCardAction.SubmitGoalQuickInputAction, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(action.Action, FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction, StringComparison.OrdinalIgnoreCase))
             && HasGoalExecutionConflict(activeSessionId))
         {
             return BuildGoalOverwriteConfirmResponse(activeSessionId, targetChatKey, effectiveToolId, prompt);

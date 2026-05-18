@@ -23,6 +23,7 @@ public class FeishuHelpCardAction
     public const string StopStreamingExecutionAction = "stop_streaming_execution";
     public const string ExecuteSuperpowersPlanAction = "execute_superpowers_plan";
     public const string ExecuteSuperpowersSubagentPlanAction = "execute_superpowers_subagent_plan";
+    public const string ExecuteSuperpowersGoalPlanAction = "execute_superpowers_goal_plan";
     public const string ConfirmBoundSuperpowersAction = "confirm_bound_superpowers_action";
     public const string ConfirmCurrentSuperpowersAction = "confirm_current_superpowers_action";
     public const string RetrySuperpowersCapabilityDetectionAction = "retry_superpowers_capability_detection";

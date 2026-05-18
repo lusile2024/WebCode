@@ -1741,11 +1741,12 @@ public class FeishuChannelServiceTests
                 "execution_control_row",
                 "execution_control_row",
                 "plan_action_row",
-                "plan_action_row"
+                "plan_action_row",
+                "goal_plan_action_row"
             ],
             initialChrome.BottomActions.Select(action => action.RowKey).ToArray());
 
-            Assert.Equal(7, chrome.BottomActions.Count);
+            Assert.Equal(8, chrome.BottomActions.Count);
             Assert.Equal(
             [
                 GoalQuickActionDefaults.StatusButtonText,
@@ -1754,12 +1755,14 @@ public class FeishuChannelServiceTests
                 GoalQuickActionDefaults.ResumeButtonText,
                 SuperpowersQuickActionDefaults.ContinueButtonText,
                 SuperpowersQuickActionDefaults.ExecutePlanButtonText,
-                SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText
+                SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText,
+                SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText
             ],
             chrome.BottomActions.Select(action => action.Text).ToArray());
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
+            Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == "/goal");
             Assert.Contains(chrome.BottomActions, action => action.Text == "/goal pause");
             Assert.Contains(chrome.BottomActions, action => action.Text == "/goal clear");
@@ -1779,6 +1782,11 @@ public class FeishuChannelServiceTests
                 $"\"action\":\"{FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction}\"",
                 JsonSerializer.Serialize(
                     Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText).Value),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                $"\"action\":\"{FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction}\"",
+                JsonSerializer.Serialize(
+                    Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText).Value),
                 StringComparison.Ordinal);
             Assert.Contains(
                 "\"action\":\"status_goal\"",
@@ -3275,6 +3283,7 @@ public class FeishuChannelServiceTests
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
+            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.StopButtonText);
             Assert.Equal(
             [

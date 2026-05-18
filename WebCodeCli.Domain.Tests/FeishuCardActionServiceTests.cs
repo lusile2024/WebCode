@@ -840,11 +840,12 @@ public class FeishuCardActionServiceTests
                 "execution_control_row",
                 "execution_control_row",
                 "plan_action_row",
-                "plan_action_row"
+                "plan_action_row",
+                "goal_plan_action_row"
             ],
             initialChrome.BottomActions.Select(action => action.RowKey).ToArray());
 
-            Assert.Equal(7, chrome.BottomActions.Count);
+            Assert.Equal(8, chrome.BottomActions.Count);
             Assert.Equal(
             [
                 GoalQuickActionDefaults.StatusButtonText,
@@ -853,12 +854,14 @@ public class FeishuCardActionServiceTests
                 GoalQuickActionDefaults.ResumeButtonText,
                 SuperpowersQuickActionDefaults.ContinueButtonText,
                 SuperpowersQuickActionDefaults.ExecutePlanButtonText,
-                SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText
+                SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText,
+                SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText
             ],
             chrome.BottomActions.Select(action => action.Text).ToArray());
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
+            Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == "/goal");
             Assert.Contains(chrome.BottomActions, action => action.Text == "/goal pause");
             Assert.Contains(chrome.BottomActions, action => action.Text == "/goal clear");
@@ -876,6 +879,10 @@ public class FeishuCardActionServiceTests
             var executeSubagentValueJson = JsonSerializer.Serialize(
                 Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText).Value);
             Assert.Contains($"\"action\":\"{FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction}\"", executeSubagentValueJson);
+
+            var executeGoalValueJson = JsonSerializer.Serialize(
+                Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText).Value);
+            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction}\"", executeGoalValueJson);
 
             var statusGoalValueJson = JsonSerializer.Serialize(
                 Assert.Single(chrome.BottomActions, action => action.Text == "/goal").Value);
@@ -1130,6 +1137,7 @@ public class FeishuCardActionServiceTests
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
+        Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.StopButtonText);
         Assert.Equal(
         [
@@ -1766,6 +1774,87 @@ public class FeishuCardActionServiceTests
             SuperpowersPromptBuilder.BuildSubagentExecutePlanPrompt(),
             Assert.Single(cliExecutor.ExecutedPrompts));
         Assert.Empty(cliExecutor.LowInterruptionSessionIds);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ExecuteSuperpowersGoalPlan_UsesFixedGoalPromptAndGoalCapabilityPath()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-execute-goal-plan";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "goal completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubGoalCapabilityService
+        {
+            ProbeState = GoalCapabilityState.Available,
+            ProbeOutcome = GoalCapabilityProbeOutcome.Available
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId)
+        {
+            ResolvedToolId = "codex"
+        };
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(goalCapabilityService: capabilityService));
+
+        await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId);
+
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(
+            GoalPromptBuilder.BuildSubagentPlanGoalPrompt(),
+            Assert.Single(cliExecutor.ExecutedPrompts));
+        Assert.Single(capabilityService.ProbeContexts);
+        Assert.Equal("codex", capabilityService.ProbeContexts[0].ToolId);
+        Assert.Empty(cliExecutor.LowInterruptionSessionIds);
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ExecuteSuperpowersGoalPlan_WhenSessionAlreadyRunning_ReturnsOverwriteConfirmCard()
+    {
+        const string chatId = "oc_current_chat";
+        const string activeSessionId = "session-superpowers-goal-plan-busy";
+
+        var cliExecutor = new RecordingCliExecutorService
+        {
+            StandardExecutionContent = "goal completed"
+        };
+        cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\superpowers");
+
+        var capabilityService = new StubGoalCapabilityService
+        {
+            ProbeState = GoalCapabilityState.Available,
+            ProbeOutcome = GoalCapabilityProbeOutcome.Available
+        };
+
+        var feishuChannel = new StubFeishuChannelService(activeSessionId)
+        {
+            ResolvedToolId = "codex",
+            SessionExecutionActive = true
+        };
+        var service = CreateService(
+            cliExecutor,
+            feishuChannel,
+            new TestServiceProvider(goalCapabilityService: capabilityService));
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction}}","chat_key":"{{chatId}}"}""",
+            chatId: chatId);
+
+        Assert.Equal("⚠️ 当前 goal 正在执行，请确认是否覆盖原有 goal", ExtractToastContent(response));
+        var cardContents = ExtractCardContentStrings(response);
+        Assert.Contains(cardContents, content => content.Contains("继续当前 goal", StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains("中断并覆盖", StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains("使用Sub-Agent完成plan", StringComparison.Ordinal));
+        Assert.Empty(cliExecutor.ExecutedPrompts);
     }
 
     [Fact]
