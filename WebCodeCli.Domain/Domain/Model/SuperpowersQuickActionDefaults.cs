@@ -12,7 +12,7 @@ public static class SuperpowersQuickActionDefaults
     public const string ExecutePlanButtonText = "执行 plan";
     public const string ExecuteSubagentPlanButtonText = "SubAgent执行";
     public const string ExecuteGoalPlanButtonText = "Goal执行";
-    public const string ExecuteGoalPlanPromptInput = "使用Sub-Agent完成plan，如有询问我的，先按你推荐的继续进行";
+    public const string ExecuteGoalPlanPromptInput = "使用Subagent-Driven完成plan，如有询问我的，先按你推荐的继续进行";
     public const string WorkflowSectionTitle = "Superpowers 工作流/Goal不间断执行";
 
     public const string PromptLanguagePolicy = "Reply to the user in Chinese. Write documentation and code comments in English only. Keep exception and error messages in Chinese.";

@@ -1853,7 +1853,7 @@ public class FeishuCardActionServiceTests
         var cardContents = ExtractCardContentStrings(response);
         Assert.Contains(cardContents, content => content.Contains("继续当前 goal", StringComparison.Ordinal));
         Assert.Contains(cardContents, content => content.Contains("中断并覆盖", StringComparison.Ordinal));
-        Assert.Contains(cardContents, content => content.Contains("使用Sub-Agent完成plan", StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains("使用Subagent-Driven完成plan", StringComparison.Ordinal));
         Assert.Empty(cliExecutor.ExecutedPrompts);
     }
 
