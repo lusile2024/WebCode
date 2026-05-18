@@ -115,6 +115,7 @@ namespace WebCodeCli.Domain.Common.Extensions
             services.AddSingleton<IUserFeishuBotRuntimeService, UserFeishuBotRuntimeService>();
             services.AddHostedService<ReplyTtsStartupHostedService>();
             services.AddHostedService(sp => (UserFeishuBotRuntimeService)sp.GetRequiredService<IUserFeishuBotRuntimeService>());
+            services.AddHostedService<FeishuRuntimeRecoveryBackgroundService>();
 
             return services;
         }

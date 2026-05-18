@@ -224,7 +224,7 @@ public class FeishuHelpCardBuilderTests
         Assert.Equal(0, CountInputsByName(elements, SuperpowersQuickActionDefaults.QuickInputFieldName));
         Assert.False(ContainsStringValue(elements, SuperpowersQuickActionDefaults.InstructionText));
         Assert.Equal(1, CountInputsByName(elements, GoalQuickActionDefaults.QuickInputFieldName));
-        Assert.True(ContainsStringValue(elements, GoalQuickActionDefaults.InstructionText));
+        Assert.True(ContainsStringValue(elements, "使用 /goal 不间断执行，会自动补前缀：\"/goal \"。用于在当前 app-server 持续会话中设置或更新工作目标，让 Codex 围绕目标持续推进；可配合 /goal pause、/goal clear、/goal resume 管理执行状态。"));
     }
 
     private static JsonElement GetActionValue(JsonElement elements, string action)

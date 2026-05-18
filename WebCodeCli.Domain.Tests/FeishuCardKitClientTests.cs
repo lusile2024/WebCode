@@ -349,7 +349,7 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
         Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作流**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         var bottomActionModule = elements.EnumerateArray().Last();
 
         Assert.Equal("form", bottomActionModule.GetProperty("tag").GetString());
@@ -587,7 +587,7 @@ public class FeishuCardKitClientTests
 
         Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[2].GetProperty("tag").GetString());
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作流**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
     }
 
@@ -646,7 +646,7 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作流**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
         Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
         Assert.Equal(2, elements[4].GetProperty("columns").GetArrayLength());
@@ -728,7 +728,7 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作流**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("div", elements[4].GetProperty("tag").GetString());
         Assert.Equal("⚠️ 当前激活会话已经变化", elements[4].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());

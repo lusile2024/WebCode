@@ -13,6 +13,7 @@ public static class SuperpowersQuickActionDefaults
     public const string ExecuteSubagentPlanButtonText = "SubAgent执行";
     public const string ExecuteGoalPlanButtonText = "Goal执行";
     public const string ExecuteGoalPlanPromptInput = "使用Sub-Agent完成plan，如有询问我的，先按你推荐的继续进行";
+    public const string WorkflowSectionTitle = "Superpowers 工作流/Goal不间断执行";
 
     public const string PromptLanguagePolicy = "Reply to the user in Chinese. Write documentation and code comments in English only. Keep exception and error messages in Chinese.";
     public const string ContinuePrompt = "Resume the current Codex thread and continue the approved superpowers workflow. Do not send any extra resume command inside the conversation. " + PromptLanguagePolicy;

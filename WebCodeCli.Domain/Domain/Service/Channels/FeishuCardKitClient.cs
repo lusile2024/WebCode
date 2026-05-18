@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
+using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
@@ -671,7 +672,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         if (hasBottomNotice || hasBottomPrompt || hasBottomActions)
         {
-            elements.Add(BuildSectionMarker("Superpowers 工作流"));
+            elements.Add(BuildSectionMarker(SuperpowersQuickActionDefaults.WorkflowSectionTitle));
 
             foreach (var markdown in chrome.BottomNoticeMarkdowns.Where(markdown => !string.IsNullOrWhiteSpace(markdown)))
             {

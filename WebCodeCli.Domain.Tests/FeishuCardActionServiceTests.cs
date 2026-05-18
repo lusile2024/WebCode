@@ -1220,7 +1220,7 @@ public class FeishuCardActionServiceTests
         var cardContents = ExtractCardContentStrings(response);
         Assert.Contains(cardContents, content => content.Contains("回复内容", StringComparison.Ordinal));
         Assert.Contains(cardContents, content => content.Contains(existingReply, StringComparison.Ordinal));
-        Assert.Contains(cardContents, content => content.Contains("Superpowers 工作流", StringComparison.Ordinal));
+        Assert.Contains(cardContents, content => content.Contains("Superpowers 工作流/Goal不间断执行", StringComparison.Ordinal));
         Assert.Contains(cardContents, content => content.Contains(boundSessionId, StringComparison.Ordinal));
         Assert.Contains(cardContents, content => content.Contains(currentSessionId, StringComparison.Ordinal));
         Assert.False(cliExecutor.WasExecuted);
