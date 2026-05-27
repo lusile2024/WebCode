@@ -20,6 +20,12 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 public class FeishuCardKitClient : IFeishuCardKitClient
 {
     private const int CardUpdateMaxAttempts = 2;
+    private const int CardUpdateSequenceConflictCode = 300317;
+    private const int CardUpdateDuplicateUuidCode = 200770;
+    private const int CardOverMaxSizeCode = 200860;
+    private const string ReducedContentNotice = "> 卡片已精简，前文已截断，仅显示最新内容。";
+    private const int ReducedReplyTailChars = 5000;
+    private const int MinimalReplyTailChars = 2400;
     private readonly FeishuOptions _defaultOptions;
     private readonly ILogger<FeishuCardKitClient> _logger;
     private readonly HttpClient _httpClient;
@@ -49,7 +55,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             title ?? effectiveOptions.DefaultCardTitle,
             cancellationToken,
             effectiveOptions,
-            chrome: null);
+            chrome: null,
+            new StreamingCardPayloadState());
     }
 
     public async Task<bool> UpdateCardAsync(
@@ -67,7 +74,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             title: null,
             cancellationToken,
             effectiveOptions,
-            chrome: null);
+            chrome: null,
+            new StreamingCardPayloadState());
     }
 
     public async Task<string> SendCardMessageAsync(
@@ -386,6 +394,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     {
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var cardTitle = title ?? effectiveOptions.DefaultCardTitle;
+        var payloadState = new StreamingCardPayloadState();
 
         // 1. 鍒涘缓鍗＄墖
         var cardId = await CreateCardCoreAsync(
@@ -393,7 +402,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             cardTitle,
             cancellationToken,
             effectiveOptions,
-            chrome);
+            chrome,
+            payloadState);
 
         // 2. 鍙戦€佹垨鍥炲鍗＄墖娑堟伅
         string messageId;
@@ -411,8 +421,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return new FeishuStreamingHandle(
             cardId,
             messageId,
-            (content, sequence) => UpdateCardCoreAsync(cardId, content, sequence, cardTitle, cancellationToken, effectiveOptions, chrome),
-            (content, sequence) => UpdateCardCoreAsync(cardId, content, sequence, cardTitle, cancellationToken, effectiveOptions, chrome),
+            (content, sequence) => UpdateCardCoreAsync(cardId, content, sequence, cardTitle, cancellationToken, effectiveOptions, chrome, payloadState),
+            (content, sequence) => UpdateCardCoreAsync(cardId, content, sequence, cardTitle, cancellationToken, effectiveOptions, chrome, payloadState),
             effectiveOptions.StreamingThrottleMs,
             quietWindowAfterUpdateMs
         );
@@ -423,28 +433,49 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string title,
         CancellationToken cancellationToken,
         FeishuOptions effectiveOptions,
-        FeishuStreamingCardChrome? chrome)
+        FeishuStreamingCardChrome? chrome,
+        StreamingCardPayloadState state)
     {
         var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-        var cardData = BuildStreamingCardData(initialContent, title, chrome, includeHeader: true);
 
-        var payload = new
+        while (true)
         {
-            type = "card_json",
-            data = JsonSerializer.Serialize(cardData)
-        };
+            var cardData = BuildStreamingCardData(
+                initialContent,
+                title,
+                chrome,
+                includeHeader: true,
+                mode: state.Mode,
+                maxReplyChars: state.MaxReplyChars);
 
-        var response = await PostAsync("/open-apis/cardkit/v1/cards", token, payload, effectiveOptions, cancellationToken);
-        var result = await ParseResponseAsync(response, cancellationToken);
-        EnsureBusinessSuccess(result, "Create CardKit card");
+            var payload = new
+            {
+                type = "card_json",
+                data = JsonSerializer.Serialize(cardData)
+            };
 
-        if (result.TryGetProperty("data", out var data) &&
-            data.TryGetProperty("card_id", out var cardIdProp))
-        {
-            return cardIdProp.GetString() ?? string.Empty;
+            var response = await PostAsync("/open-apis/cardkit/v1/cards", token, payload, effectiveOptions, cancellationToken);
+            var result = await ParseResponseAsync(response, cancellationToken);
+
+            if (IsBusinessSuccess(result))
+            {
+                if (result.TryGetProperty("data", out var data) &&
+                    data.TryGetProperty("card_id", out var cardIdProp))
+                {
+                    return cardIdProp.GetString() ?? string.Empty;
+                }
+
+                throw new InvalidOperationException("Failed to create card: invalid response");
+            }
+
+            if (TryAdvanceOverflowReduction(result, state, cardId: null, sequence: null))
+            {
+                continue;
+            }
+
+            EnsureBusinessSuccess(result, "Create CardKit card");
+            throw new InvalidOperationException("Failed to create card: invalid response");
         }
-
-        throw new InvalidOperationException("Failed to create card: invalid response");
     }
 
     private async Task<bool> UpdateCardCoreAsync(
@@ -454,37 +485,70 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string? title,
         CancellationToken cancellationToken,
         FeishuOptions effectiveOptions,
-        FeishuStreamingCardChrome? chrome)
+        FeishuStreamingCardChrome? chrome,
+        StreamingCardPayloadState state)
     {
         try
         {
             var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-            var cardData = BuildStreamingCardData(content, title, chrome, includeHeader: !string.IsNullOrWhiteSpace(title));
             var updateUuid = CreateCardUpdateUuid(cardId, sequence);
-
-            var payload = new
-            {
-                card = new
-                {
-                    type = "card_json",
-                    data = JsonSerializer.Serialize(cardData)
-                },
-                sequence,
-                uuid = updateUuid
-            };
+            var sawRecoverableTimeout = false;
 
             for (var attempt = 1; attempt <= CardUpdateMaxAttempts; attempt++)
             {
                 try
                 {
+                    var payload = BuildUpdatePayload(
+                        content,
+                        title,
+                        chrome,
+                        state.Mode,
+                        state.MaxReplyChars,
+                        sequence,
+                        updateUuid);
+
                     var response = await PutAsync($"/open-apis/cardkit/v1/cards/{cardId}", token, payload, effectiveOptions, cancellationToken);
                     var result = await ParseResponseAsync(response, cancellationToken);
-                    EnsureBusinessSuccess(result, "Update CardKit card");
 
                     if (result.TryGetProperty("code", out var codeProp))
                     {
                         var code = codeProp.GetInt32();
-                        if (code == 0) return true;
+                        if (code == 0)
+                        {
+                            return true;
+                        }
+
+                        // A timeout can mean Feishu applied the write but the client never saw the response.
+                        // If the immediate retry for the same sequence then reports a sequence conflict,
+                        // treat that as evidence the prior write likely already succeeded.
+                        if ((code == CardUpdateSequenceConflictCode || code == CardUpdateDuplicateUuidCode) && sawRecoverableTimeout)
+                        {
+                            _logger.LogWarning(
+                                "Update card retry hit duplicate-after-timeout signal; assuming previous write succeeded (cardId={CardId}, seq={Sequence}, code={Code}, uuid={Uuid})",
+                                cardId,
+                                sequence,
+                                code,
+                                updateUuid);
+                            return true;
+                        }
+
+                        if (TryAdvanceOverflowReduction(result, state, cardId, sequence))
+                        {
+                            attempt--;
+                            continue;
+                        }
+
+                        if (code == CardOverMaxSizeCode)
+                        {
+                            _logger.LogWarning(
+                                "Update card failed because minimal reduced payload still exceeds CardKit max size (cardId={CardId}, seq={Sequence}, uuid={Uuid})",
+                                cardId,
+                                sequence,
+                                updateUuid);
+                            return false;
+                        }
+
+                        EnsureBusinessSuccess(result, "Update CardKit card");
 
                         _logger.LogWarning(
                             "Update card failed (cardId={CardId}, seq={Sequence}): Code={Code}, Msg={Msg}",
@@ -497,6 +561,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 }
                 catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
                 {
+                    sawRecoverableTimeout = true;
                     if (attempt < CardUpdateMaxAttempts)
                     {
                         _logger.LogWarning(
@@ -541,12 +606,16 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string content,
         string? title,
         FeishuStreamingCardChrome? chrome,
-        bool includeHeader)
+        bool includeHeader,
+        StreamingCardPayloadMode mode = StreamingCardPayloadMode.Full,
+        int? maxReplyChars = null)
     {
-        var config = BuildStreamingCardConfig(chrome);
+        var effectiveChrome = mode == StreamingCardPayloadMode.Full ? chrome : null;
+        var renderedContent = RenderStreamingReplyContent(content, mode, maxReplyChars);
+        var config = BuildStreamingCardConfig(effectiveChrome);
         var body = new
         {
-            elements = BuildStreamingCardElements(content, chrome)
+            elements = BuildStreamingCardElements(renderedContent, effectiveChrome)
         };
 
         if (includeHeader)
@@ -1201,14 +1270,130 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return JsonDocument.Parse(content).RootElement;
     }
 
+    private object BuildUpdatePayload(
+        string content,
+        string? title,
+        FeishuStreamingCardChrome? chrome,
+        StreamingCardPayloadMode mode,
+        int? maxReplyChars,
+        int sequence,
+        string updateUuid)
+    {
+        var cardData = BuildStreamingCardData(
+            content,
+            title,
+            chrome,
+            includeHeader: !string.IsNullOrWhiteSpace(title),
+            mode,
+            maxReplyChars);
+
+        return new
+        {
+            card = new
+            {
+                type = "card_json",
+                data = JsonSerializer.Serialize(cardData)
+            },
+            sequence,
+            uuid = updateUuid
+        };
+    }
+
+    private bool TryAdvanceOverflowReduction(
+        JsonElement result,
+        StreamingCardPayloadState state,
+        string? cardId,
+        int? sequence)
+    {
+        if (!TryGetBusinessCode(result, out var code) || code != CardOverMaxSizeCode)
+        {
+            return false;
+        }
+
+        if (!state.TryAdvance())
+        {
+            if (cardId != null || sequence != null)
+            {
+                _logger.LogWarning(
+                    "Feishu CardKit payload still exceeds max size after minimal reduction; stopping card updates (cardId={CardId}, seq={Sequence})",
+                    cardId ?? "<create>",
+                    sequence?.ToString() ?? "<create>");
+            }
+            return false;
+        }
+
+        _logger.LogWarning(
+            "Feishu CardKit payload exceeded max size; retrying with reduced payload (cardId={CardId}, seq={Sequence}, mode={Mode}, maxReplyChars={MaxReplyChars})",
+            cardId ?? "<create>",
+            sequence?.ToString() ?? "<create>",
+            state.Mode,
+            state.MaxReplyChars?.ToString() ?? "<none>");
+        return true;
+    }
+
+    private static bool IsBusinessSuccess(JsonElement result)
+    {
+        return !TryGetBusinessCode(result, out var code) || code == 0;
+    }
+
+    private static bool TryGetBusinessCode(JsonElement result, out int code)
+    {
+        if (result.TryGetProperty("code", out var codeProp))
+        {
+            code = codeProp.GetInt32();
+            return true;
+        }
+
+        code = 0;
+        return false;
+    }
+
+    private static string RenderStreamingReplyContent(string content, StreamingCardPayloadMode mode, int? maxReplyChars)
+    {
+        if (mode == StreamingCardPayloadMode.Full)
+        {
+            return content;
+        }
+
+        var effectiveLimit = maxReplyChars.GetValueOrDefault(mode == StreamingCardPayloadMode.Reduced ? ReducedReplyTailChars : MinimalReplyTailChars);
+        var trimmedContent = TakeContentTail(content, effectiveLimit);
+        return $"{ReducedContentNotice}\n\n{trimmedContent}";
+    }
+
+    private static string TakeContentTail(string content, int maxChars)
+    {
+        if (string.IsNullOrEmpty(content))
+        {
+            return string.Empty;
+        }
+
+        if (content.Length <= maxChars)
+        {
+            return content;
+        }
+
+        var tail = content[^maxChars..].TrimStart();
+        if (tail.StartsWith("```", StringComparison.Ordinal))
+        {
+            return tail;
+        }
+
+        var newlineIndex = tail.IndexOf('\n');
+        if (newlineIndex >= 0 && newlineIndex < tail.Length - 1)
+        {
+            return tail[(newlineIndex + 1)..].TrimStart();
+        }
+
+        return tail;
+    }
+
     private void EnsureBusinessSuccess(JsonElement result, string operationName)
     {
-        if (!result.TryGetProperty("code", out var codeProp))
+        if (!TryGetBusinessCode(result, out var code))
         {
             return;
         }
 
-        var code = codeProp.GetInt32();
         if (code == 0)
         {
             return;
@@ -1230,6 +1415,39 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     {
         var cacheKey = $"{options.AppId}\n{options.AppSecret}";
         return _tokenCache.GetOrAdd(cacheKey, _ => new TokenCacheEntry());
+    }
+
+    private sealed class StreamingCardPayloadState
+    {
+        public StreamingCardPayloadMode Mode { get; private set; } = StreamingCardPayloadMode.Full;
+
+        public int? MaxReplyChars { get; private set; }
+
+        public bool TryAdvance()
+        {
+            if (Mode == StreamingCardPayloadMode.Full)
+            {
+                Mode = StreamingCardPayloadMode.Reduced;
+                MaxReplyChars = ReducedReplyTailChars;
+                return true;
+            }
+
+            if (Mode == StreamingCardPayloadMode.Reduced)
+            {
+                Mode = StreamingCardPayloadMode.Minimal;
+                MaxReplyChars = MinimalReplyTailChars;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private enum StreamingCardPayloadMode
+    {
+        Full = 0,
+        Reduced = 1,
+        Minimal = 2
     }
 
     /// <summary>

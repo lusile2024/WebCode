@@ -878,6 +878,290 @@ public class FeishuCardKitClientTests
         Assert.NotEqual(firstUuid, updateBodies[2].RootElement.GetProperty("uuid").GetString());
     }
 
+    [Fact]
+    public async Task CreateStreamingHandleAsync_TreatsTimeoutThenSequenceConflictAsSuccessfulPriorWrite()
+    {
+        var handler = new TimeoutThenSequenceConflictCardUpdateHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 1,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "initial",
+            "AI 鍔╂墜",
+            TestContext.Current.CancellationToken);
+
+        await handle.UpdateAsync("first update");
+        await handle.UpdateAsync("second update");
+
+        Assert.False(handle.AreCardUpdatesStopped);
+        Assert.Equal(2, handler.SuccessfulLogicalUpdates);
+
+        Assert.Equal(
+            3,
+            handler.RequestPaths.Count(path => string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal)));
+
+        var updateBodies = handler.RequestPaths
+            .Select((path, index) => new { path, body = handler.RequestBodies[index] })
+            .Where(entry => string.Equals(entry.path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            .Select(entry => JsonDocument.Parse(entry.body))
+            .ToArray();
+
+        Assert.Equal(1, updateBodies[0].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(1, updateBodies[1].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(2, updateBodies[2].RootElement.GetProperty("sequence").GetInt32());
+
+        var firstUuid = updateBodies[0].RootElement.GetProperty("uuid").GetString();
+        Assert.Equal(firstUuid, updateBodies[1].RootElement.GetProperty("uuid").GetString());
+        Assert.NotEqual(firstUuid, updateBodies[2].RootElement.GetProperty("uuid").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_TreatsTimeoutThenDuplicateUuidAsSuccessfulPriorWrite()
+    {
+        var handler = new TimeoutThenDuplicateUuidCardUpdateHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 1,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "initial",
+            "AI 助手",
+            TestContext.Current.CancellationToken);
+
+        await handle.UpdateAsync("first update");
+        await handle.UpdateAsync("second update");
+
+        Assert.False(handle.AreCardUpdatesStopped);
+        Assert.Equal(2, handler.SuccessfulLogicalUpdates);
+
+        Assert.Equal(
+            3,
+            handler.RequestPaths.Count(path => string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal)));
+
+        var updateBodies = handler.RequestPaths
+            .Select((path, index) => new { path, body = handler.RequestBodies[index] })
+            .Where(entry => string.Equals(entry.path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            .Select(entry => JsonDocument.Parse(entry.body))
+            .ToArray();
+
+        Assert.Equal(1, updateBodies[0].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(1, updateBodies[1].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(2, updateBodies[2].RootElement.GetProperty("sequence").GetInt32());
+
+        var firstUuid = updateBodies[0].RootElement.GetProperty("uuid").GetString();
+        Assert.Equal(firstUuid, updateBodies[1].RootElement.GetProperty("uuid").GetString());
+        Assert.NotEqual(firstUuid, updateBodies[2].RootElement.GetProperty("uuid").GetString());
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_TreatsPlainSequenceConflictAsCardFailure()
+    {
+        var handler = new PlainSequenceConflictCardUpdateHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 1,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "initial",
+            "AI 鍔╂墜",
+            TestContext.Current.CancellationToken);
+
+        await handle.UpdateAsync("first update");
+
+        Assert.True(handle.AreCardUpdatesStopped);
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_RetriesOverflowUpdateWithReducedReplyOnlyPayload()
+    {
+        var handler = new OverflowThenReducedCardUpdateHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 30,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "initial",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: CreateVerboseStreamingChrome());
+
+        await handle.UpdateAsync(BuildLargeStreamingContent());
+
+        Assert.False(handle.AreCardUpdatesStopped);
+
+        var updateBodies = handler.RequestPaths
+            .Select((path, index) => new { path, body = handler.RequestBodies[index] })
+            .Where(entry => string.Equals(entry.path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            .Select(entry => JsonDocument.Parse(entry.body))
+            .ToArray();
+
+        Assert.Equal(2, updateBodies.Length);
+        Assert.Equal(1, updateBodies[0].RootElement.GetProperty("sequence").GetInt32());
+        Assert.Equal(1, updateBodies[1].RootElement.GetProperty("sequence").GetInt32());
+
+        using var firstCardDoc = JsonDocument.Parse(updateBodies[0].RootElement.GetProperty("card").GetProperty("data").GetString()!);
+        using var secondCardDoc = JsonDocument.Parse(updateBodies[1].RootElement.GetProperty("card").GetProperty("data").GetString()!);
+
+        Assert.True(firstCardDoc.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength() > 3);
+        Assert.Equal(1, secondCardDoc.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength());
+
+        var reducedContent = secondCardDoc.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[0]
+            .GetProperty("content")
+            .GetString();
+
+        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("仅显示最新内容", reducedContent);
+        Assert.Contains("line 359", reducedContent);
+        Assert.DoesNotContain("line 000", reducedContent);
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_RetriesOverflowCardCreationWithReducedReplyOnlyPayload()
+    {
+        var handler = new OverflowThenReducedCardCreateHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 30,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            BuildLargeStreamingContent(),
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: CreateVerboseStreamingChrome());
+
+        Assert.Equal("card_123", handle.CardId);
+
+        var createBodies = handler.RequestPaths
+            .Select((path, index) => new { path, body = handler.RequestBodies[index] })
+            .Where(entry => string.Equals(entry.path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            .Select(entry => JsonDocument.Parse(entry.body))
+            .ToArray();
+
+        Assert.Equal(2, createBodies.Length);
+
+        using var firstCardDoc = JsonDocument.Parse(createBodies[0].RootElement.GetProperty("data").GetString()!);
+        using var secondCardDoc = JsonDocument.Parse(createBodies[1].RootElement.GetProperty("data").GetString()!);
+
+        Assert.True(firstCardDoc.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength() > 3);
+        Assert.Equal(1, secondCardDoc.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength());
+
+        var reducedContent = secondCardDoc.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[0]
+            .GetProperty("content")
+            .GetString();
+
+        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("仅显示最新内容", reducedContent);
+        Assert.Contains("line 359", reducedContent);
+        Assert.DoesNotContain("line 000", reducedContent);
+    }
+
+    [Fact]
+    public async Task CreateStreamingHandleAsync_SticksToReducedPayloadAfterOverflowRecovery()
+    {
+        var handler = new OverflowRequiresReducedPayloadHandler();
+        var client = CreateClient(handler, new FeishuOptions
+        {
+            AppId = "app-id",
+            AppSecret = "app-secret",
+            HttpTimeoutSeconds = 30,
+            StreamingThrottleMs = 0
+        });
+
+        var handle = await client.CreateStreamingHandleAsync(
+            "oc_stream_chat",
+            null,
+            "initial",
+            "AI 助手",
+            TestContext.Current.CancellationToken,
+            chrome: CreateVerboseStreamingChrome());
+
+        await handle.UpdateAsync(BuildLargeStreamingContent());
+        await handle.UpdateAsync(BuildLargeStreamingContent() + Environment.NewLine + "tail next");
+
+        Assert.False(handle.AreCardUpdatesStopped);
+
+        var updateBodies = handler.RequestPaths
+            .Select((path, index) => new { path, body = handler.RequestBodies[index] })
+            .Where(entry => string.Equals(entry.path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            .Select(entry => JsonDocument.Parse(entry.body))
+            .ToArray();
+
+        Assert.Equal(3, updateBodies.Length);
+
+        using var lastCardDoc = JsonDocument.Parse(updateBodies[^1].RootElement.GetProperty("card").GetProperty("data").GetString()!);
+        Assert.Equal(1, lastCardDoc.RootElement.GetProperty("body").GetProperty("elements").GetArrayLength());
+
+        var reducedContent = lastCardDoc.RootElement
+            .GetProperty("body")
+            .GetProperty("elements")[0]
+            .GetProperty("content")
+            .GetString();
+
+        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("tail next", reducedContent);
+    }
+
+    private static FeishuStreamingCardChrome CreateVerboseStreamingChrome()
+    {
+        var chrome = new FeishuStreamingCardChrome
+        {
+            StatusMarkdown = "当前会话 · 处理中",
+            LatestToolCallMarkdown = "**调用工具：** `powershell.exe -Command ...`"
+        };
+
+        chrome.BottomNoticeMarkdowns.Add("这是很长的工具输出卡片，需要在超限时自动缩容。");
+        chrome.BottomActions.Add(new FeishuStreamingCardBottomAction
+        {
+            Text = "继续",
+            Type = "primary",
+            Value = new { action = "continue" }
+        });
+
+        return chrome;
+    }
+
+    private static string BuildLargeStreamingContent()
+    {
+        return string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, 360).Select(index => $"line {index:000} {new string('x', 24)}"));
+    }
+
     private static FeishuCardKitClient CreateClient(HttpMessageHandler handler, FeishuOptions? optionsOverride = null)
     {
         var options = Options.Create(optionsOverride ?? new FeishuOptions
@@ -977,6 +1261,283 @@ public class FeishuCardKitClientTests
                 }
 
                 return CreateJsonResponse("""{"code":0}""");
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
+        }
+    }
+
+    private sealed class TimeoutThenSequenceConflictCardUpdateHandler : HttpMessageHandler
+    {
+        private int _updateCount;
+
+        public int SuccessfulLogicalUpdates { get; private set; }
+        public List<string> RequestPaths { get; } = [];
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestBodies.Add(request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""");
+            }
+
+            if (request.Method == HttpMethod.Put &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            {
+                _updateCount++;
+                if (_updateCount == 1)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
+                }
+
+                if (_updateCount == 2)
+                {
+                    SuccessfulLogicalUpdates++;
+                    return CreateJsonResponse("""{"code":300317,"msg":"sequence number compare failed"}""");
+                }
+
+                SuccessfulLogicalUpdates++;
+                return CreateJsonResponse("""{"code":0}""");
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
+        }
+    }
+
+    private sealed class PlainSequenceConflictCardUpdateHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return Task.FromResult(CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""));
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                return Task.FromResult(CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}"""));
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return Task.FromResult(CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}"""));
+            }
+
+            if (request.Method == HttpMethod.Put &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            {
+                return Task.FromResult(CreateJsonResponse("""{"code":300317,"msg":"sequence number compare failed"}"""));
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
+        }
+    }
+
+    private sealed class TimeoutThenDuplicateUuidCardUpdateHandler : HttpMessageHandler
+    {
+        private int _updateCount;
+
+        public int SuccessfulLogicalUpdates { get; private set; }
+
+        public List<string> RequestPaths { get; } = [];
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestBodies.Add(request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""");
+            }
+
+            if (request.Method == HttpMethod.Put &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            {
+                _updateCount++;
+                if (_updateCount == 1)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
+                }
+
+                if (_updateCount == 2)
+                {
+                    SuccessfulLogicalUpdates++;
+                    return CreateJsonResponse("""{"code":200770,"msg":"this UUID has been recently consumed"}""");
+                }
+
+                SuccessfulLogicalUpdates++;
+                return CreateJsonResponse("""{"code":0}""");
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
+        }
+    }
+
+    private sealed class OverflowThenReducedCardUpdateHandler : HttpMessageHandler
+    {
+        private int _updateCount;
+
+        public List<string> RequestPaths { get; } = [];
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestBodies.Add(request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""");
+            }
+
+            if (request.Method == HttpMethod.Put &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            {
+                _updateCount++;
+                return _updateCount == 1
+                    ? CreateJsonResponse("""{"code":200860,"msg":"card over max size"}""")
+                    : CreateJsonResponse("""{"code":0}""");
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
+        }
+    }
+
+    private sealed class OverflowThenReducedCardCreateHandler : HttpMessageHandler
+    {
+        private int _createCount;
+
+        public List<string> RequestPaths { get; } = [];
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestBodies.Add(request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                _createCount++;
+                return _createCount == 1
+                    ? CreateJsonResponse("""{"code":200860,"msg":"card over max size"}""")
+                    : CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""");
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");
+        }
+    }
+
+    private sealed class OverflowRequiresReducedPayloadHandler : HttpMessageHandler
+    {
+        public List<string> RequestPaths { get; } = [];
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestPaths.Add(request.RequestUri!.AbsolutePath);
+            RequestBodies.Add(request.Content == null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var path = request.RequestUri!.AbsolutePath;
+            if (string.Equals(path, "/open-apis/auth/v3/tenant_access_token/internal", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"card_id":"card_123"}}""");
+            }
+
+            if (request.Method == HttpMethod.Post &&
+                string.Equals(path, "/open-apis/im/v1/messages", StringComparison.Ordinal))
+            {
+                return CreateJsonResponse("""{"code":0,"data":{"message_id":"om_stream_success"}}""");
+            }
+
+            if (request.Method == HttpMethod.Put &&
+                string.Equals(path, "/open-apis/cardkit/v1/cards/card_123", StringComparison.Ordinal))
+            {
+                using var requestDoc = JsonDocument.Parse(RequestBodies[^1]);
+                using var cardDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("card").GetProperty("data").GetString()!);
+                var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
+                var isReducedPayload = elements.GetArrayLength() == 1
+                    && elements[0].GetProperty("content").GetString()!.Contains("卡片已精简", StringComparison.Ordinal);
+
+                return isReducedPayload
+                    ? CreateJsonResponse("""{"code":0}""")
+                    : CreateJsonResponse("""{"code":200860,"msg":"card over max size"}""");
             }
 
             throw new Xunit.Sdk.XunitException($"Unexpected request sent to {request.RequestUri}.");

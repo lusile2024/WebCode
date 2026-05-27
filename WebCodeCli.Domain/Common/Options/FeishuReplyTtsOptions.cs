@@ -20,5 +20,5 @@ public sealed class FeishuReplyTtsOptions
 
     public string? TtsServicePythonPath { get; set; }
 
-    public int TtsServiceStartupTimeoutSeconds { get; set; } = 30;
+    public int TtsServiceStartupTimeoutSeconds { get; set; } = 60;
 }

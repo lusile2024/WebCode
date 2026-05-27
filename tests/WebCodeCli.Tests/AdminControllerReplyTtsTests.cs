@@ -315,6 +315,11 @@ public sealed class AdminControllerReplyTtsTests
                 UpdatedAt = DateTime.Now
             });
         }
+
+        public Task RecoverAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubUserAccountService : IUserAccountService

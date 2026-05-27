@@ -81,13 +81,31 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
         }
         catch (Exception ex) when (!IsCancellation(ex))
         {
-            return [];
+            var restartHealth = await _localServiceManager.EnsureStartedAsync(storageHealth, cancellationToken);
+            if (!restartHealth.IsAvailable)
+            {
+                return [];
+            }
+
+            try
+            {
+                return await _ttsClient.GetVoicesAsync(cancellationToken);
+            }
+            catch (Exception retryEx) when (!IsCancellation(retryEx))
+            {
+                return [];
+            }
         }
     }
 
     public async Task<FeishuReplyTtsVoiceResolutionResult> ResolveVoiceOrFallbackAsync(string? savedVoiceId, CancellationToken cancellationToken = default)
     {
         var health = await GetHealthAsync(cancellationToken);
+        if (!health.IsAvailable)
+        {
+            health = await EnsureServiceStartedAsync(cancellationToken);
+        }
+
         if (!health.IsAvailable)
         {
             return new FeishuReplyTtsVoiceResolutionResult
@@ -176,7 +194,7 @@ public sealed class FeishuReplyTtsPlatformService : IFeishuReplyTtsPlatformServi
             return MergeHealth(storageHealth, startHealth);
         }
 
-        return await GetHealthAsync(cancellationToken);
+        return MergeHealth(storageHealth, startHealth);
     }
 
     private FeishuReplyTtsHealthStatus MergeHealth(

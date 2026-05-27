@@ -11,6 +11,9 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 [ServiceDescription(typeof(IReplyTtsLocalServiceManager), ServiceLifetime.Singleton)]
 public sealed class ReplyTtsLocalServiceManager : IReplyTtsLocalServiceManager
 {
+    private static readonly TimeSpan HealthProbeTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HealthProbeInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOptionsMonitor<FeishuReplyTtsOptions> _optionsMonitor;
     private readonly ILogger<ReplyTtsLocalServiceManager> _logger;
@@ -112,7 +115,7 @@ public sealed class ReplyTtsLocalServiceManager : IReplyTtsLocalServiceManager
                     "start-exited");
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            await Task.Delay(HealthProbeInterval, cancellationToken);
         }
 
         return Unavailable(
@@ -127,7 +130,7 @@ public sealed class ReplyTtsLocalServiceManager : IReplyTtsLocalServiceManager
         using var scope = _scopeFactory.CreateScope();
         var ttsClient = scope.ServiceProvider.GetRequiredService<ISherpaKokoroTtsClient>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
+        timeoutCts.CancelAfter(HealthProbeTimeout);
 
         try
         {

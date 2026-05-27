@@ -84,12 +84,19 @@ function Update-PublishAppSettings {
         }
     }
 
+    $dbConnection = $null
     if ($settings.ContainsKey("DBConnection")) {
         $dbConnection = $settings["DBConnection"]
-        if ($dbConnection) {
-            $dbConnection["ConnectionStrings"] = "Data Source=data/WebCodeCli.db"
-            $dbConnection["VectorConnection"] = "data/WebCodeCliMem.db"
-        }
+    }
+    else {
+        $dbConnection = @{}
+        $settings["DBConnection"] = $dbConnection
+    }
+
+    if ($dbConnection) {
+        $dbConnection["DbType"] = "Sqlite"
+        $dbConnection["ConnectionStrings"] = "Data Source=data/WebCodeCli.db"
+        $dbConnection["VectorConnection"] = "data/WebCodeCliMem.db"
     }
 
     if ($settings.ContainsKey("CliTools")) {
@@ -104,6 +111,13 @@ function Update-PublishAppSettings {
         if ($workspace) {
             $workspace["AllowedRoots"] = @("workspaces")
             $workspace["AutoCreateMissingDirectories"] = $true
+        }
+    }
+
+    if ($settings.ContainsKey("FeishuReplyTts")) {
+        $feishuReplyTts = $settings["FeishuReplyTts"]
+        if ($feishuReplyTts) {
+            $feishuReplyTts["TtsServiceStartupTimeoutSeconds"] = 60
         }
     }
 

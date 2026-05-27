@@ -124,6 +124,7 @@ public class FeishuCardActionService
     private sealed class ActiveStreamingExecution : IDisposable
     {
         private int _stopRequested;
+        private FeishuStreamingHandle _handle;
 
         public ActiveStreamingExecution(
             string sessionId,
@@ -131,17 +132,23 @@ public class FeishuCardActionService
             CancellationTokenSource executionCancellationTokenSource)
         {
             SessionId = sessionId;
-            Handle = handle;
+            _handle = handle;
             ExecutionCancellationTokenSource = executionCancellationTokenSource;
         }
 
         public string SessionId { get; }
 
-        public FeishuStreamingHandle Handle { get; }
+        public FeishuStreamingHandle Handle => Volatile.Read(ref _handle);
 
         public CancellationTokenSource ExecutionCancellationTokenSource { get; }
 
         public bool StopRequested => Volatile.Read(ref _stopRequested) == 1;
+
+        public void ReplaceHandle(FeishuStreamingHandle handle)
+        {
+            ArgumentNullException.ThrowIfNull(handle);
+            Volatile.Write(ref _handle, handle);
+        }
 
         public void RequestStop()
         {
@@ -580,13 +587,13 @@ public class FeishuCardActionService
                 TryAttachSuperpowersQuickActions(streamingChrome, sessionId, toolId, actualChatKey, showStopAction: true);
 
                 // 创建流式回复
-                var handle = await _cardKit.CreateStreamingHandleAsync(
+                var handle = await CreateStreamingHandleWithOverflowFallbackAsync(
                     chatId,
                     null,
                     effectiveOptions.ThinkingMessage,
-                    effectiveOptions.DefaultCardTitle,
-                    optionsOverride: effectiveOptions,
-                    chrome: streamingChrome);
+                    effectiveOptions,
+                    streamingChrome,
+                    CancellationToken.None);
 
                 _logger.LogInformation(
                     "🔥 [FeishuHelp] 流式句柄已创建: CardId={CardId}",
@@ -601,7 +608,7 @@ public class FeishuCardActionService
                 {
                     // 执行 CLI 工具并流式更新卡片
                     await ExecuteCliAndStreamAsync(
-                        handle,
+                        activeExecution,
                         streamingChrome,
                         baseStatusMarkdown,
                         sessionId,
@@ -704,8 +711,9 @@ public class FeishuCardActionService
         string? appId,
         string? inputValues)
     {
-        var effectiveAction = string.Equals(action.Action, FeishuHelpCardAction.ConfirmBoundSuperpowersAction, StringComparison.Ordinal)
-                              || string.Equals(action.Action, FeishuHelpCardAction.ConfirmCurrentSuperpowersAction, StringComparison.Ordinal)
+        var isConfirmSuperpowersAction = string.Equals(action.Action, FeishuHelpCardAction.ConfirmBoundSuperpowersAction, StringComparison.Ordinal)
+                                         || string.Equals(action.Action, FeishuHelpCardAction.ConfirmCurrentSuperpowersAction, StringComparison.Ordinal);
+        var effectiveAction = isConfirmSuperpowersAction
             ? action.Command
             : action.Action;
 
@@ -718,6 +726,10 @@ public class FeishuCardActionService
             FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction => SuperpowersPromptBuilder.BuildSubagentExecutePlanPrompt(),
             _ => null
         };
+        if (string.IsNullOrWhiteSpace(prompt) && isConfirmSuperpowersAction && !string.IsNullOrWhiteSpace(action.Command))
+        {
+            prompt = action.Command;
+        }
 
         if (string.IsNullOrWhiteSpace(prompt))
         {
@@ -751,7 +763,7 @@ public class FeishuCardActionService
                 boundSessionId,
                 currentSessionId,
                 confirmToolId,
-                effectiveAction ?? action.Action,
+                prompt,
                 "⚠️ 当前激活会话已变化，请先确认要执行的会话",
                 "warning");
         }
@@ -1135,13 +1147,13 @@ public class FeishuCardActionService
                 var (streamingChrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(actualChatKey, sessionId, username, effectiveToolId);
                 TryAttachSuperpowersQuickActions(streamingChrome, sessionId, effectiveToolId, actualChatKey, showStopAction: true);
 
-                var handle = await _cardKit.CreateStreamingHandleAsync(
+                var handle = await CreateStreamingHandleWithOverflowFallbackAsync(
                     actualChatKey,
                     null,
                     effectiveOptions.ThinkingMessage,
-                    effectiveOptions.DefaultCardTitle,
-                    optionsOverride: effectiveOptions,
-                    chrome: streamingChrome);
+                    effectiveOptions,
+                    streamingChrome,
+                    CancellationToken.None);
 
                 using var executionCts = new CancellationTokenSource();
                 var activeExecution = new ActiveStreamingExecution(sessionId, handle, executionCts);
@@ -1151,7 +1163,7 @@ public class FeishuCardActionService
                 try
                 {
                     await ExecuteLowInterruptionContinueAndStreamAsync(
-                        handle,
+                        activeExecution,
                         streamingChrome,
                         baseStatusMarkdown,
                         sessionId,
@@ -1279,7 +1291,7 @@ public class FeishuCardActionService
     /// 执行 CLI 工具并流式更新卡片（从 FeishuChannelService 复制）
     /// </summary>
     private async Task ExecuteCliAndStreamAsync(
-        FeishuStreamingHandle handle,
+        ActiveStreamingExecution activeExecution,
         FeishuStreamingCardChrome streamingChrome,
         string baseStatusMarkdown,
         string sessionId,
@@ -1297,13 +1309,29 @@ public class FeishuCardActionService
         var hasStructuredTodoList = false;
         var latestRenderedContent = thinkingMessage;
         var cardDisconnected = false;
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
+        var cardSession = new FeishuStreamingCardSession(
+            activeExecution.Handle,
+            (_, latestContent, token) => TryCreateReplacementStreamingHandleAsync(
+                chatId,
+                latestContent,
+                streamingChrome,
+                effectiveOptions,
+                token),
+            activeExecution.ReplaceHandle,
+            (stoppedHandle, latestContent, token) => TryFinishReplacementStreamingCardAsync(
+                stoppedHandle,
+                streamingChrome,
+                baseStatusMarkdown,
+                latestContent,
+                token));
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
         if (tool == null)
         {
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+            await cardSession.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
                 latestRenderedContent,
                 $"未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。"));
             _logger.LogWarning("CLI tool not found: {ToolId}", resolvedToolId);
@@ -1324,12 +1352,14 @@ public class FeishuCardActionService
         TryAttachSuperpowersQuickActions(streamingChrome, sessionId, tool.Id, chatId, showStopAction: true);
         PausePulseForOverflowCard(streamingChrome, pulseGate);
         var statusPulseTask = RunStreamingStatusPulseAsync(
-            handle,
+            activeExecution,
             streamingChrome,
             baseStatusMarkdown,
             () => latestRenderedContent,
+            cardSession,
             pulseGate,
-            statusPulseCts.Token);
+            statusPulseCts.Token,
+            executionCancellationToken);
         var externalHistoryBackfillTask = RunExternalHistoryBackfillAsync(
             sessionId,
             tool.Id,
@@ -1338,15 +1368,10 @@ public class FeishuCardActionService
             () => latestRenderedContent,
             content =>
             {
-                if (handle.AreCardUpdatesStopped)
-                {
-                    return;
-                }
-
                 latestRenderedContent = content;
                 PausePulseForOverflowCard(streamingChrome, pulseGate);
             },
-            content => handle.AreCardUpdatesStopped ? Task.CompletedTask : handle.UpdateAsync(content),
+            content => cardSession.UpdateAsync(content, executionCancellationToken),
             statusPulseCts.Token);
 
         try
@@ -1360,10 +1385,58 @@ public class FeishuCardActionService
                         chunk.ErrorMessage ?? "Unknown error");
                     statusPulseCts.Cancel();
                     streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-                    await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                    await cardSession.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
                         latestRenderedContent,
                         chunk.ErrorMessage ?? "执行失败"));
                     return;
+                }
+
+                if (chunk.IsTurnBoundary)
+                {
+                    if (cardDisconnected)
+                    {
+                        continue;
+                    }
+
+                    var handoffSucceeded = await TryRotateGoalRuntimeTurnCardAsync(
+                        sessionId,
+                        chatId,
+                        tool.Id,
+                        activeExecution,
+                        cardSession,
+                        streamingChrome,
+                        baseStatusMarkdown,
+                        latestRenderedContent,
+                        username,
+                        appId,
+                        executionCancellationToken);
+                    if (!handoffSucceeded)
+                    {
+                        var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
+                            activeExecution,
+                            streamingChrome,
+                            baseStatusMarkdown,
+                            statusPulseCts,
+                            latestRenderedContent,
+                            sessionId,
+                            executionCancellationToken);
+                        if (disconnectedContent != null)
+                        {
+                            cardDisconnected = true;
+                            latestRenderedContent = disconnectedContent;
+                        }
+
+                        continue;
+                    }
+
+                    outputBuilder.Clear();
+                    assistantMessageBuilder.Clear();
+                    jsonlBuffer.Clear();
+                    hasStructuredTodoList = false;
+                    latestRenderedContent = thinkingMessage;
+                    streamingChrome.LatestToolCallMarkdown = null;
+                    PausePulseForOverflowCard(streamingChrome, pulseGate);
+                    continue;
                 }
 
                 outputBuilder.Append(chunk.Content);
@@ -1376,7 +1449,10 @@ public class FeishuCardActionService
 
                     if (string.IsNullOrWhiteSpace(displayContent))
                     {
-                        displayContent = ExtractFallbackOutput(outputBuilder.ToString(), adapter!) ?? thinkingMessage;
+                        displayContent = ExtractFallbackOutput(outputBuilder.ToString(), adapter!)
+                            ?? (ShouldProbeExternalHistory(latestRenderedContent, thinkingMessage)
+                                ? thinkingMessage
+                                : latestRenderedContent);
                     }
                 }
                 else
@@ -1388,10 +1464,11 @@ public class FeishuCardActionService
                 {
                     latestRenderedContent = displayContent;
                     PausePulseForOverflowCard(streamingChrome, pulseGate);
-                    await handle.UpdateAsync(displayContent);
-
-                    var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
-                        handle,
+                    var updateSucceeded = await cardSession.UpdateAsync(displayContent, executionCancellationToken);
+                    var disconnectedContent = updateSucceeded
+                        ? null
+                        : await TryHandleStreamingCardDisconnectAsync(
+                        activeExecution,
                         streamingChrome,
                         baseStatusMarkdown,
                         statusPulseCts,
@@ -1442,7 +1519,7 @@ public class FeishuCardActionService
             if (!cardDisconnected)
             {
                 var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
-                    handle,
+                    activeExecution,
                     streamingChrome,
                     baseStatusMarkdown,
                     statusPulseCts,
@@ -1457,33 +1534,55 @@ public class FeishuCardActionService
             }
 
             statusPulseCts.Cancel();
-            if (!cardDisconnected && !executionCancellationToken.IsCancellationRequested && !handle.AreCardUpdatesStopped)
+            if (!cardDisconnected && !executionCancellationToken.IsCancellationRequested && !activeExecution.Handle.AreCardUpdatesStopped)
             {
+                var completionPresentation = await BuildCompletionPresentationAsync(
+                    sessionId,
+                    tool.Id,
+                    baseStatusMarkdown);
                 latestRenderedContent = finalOutput;
-                streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+                streamingChrome.StatusMarkdown = completionPresentation.StatusMarkdown;
                 SetTopChipGroupsEnabled(streamingChrome, true);
                 TryAttachSuperpowersQuickActions(streamingChrome, sessionId, tool.Id, chatId);
+                var finishSucceeded = await cardSession.FinishAsync(finalOutput);
+                if (!finishSucceeded)
+                {
+                    var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
+                        activeExecution,
+                        streamingChrome,
+                        baseStatusMarkdown,
+                        statusPulseCts,
+                        latestRenderedContent,
+                        sessionId,
+                        executionCancellationToken);
+                    if (disconnectedContent != null)
+                    {
+                        cardDisconnected = true;
+                        latestRenderedContent = disconnectedContent;
+                    }
+                }
                 try
                 {
-                    // NOTE: 这条带会话标识的“已完成”普通文本通知不能删除。
-                    // 飞书侧对流式卡片完成的提示不够明显，用户依赖这条文本消息获得显式完成提醒，
-                    // 同时还需要知道是哪一个会话完成了。
-                    // 后续若调整卡片交互，必须保留等价的完成通知能力。
-                    await _feishuChannel.SendMessageAsync(
-                        chatId,
-                        BuildCompletionNotificationText(sessionId));
+                    if (!cardDisconnected)
+                    {
+                        // NOTE: 这条带会话标识的“已完成”普通文本通知不能删除。
+                        // 飞书侧对流式卡片完成的提示不够明显，用户依赖这条文本消息获得显式完成提醒，
+                        // 同时还需要知道是哪一个会话完成了。
+                        // 后续若调整卡片交互，必须保留等价的完成通知能力。
+                        await _feishuChannel.SendMessageAsync(
+                            chatId,
+                            completionPresentation.NotificationText);
+                    }
                 }
                 catch (Exception notificationEx)
                 {
                     _logger.LogWarning(notificationEx, "发送完成通知失败: ChatId={ChatId}", chatId);
                 }
-
-                await handle.FinishAsync(finalOutput);
             }
             else
             {
                 _logger.LogInformation(
-                    executionCancellationToken.IsCancellationRequested || handle.AreCardUpdatesStopped
+                    executionCancellationToken.IsCancellationRequested || activeExecution.Handle.AreCardUpdatesStopped
                         ? "Feishu card updates stopped mid-stream; skipped final card completion update: Session={SessionId}"
                         : "Feishu card completed without final card update: Session={SessionId}",
                     sessionId);
@@ -1520,7 +1619,7 @@ public class FeishuCardActionService
             _logger.LogError(ex, "CLI execution failed for session: {SessionId}", sessionId);
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+            await cardSession.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
                 latestRenderedContent,
                 ex.Message));
         }
@@ -1546,7 +1645,7 @@ public class FeishuCardActionService
     }
 
     private async Task ExecuteLowInterruptionContinueAndStreamAsync(
-        FeishuStreamingHandle handle,
+        ActiveStreamingExecution activeExecution,
         FeishuStreamingCardChrome streamingChrome,
         string baseStatusMarkdown,
         string sessionId,
@@ -1564,13 +1663,29 @@ public class FeishuCardActionService
         var hasStructuredTodoList = false;
         var latestRenderedContent = thinkingMessage;
         var cardDisconnected = false;
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
+        var cardSession = new FeishuStreamingCardSession(
+            activeExecution.Handle,
+            (_, latestContent, token) => TryCreateReplacementStreamingHandleAsync(
+                chatId,
+                latestContent,
+                streamingChrome,
+                effectiveOptions,
+                token),
+            activeExecution.ReplaceHandle,
+            (stoppedHandle, latestContent, token) => TryFinishReplacementStreamingCardAsync(
+                stoppedHandle,
+                streamingChrome,
+                baseStatusMarkdown,
+                latestContent,
+                token));
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
         if (tool == null)
         {
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+            await cardSession.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
                 latestRenderedContent,
                 $"未找到 CLI 工具 '{resolvedToolId}'，请在配置中添加该工具。"));
             _logger.LogWarning("CLI tool not found for low interruption continue: {ToolId}", resolvedToolId);
@@ -1584,12 +1699,14 @@ public class FeishuCardActionService
         var pulseGate = new FeishuStreamingStatusPulseGate();
         PausePulseForOverflowCard(streamingChrome, pulseGate);
         var statusPulseTask = RunStreamingStatusPulseAsync(
-            handle,
+            activeExecution,
             streamingChrome,
             baseStatusMarkdown,
             () => latestRenderedContent,
+            cardSession,
             pulseGate,
-            statusPulseCts.Token);
+            statusPulseCts.Token,
+            executionCancellationToken);
         var externalHistoryBackfillTask = RunExternalHistoryBackfillAsync(
             sessionId,
             tool.Id,
@@ -1598,15 +1715,10 @@ public class FeishuCardActionService
             () => latestRenderedContent,
             content =>
             {
-                if (handle.AreCardUpdatesStopped)
-                {
-                    return;
-                }
-
                 latestRenderedContent = content;
                 PausePulseForOverflowCard(streamingChrome, pulseGate);
             },
-            content => handle.AreCardUpdatesStopped ? Task.CompletedTask : handle.UpdateAsync(content),
+            content => cardSession.UpdateAsync(content, executionCancellationToken),
             statusPulseCts.Token);
 
         try
@@ -1620,10 +1732,58 @@ public class FeishuCardActionService
                         chunk.ErrorMessage ?? "Unknown error");
                     statusPulseCts.Cancel();
                     streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-                    await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+                    await cardSession.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
                         latestRenderedContent,
                         chunk.ErrorMessage ?? "执行失败"));
                     return;
+                }
+
+                if (chunk.IsTurnBoundary)
+                {
+                    if (cardDisconnected)
+                    {
+                        continue;
+                    }
+
+                    var handoffSucceeded = await TryRotateGoalRuntimeTurnCardAsync(
+                        sessionId,
+                        chatId,
+                        tool.Id,
+                        activeExecution,
+                        cardSession,
+                        streamingChrome,
+                        baseStatusMarkdown,
+                        latestRenderedContent,
+                        username,
+                        appId,
+                        executionCancellationToken);
+                    if (!handoffSucceeded)
+                    {
+                        var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
+                            activeExecution,
+                            streamingChrome,
+                            baseStatusMarkdown,
+                            statusPulseCts,
+                            latestRenderedContent,
+                            sessionId,
+                            executionCancellationToken);
+                        if (disconnectedContent != null)
+                        {
+                            cardDisconnected = true;
+                            latestRenderedContent = disconnectedContent;
+                        }
+
+                        continue;
+                    }
+
+                    outputBuilder.Clear();
+                    assistantMessageBuilder.Clear();
+                    jsonlBuffer.Clear();
+                    hasStructuredTodoList = false;
+                    latestRenderedContent = thinkingMessage;
+                    streamingChrome.LatestToolCallMarkdown = null;
+                    PausePulseForOverflowCard(streamingChrome, pulseGate);
+                    continue;
                 }
 
                 outputBuilder.Append(chunk.Content);
@@ -1636,7 +1796,10 @@ public class FeishuCardActionService
 
                     if (string.IsNullOrWhiteSpace(displayContent))
                     {
-                        displayContent = ExtractFallbackOutput(outputBuilder.ToString(), adapter!) ?? thinkingMessage;
+                        displayContent = ExtractFallbackOutput(outputBuilder.ToString(), adapter!)
+                            ?? (ShouldProbeExternalHistory(latestRenderedContent, thinkingMessage)
+                                ? thinkingMessage
+                                : latestRenderedContent);
                     }
                 }
                 else
@@ -1648,10 +1811,11 @@ public class FeishuCardActionService
                 {
                     latestRenderedContent = displayContent;
                     PausePulseForOverflowCard(streamingChrome, pulseGate);
-                    await handle.UpdateAsync(displayContent);
-
-                    var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
-                        handle,
+                    var updateSucceeded = await cardSession.UpdateAsync(displayContent, executionCancellationToken);
+                    var disconnectedContent = updateSucceeded
+                        ? null
+                        : await TryHandleStreamingCardDisconnectAsync(
+                        activeExecution,
                         streamingChrome,
                         baseStatusMarkdown,
                         statusPulseCts,
@@ -1702,7 +1866,7 @@ public class FeishuCardActionService
             if (!cardDisconnected)
             {
                 var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
-                    handle,
+                    activeExecution,
                     streamingChrome,
                     baseStatusMarkdown,
                     statusPulseCts,
@@ -1717,30 +1881,52 @@ public class FeishuCardActionService
             }
 
             statusPulseCts.Cancel();
-            if (!cardDisconnected && !executionCancellationToken.IsCancellationRequested && !handle.AreCardUpdatesStopped)
+            if (!cardDisconnected && !executionCancellationToken.IsCancellationRequested && !activeExecution.Handle.AreCardUpdatesStopped)
             {
+                var completionPresentation = await BuildCompletionPresentationAsync(
+                    sessionId,
+                    tool.Id,
+                    baseStatusMarkdown);
                 latestRenderedContent = finalOutput;
-                streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+                streamingChrome.StatusMarkdown = completionPresentation.StatusMarkdown;
                 SetTopChipGroupsEnabled(streamingChrome, true);
                 TryAttachSuperpowersQuickActions(streamingChrome, sessionId, tool.Id, chatId);
+                var finishSucceeded = await cardSession.FinishAsync(finalOutput);
+                if (!finishSucceeded)
+                {
+                    var disconnectedContent = await TryHandleStreamingCardDisconnectAsync(
+                        activeExecution,
+                        streamingChrome,
+                        baseStatusMarkdown,
+                        statusPulseCts,
+                        latestRenderedContent,
+                        sessionId,
+                        executionCancellationToken);
+                    if (disconnectedContent != null)
+                    {
+                        cardDisconnected = true;
+                        latestRenderedContent = disconnectedContent;
+                    }
+                }
 
                 try
                 {
-                    await _feishuChannel.SendMessageAsync(
-                        chatId,
-                        BuildCompletionNotificationText(sessionId));
+                    if (!cardDisconnected)
+                    {
+                        await _feishuChannel.SendMessageAsync(
+                            chatId,
+                            completionPresentation.NotificationText);
+                    }
                 }
                 catch (Exception notificationEx)
                 {
                     _logger.LogWarning(notificationEx, "发送少打断执行完成通知失败: ChatId={ChatId}", chatId);
                 }
-
-                await handle.FinishAsync(finalOutput);
             }
             else
             {
                 _logger.LogInformation(
-                    executionCancellationToken.IsCancellationRequested || handle.AreCardUpdatesStopped
+                    executionCancellationToken.IsCancellationRequested || activeExecution.Handle.AreCardUpdatesStopped
                         ? "Feishu card updates stopped during low interruption continue; skipped final card completion update: Session={SessionId}"
                         : "Feishu low interruption continue completed without final card update: Session={SessionId}",
                     sessionId);
@@ -1777,7 +1963,7 @@ public class FeishuCardActionService
             _logger.LogError(ex, "Low interruption continue failed for session: {SessionId}", sessionId);
             statusPulseCts.Cancel();
             streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithErrorState(baseStatusMarkdown);
-            await handle.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
+            await cardSession.FinishAsync(FeishuStreamingErrorFormatter.AppendError(
                 latestRenderedContent,
                 ex.Message));
         }
@@ -2042,12 +2228,14 @@ public class FeishuCardActionService
     }
 
     private async Task RunStreamingStatusPulseAsync(
-        FeishuStreamingHandle handle,
+        ActiveStreamingExecution activeExecution,
         FeishuStreamingCardChrome streamingChrome,
         string baseStatusMarkdown,
         Func<string> contentAccessor,
+        FeishuStreamingCardSession cardSession,
         FeishuStreamingStatusPulseGate pulseGate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken cardWriteCancellationToken)
     {
         var frameIndex = 0;
         try
@@ -2055,7 +2243,7 @@ public class FeishuCardActionService
             while (!cancellationToken.IsCancellationRequested)
             {
                 await Task.Delay(StreamingStatusPulseIntervalMs, cancellationToken);
-                if (cancellationToken.IsCancellationRequested || handle.AreCardUpdatesStopped)
+                if (cancellationToken.IsCancellationRequested || activeExecution.Handle.AreCardUpdatesStopped)
                 {
                     break;
                 }
@@ -2066,7 +2254,7 @@ public class FeishuCardActionService
                 }
 
                 streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, ++frameIndex);
-                await handle.UpdateAsync(contentAccessor());
+                await cardSession.UpdateAsync(contentAccessor(), cardWriteCancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -2074,8 +2262,101 @@ public class FeishuCardActionService
         }
     }
 
+    private static async Task TryFinishReplacementStreamingCardAsync(
+        FeishuStreamingHandle stoppedHandle,
+        FeishuStreamingCardChrome streamingChrome,
+        string baseStatusMarkdown,
+        string latestContent,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var previousStatusMarkdown = streamingChrome.StatusMarkdown;
+        streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithStoppedState(baseStatusMarkdown);
+        try
+        {
+            await stoppedHandle.FinishAsync(
+                FeishuStreamingReplacementFormatter.BuildTransferredContent(latestContent));
+        }
+        finally
+        {
+            streamingChrome.StatusMarkdown = previousStatusMarkdown;
+        }
+    }
+
+    private async Task<bool> TryRotateGoalRuntimeTurnCardAsync(
+        string sessionId,
+        string chatId,
+        string toolId,
+        ActiveStreamingExecution activeExecution,
+        FeishuStreamingCardSession cardSession,
+        FeishuStreamingCardChrome streamingChrome,
+        string baseStatusMarkdown,
+        string latestRenderedContent,
+        string? username,
+        string? appId,
+        CancellationToken cancellationToken)
+    {
+        if (!IsGoalRuntimeSession(sessionId, toolId))
+        {
+            return true;
+        }
+
+        var previousHandle = activeExecution.Handle;
+        var previousStatusMarkdown = streamingChrome.StatusMarkdown;
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(username, appId);
+        ApplyChromeForTurnHandoff(streamingChrome, baseStatusMarkdown);
+
+        try
+        {
+            await previousHandle.FinishAsync(string.IsNullOrWhiteSpace(latestRenderedContent) ? "本轮已结束，Goal 继续执行中。" : latestRenderedContent);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Finishing previous goal-runtime turn card failed: Session={SessionId}, CardId={CardId}", sessionId, previousHandle.CardId);
+        }
+
+        streamingChrome.StatusMarkdown = previousStatusMarkdown;
+        TryAttachSuperpowersQuickActions(streamingChrome, sessionId, toolId, chatId, showStopAction: true);
+
+        FeishuStreamingHandle nextHandle;
+        try
+        {
+            nextHandle = await CreateStreamingHandleWithOverflowFallbackAsync(
+                chatId,
+                null,
+                effectiveOptions.ThinkingMessage,
+                effectiveOptions,
+                streamingChrome,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Creating next goal-runtime turn card failed: Session={SessionId}, ChatId={ChatId}", sessionId, chatId);
+            return false;
+        }
+
+        activeExecution.ReplaceHandle(nextHandle);
+        await cardSession.SwitchHandleAsync(nextHandle, resetReplacementCount: true, cancellationToken);
+        return true;
+    }
+
+    private static void ApplyChromeForTurnHandoff(
+        FeishuStreamingCardChrome chrome,
+        string baseStatusMarkdown)
+    {
+        chrome.StatusMarkdown = GoalRuntimeCompletionStateFormatter.WithGoalContinuingState(baseStatusMarkdown);
+        SetTopChipGroupsEnabled(chrome, true);
+        chrome.BottomPrompt = null;
+        chrome.AdditionalBottomPrompts.Clear();
+        chrome.BottomActions.Clear();
+    }
+
     private async Task<string?> TryHandleStreamingCardDisconnectAsync(
-        FeishuStreamingHandle handle,
+        ActiveStreamingExecution activeExecution,
         FeishuStreamingCardChrome streamingChrome,
         string baseStatusMarkdown,
         CancellationTokenSource statusPulseCts,
@@ -2083,7 +2364,7 @@ public class FeishuCardActionService
         string sessionId,
         CancellationToken executionCancellationToken)
     {
-        if (!handle.AreCardUpdatesStopped)
+        if (!activeExecution.Handle.AreCardUpdatesStopped)
         {
             return null;
         }
@@ -2102,7 +2383,7 @@ public class FeishuCardActionService
 
         try
         {
-            await handle.FinishAsync(disconnectedContent);
+            await activeExecution.Handle.FinishAsync(disconnectedContent);
         }
         catch (Exception ex)
         {
@@ -2113,6 +2394,66 @@ public class FeishuCardActionService
         }
 
         return disconnectedContent;
+    }
+
+    private async Task<FeishuStreamingHandle?> TryCreateReplacementStreamingHandleAsync(
+        string chatId,
+        string latestRenderedContent,
+        FeishuStreamingCardChrome chrome,
+        FeishuOptions effectiveOptions,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await CreateStreamingHandleWithOverflowFallbackAsync(
+                chatId,
+                null,
+                latestRenderedContent,
+                effectiveOptions,
+                chrome,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create replacement Feishu card-action streaming card for chat {ChatId}", chatId);
+            return null;
+        }
+    }
+
+    private async Task<FeishuStreamingHandle> CreateStreamingHandleWithOverflowFallbackAsync(
+        string chatId,
+        string? replyMessageId,
+        string initialContent,
+        FeishuOptions effectiveOptions,
+        FeishuStreamingCardChrome chrome,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _cardKit.CreateStreamingHandleAsync(
+                chatId,
+                replyMessageId,
+                initialContent,
+                effectiveOptions.DefaultCardTitle,
+                cancellationToken,
+                effectiveOptions,
+                chrome);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("code: 200860", StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                ex,
+                "Card-action streaming card creation overflowed; switching to plain-text fallback stream (chatId={ChatId}, replyMessageId={ReplyMessageId})",
+                chatId,
+                replyMessageId ?? "<none>");
+            return await FeishuTextStreamingFallbackHandleFactory.CreateAsync(
+                _cardKit,
+                chatId,
+                replyMessageId,
+                initialContent,
+                effectiveOptions,
+                cancellationToken);
+        }
     }
 
     private static void PausePulseForOverflowCard(
@@ -2461,17 +2802,22 @@ public class FeishuCardActionService
                 continue;
             }
 
-            var outputEvent = adapter.ParseOutputLine(line);
-            if (outputEvent == null || string.IsNullOrWhiteSpace(outputEvent.Content))
-            {
-                continue;
-            }
-
             var isStructuredLine = line.StartsWith("{", StringComparison.Ordinal)
                                    || line.StartsWith("[", StringComparison.Ordinal);
             if (isStructuredLine)
             {
                 sawStructuredOutput = true;
+            }
+
+            var outputEvent = adapter.ParseOutputLine(line);
+            if (outputEvent == null)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(outputEvent.Content))
+            {
+                continue;
             }
 
             var assistantMessage = adapter.ExtractAssistantMessage(outputEvent);
@@ -4275,7 +4621,7 @@ public class FeishuCardActionService
             return historyContent.Trim();
         }
 
-        return BuildCompletionNotificationText(sessionId, fallbackWorkspacePath);
+        return await BuildCompletionNotificationTextAsync(sessionId, toolId, fallbackWorkspacePath);
     }
 
     private static string BuildSessionOptionText(ChatSessionEntity session)
@@ -4286,21 +4632,116 @@ public class FeishuCardActionService
         return $"{goalRuntimePrefix}{workspaceName} · {sessionLabel} · {GetToolDisplayName(session.ToolId)}";
     }
 
-    private string BuildCompletionNotificationText(string sessionId, string? fallbackWorkspacePath = null)
+    private async Task<CompletionPresentation> BuildCompletionPresentationAsync(
+        string sessionId,
+        string toolId,
+        string baseStatusMarkdown,
+        string? fallbackWorkspacePath = null)
     {
         ChatSessionEntity? session;
         using (var scope = _serviceProvider.CreateScope())
         {
             var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
-            session = repo.GetByIdAsync(sessionId).GetAwaiter().GetResult();
+            session = await repo.GetByIdAsync(sessionId);
         }
 
+        var goal = await TryGetGoalRuntimeGoalAsync(sessionId, toolId, session);
+        return new CompletionPresentation(
+            BuildCompletionStatusMarkdown(baseStatusMarkdown, session, goal),
+            BuildCompletionNotificationText(sessionId, session, goal, fallbackWorkspacePath));
+    }
+
+    private async Task<string> BuildCompletionNotificationTextAsync(
+        string sessionId,
+        string toolId,
+        string? fallbackWorkspacePath = null)
+    {
+        ChatSessionEntity? session;
+        using (var scope = _serviceProvider.CreateScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+            session = await repo.GetByIdAsync(sessionId);
+        }
+
+        var goal = await TryGetGoalRuntimeGoalAsync(sessionId, toolId, session);
+        return BuildCompletionNotificationText(sessionId, session, goal, fallbackWorkspacePath);
+    }
+
+    private async Task<AppServerGoalSnapshot?> TryGetGoalRuntimeGoalAsync(
+        string sessionId,
+        string toolId,
+        ChatSessionEntity? session)
+    {
+        if (!IsGoalRuntimeSession(session))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _cliExecutor.TryGetGoalRuntimeGoalAsync(sessionId, toolId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "读取 Goal runtime 完成态失败: Session={SessionId}", sessionId);
+            return null;
+        }
+    }
+
+    private string BuildCompletionNotificationText(
+        string sessionId,
+        ChatSessionEntity? session,
+        AppServerGoalSnapshot? goal,
+        string? fallbackWorkspacePath = null)
+    {
         var workspaceName = GetSessionWorkspaceName(sessionId, fallbackWorkspacePath);
         var sessionLabel = GetSessionDisplayLabel(session);
+        var summaryLine = BuildCompletionSummaryLine(session, goal);
         return BuildSessionStatusMarkdown(
-            $"当前会话：{workspaceName}  {sessionLabel}\n已完成",
+            $"当前会话：{workspaceName}  {sessionLabel}\n{summaryLine}",
             session);
     }
+
+    private static string BuildCompletionStatusMarkdown(
+        string baseStatusMarkdown,
+        ChatSessionEntity? session,
+        AppServerGoalSnapshot? goal)
+    {
+        if (!IsGoalRuntimeSession(session))
+        {
+            return FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+        }
+
+        return NormalizeGoalRuntimeStatus(goal?.Status) switch
+        {
+            "active" => GoalRuntimeCompletionStateFormatter.WithGoalContinuingState(baseStatusMarkdown),
+            "paused" => GoalRuntimeCompletionStateFormatter.WithGoalPausedState(baseStatusMarkdown),
+            "complete" => FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown),
+            _ => GoalRuntimeCompletionStateFormatter.WithTurnFinishedState(baseStatusMarkdown)
+        };
+    }
+
+    private static string BuildCompletionSummaryLine(ChatSessionEntity? session, AppServerGoalSnapshot? goal)
+    {
+        if (!IsGoalRuntimeSession(session))
+        {
+            return "已完成";
+        }
+
+        return NormalizeGoalRuntimeStatus(goal?.Status) switch
+        {
+            "active" => "本轮执行已结束，Goal 仍在运行",
+            "paused" => "Goal 已暂停",
+            "complete" => "Goal 已完成",
+            "budgetlimited" => "Goal 已达到预算上限",
+            _ => "本轮执行已结束"
+        };
+    }
+
+    private static string? NormalizeGoalRuntimeStatus(string? status)
+        => status?.Trim().ToLowerInvariant();
+
+    private sealed record CompletionPresentation(string StatusMarkdown, string NotificationText);
 
     private static string? ExtractWorkspaceDirectoryName(string? workspacePath)
     {
@@ -5128,7 +5569,12 @@ public class FeishuCardActionService
 
             var refreshedSession = await repo.GetByIdAndUsernameAsync(sessionId, username) ?? session;
             var (chrome, baseStatusMarkdown) = await BuildStreamingCardChromeAsync(actualChatKey, sessionId, username, effectiveToolId);
-            chrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithCompletedState(baseStatusMarkdown);
+            var completionPresentation = await BuildCompletionPresentationAsync(
+                sessionId,
+                effectiveToolId,
+                baseStatusMarkdown,
+                refreshedSession.WorkspacePath);
+            chrome.StatusMarkdown = completionPresentation.StatusMarkdown;
             SetTopChipGroupsEnabled(chrome, true);
 
             var latestAssistantContent = _chatSessionService.GetMessages(sessionId)
@@ -5137,7 +5583,7 @@ public class FeishuCardActionService
                 .LastOrDefault();
             if (string.IsNullOrWhiteSpace(latestAssistantContent))
             {
-                latestAssistantContent = BuildCompletionNotificationText(sessionId, refreshedSession.WorkspacePath);
+                latestAssistantContent = completionPresentation.NotificationText;
             }
 
             var card = BuildStreamingCardRefreshCard(latestAssistantContent, chrome);
