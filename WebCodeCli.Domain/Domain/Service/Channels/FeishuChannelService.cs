@@ -33,7 +33,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     private readonly ICliExecutorService _cliExecutor;
     private readonly IChatSessionService _chatSessionService;
     private readonly IFeishuAttachmentDraftService _attachmentDraftService;
-    private readonly IReplyTtsOrchestrator? _replyTtsOrchestrator;
+    private readonly IReplyDocumentOrchestrator? _replyDocumentOrchestrator;
 
     private bool _isRunning = false;
 
@@ -243,7 +243,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         IServiceProvider serviceProvider,
         ICliExecutorService cliExecutor,
         IChatSessionService chatSessionService,
-        IReplyTtsOrchestrator? replyTtsOrchestrator = null,
+        IReplyDocumentOrchestrator? replyDocumentOrchestrator = null,
         IFeishuAttachmentDraftService? attachmentDraftService = null)
     {
         _options = options.Value;
@@ -255,7 +255,7 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         _attachmentDraftService = attachmentDraftService
             ?? serviceProvider.GetService<IFeishuAttachmentDraftService>()
             ?? new FeishuAttachmentDraftService();
-        _replyTtsOrchestrator = replyTtsOrchestrator;
+        _replyDocumentOrchestrator = replyDocumentOrchestrator;
     }
 
     /// <summary>
@@ -1047,6 +1047,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
     {
         var outputBuilder = new StringBuilder();
         var assistantMessageBuilder = new StringBuilder();
+        var turnAssistantMessageBuilder = new StringBuilder();
+        var finalAnswerMessageBuilder = new StringBuilder();
         var jsonlBuffer = new StringBuilder(); // JSONL 缂撳啿鍖猴紝澶勭悊涓嶅畬鏁寸殑琛?
         var hasStructuredTodoList = false;
         var latestRenderedContent = thinkingMessage;
@@ -1113,6 +1115,32 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                         continue;
                     }
 
+                    if (_replyDocumentOrchestrator != null && turnAssistantMessageBuilder.Length > 0)
+                    {
+                        try
+                        {
+                            await _replyDocumentOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+                            {
+                                ChatId = chatId,
+                                SessionId = sessionId,
+                                CliThreadId = ResolveCliThreadId(sessionId),
+                                OriginalUserQuestion = userPrompt,
+                                Username = username,
+                                AppId = appId,
+                                Output = turnAssistantMessageBuilder.ToString().Trim(),
+                                FinalAnswerOutput = finalAnswerMessageBuilder.ToString().Trim()
+                            });
+                        }
+                        catch (Exception ttsQueueEx)
+                        {
+                            _logger.LogWarning(
+                                ttsQueueEx,
+                                "Failed to queue reply document at turn boundary: Session={SessionId}, MessageId={MessageId}",
+                                sessionId,
+                                completionReplyToMessageId ?? activeExecution.Handle.MessageId);
+                        }
+                    }
+
                     var handoffSucceeded = await TryRotateGoalRuntimeTurnCardAsync(
                         sessionId,
                         chatId,
@@ -1136,6 +1164,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
                     outputBuilder.Clear();
                     assistantMessageBuilder.Clear();
+                    turnAssistantMessageBuilder.Clear();
+                    finalAnswerMessageBuilder.Clear();
                     jsonlBuffer.Clear();
                     hasStructuredTodoList = false;
                     latestRenderedContent = thinkingMessage;
@@ -1153,7 +1183,15 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 if (useAdapter)
                 {
                     // 瑙ｆ瀽 JSONL 琛屽苟鎻愬彇鍔╂墜娑堟伅锛堜娇鐢ㄧ紦鍐插尯澶勭悊涓嶅畬鏁寸殑琛岋級
-                    hasStructuredTodoList |= ProcessJsonlChunk(chunk.Content, sessionId, adapter!, assistantMessageBuilder, jsonlBuffer, activeExecution.Chrome);
+                    hasStructuredTodoList |= ProcessJsonlChunk(
+                        chunk.Content,
+                        sessionId,
+                        adapter!,
+                        assistantMessageBuilder,
+                        turnAssistantMessageBuilder,
+                        finalAnswerMessageBuilder,
+                        jsonlBuffer,
+                        activeExecution.Chrome);
                     displayContent = assistantMessageBuilder.ToString();
 
                     // 濡傛灉娌℃湁鍔╂墜娑堟伅锛屾樉绀?鎬濊€冧腑"
@@ -1202,7 +1240,14 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
 
             if (useAdapter && jsonlBuffer.Length > 0)
             {
-                hasStructuredTodoList |= ProcessJsonlLine(jsonlBuffer.ToString(), sessionId, adapter!, assistantMessageBuilder, activeExecution.Chrome);
+                hasStructuredTodoList |= ProcessJsonlLine(
+                    jsonlBuffer.ToString(),
+                    sessionId,
+                    adapter!,
+                    assistantMessageBuilder,
+                    turnAssistantMessageBuilder,
+                    finalAnswerMessageBuilder,
+                    activeExecution.Chrome);
                 jsonlBuffer.Clear();
             }
 
@@ -1235,6 +1280,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 // 涓嶄娇鐢ㄩ€傞厤鍣ㄦ椂锛岃繃婊ょ郴缁熸秷鎭?
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
+
+            var finalAnswerOutput = finalAnswerMessageBuilder.ToString().Trim();
 
             if (!cardDisconnected)
             {
@@ -1331,23 +1378,27 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                     await repo.UpdateAsync(session);
                 }
 
-                if (!cardDisconnected && _replyTtsOrchestrator != null)
+                if (!cardDisconnected && _replyDocumentOrchestrator != null)
                 {
                     try
                     {
-                        await _replyTtsOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
+                        await _replyDocumentOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
                         {
                             ChatId = chatId,
+                            SessionId = sessionId,
+                            CliThreadId = ResolveCliThreadId(sessionId),
+                            OriginalUserQuestion = userPrompt,
                             Username = username,
                             AppId = appId,
-                            Output = finalOutput
+                            Output = finalOutput,
+                            FinalAnswerOutput = finalAnswerOutput
                         });
                     }
                     catch (Exception ttsQueueEx)
                     {
                         _logger.LogWarning(
                             ttsQueueEx,
-                            "Failed to queue reply TTS after Feishu completion: Session={SessionId}, MessageId={MessageId}",
+                            "Failed to queue reply document after Feishu completion: Session={SessionId}, MessageId={MessageId}",
                             sessionId,
                             completionReplyToMessageId ?? activeExecution.Handle.MessageId);
                     }
@@ -1547,6 +1598,19 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         }
 
         return true;
+    }
+
+    private string? ResolveCliThreadId(string sessionId)
+    {
+        var cliThreadId = _cliExecutor.GetCliThreadId(sessionId)?.Trim();
+        if (!string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            return cliThreadId;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IChatSessionRepository>();
+        return repo.GetByIdAsync(sessionId).GetAwaiter().GetResult()?.CliThreadId?.Trim();
     }
 
     private static string ExtractInlineAttachmentPromptText(string normalizedPrompt)
@@ -3097,6 +3161,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         string sessionId,
         ICliToolAdapter adapter,
         StringBuilder assistantMessageBuilder,
+        StringBuilder turnAssistantMessageBuilder,
+        StringBuilder finalAnswerMessageBuilder,
         StringBuilder jsonlBuffer,
         FeishuStreamingCardChrome? chrome)
     {
@@ -3126,7 +3192,14 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             jsonlBuffer.Remove(0, newlineIndex + 1);
 
             // 澶勭悊杩欎竴琛?
-            hasStructuredTodoList |= ProcessJsonlLine(line, sessionId, adapter, assistantMessageBuilder, chrome);
+            hasStructuredTodoList |= ProcessJsonlLine(
+                line,
+                sessionId,
+                adapter,
+                assistantMessageBuilder,
+                turnAssistantMessageBuilder,
+                finalAnswerMessageBuilder,
+                chrome);
         }
 
         return hasStructuredTodoList;
@@ -3140,6 +3213,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
         string sessionId,
         ICliToolAdapter adapter,
         StringBuilder assistantMessageBuilder,
+        StringBuilder turnAssistantMessageBuilder,
+        StringBuilder finalAnswerMessageBuilder,
         FeishuStreamingCardChrome? chrome)
     {
         var trimmedLine = line.Trim();
@@ -3174,6 +3249,11 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
             if (!string.IsNullOrEmpty(assistantMessage))
             {
                 assistantMessageBuilder.Append(assistantMessage);
+                turnAssistantMessageBuilder.Append(assistantMessage);
+                if (string.Equals(outputEvent.AssistantPhase, "final_answer", StringComparison.Ordinal))
+                {
+                    finalAnswerMessageBuilder.Append(assistantMessage);
+                }
             }
 
             return LowInterruptionContinueHelper.HasStructuredTodoList(outputEvent);

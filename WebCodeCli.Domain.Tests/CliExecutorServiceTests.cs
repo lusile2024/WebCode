@@ -4383,6 +4383,20 @@ args = ["mcp", "serve"]
     }
 
     [Fact]
+    public void CodexAdapter_ParseOutputLine_WhenAgentMessageHasPhase_PreservesAssistantPhase()
+    {
+        var adapter = new CodexAdapter();
+
+        var outputEvent = adapter.ParseOutputLine(
+            """{"type":"item.updated","item":{"type":"agent_message","text":"hello","phase":"final_answer"}}""");
+
+        var agentMessageEvent = Assert.IsType<CliOutputEvent>(outputEvent);
+        Assert.Equal("agent_message", agentMessageEvent.ItemType);
+        Assert.Equal("hello", adapter.ExtractAssistantMessage(agentMessageEvent));
+        Assert.Equal("final_answer", agentMessageEvent.AssistantPhase);
+    }
+
+    [Fact]
     public void RewriteCodexLaunchToNode_WhenCommandIsCmdWrapper_RewritesToNodeJsEntry()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));

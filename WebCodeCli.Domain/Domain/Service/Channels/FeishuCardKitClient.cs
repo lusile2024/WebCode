@@ -144,80 +144,6 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return ExtractMessageId(result, "send text message");
     }
 
-    public async Task<string> UploadAudioFileAsync(
-        string filePath,
-        int durationMs,
-        CancellationToken cancellationToken = default,
-        FeishuOptions? optionsOverride = null)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            throw new ArgumentException("Audio file path is required.", nameof(filePath));
-        }
-
-        var effectiveOptions = GetEffectiveOptions(optionsOverride);
-        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-
-        using var fileStream = File.OpenRead(filePath);
-        using var payload = new MultipartFormDataContent
-        {
-            { new StringContent("opus"), "file_type" },
-            { new StringContent(Path.GetFileName(filePath)), "file_name" },
-            { new StringContent(durationMs.ToString()), "duration" }
-        };
-        payload.Add(new StreamContent(fileStream), "file", Path.GetFileName(filePath));
-
-        var response = await PostMultipartAsync(
-            "/open-apis/im/v1/files",
-            token,
-            payload,
-            effectiveOptions,
-            cancellationToken);
-
-        var result = await ParseResponseAsync(response, cancellationToken);
-        EnsureBusinessSuccess(result, "Upload Feishu audio file");
-
-        if (result.TryGetProperty("data", out var data) &&
-            data.TryGetProperty("file_key", out var fileKeyProp))
-        {
-            return fileKeyProp.GetString() ?? string.Empty;
-        }
-
-        throw new InvalidOperationException("Failed to upload audio file: invalid response");
-    }
-
-    public async Task<string> SendAudioMessageAsync(
-        string chatId,
-        string fileKey,
-        int durationMs,
-        CancellationToken cancellationToken = default,
-        FeishuOptions? optionsOverride = null)
-    {
-        var effectiveOptions = GetEffectiveOptions(optionsOverride);
-        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-
-        var payload = new
-        {
-            receive_id = chatId,
-            msg_type = "audio",
-            content = JsonSerializer.Serialize(new
-            {
-                file_key = fileKey
-            })
-        };
-
-        var response = await PostAsync(
-            "/open-apis/im/v1/messages?receive_id_type=chat_id",
-            token,
-            payload,
-            effectiveOptions,
-            cancellationToken);
-
-        var result = await ParseResponseAsync(response, cancellationToken);
-        EnsureBusinessSuccess(result, "Send Feishu audio message");
-        return ExtractMessageId(result, "send audio message");
-    }
-
     public async Task<string> ReplyCardMessageAsync(
         string replyMessageId,
         string cardId,
@@ -288,6 +214,170 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         var result = await ParseResponseAsync(response, cancellationToken);
         EnsureBusinessSuccess(result, "Reply Feishu text message");
         return ExtractMessageId(result, "reply text message");
+    }
+
+    public async Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(
+        string title,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            throw new ArgumentException("Document title is required.", nameof(title));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            title
+        };
+
+        var response = await PostAsync(
+            "/open-apis/docx/v1/documents",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Create Feishu cloud document");
+
+        if (result.TryGetProperty("data", out var data)
+            && data.TryGetProperty("document", out var document)
+            && document.TryGetProperty("document_id", out var documentIdProp))
+        {
+            var documentId = documentIdProp.GetString() ?? string.Empty;
+            var rootBlockId = document.TryGetProperty("revision_id", out _)
+                && document.TryGetProperty("block_id", out var blockIdProp)
+                ? blockIdProp.GetString() ?? string.Empty
+                : string.Empty;
+
+            if (string.IsNullOrWhiteSpace(rootBlockId)
+                && data.TryGetProperty("document_id", out var dataDocumentIdProp))
+            {
+                documentId = string.IsNullOrWhiteSpace(documentId)
+                    ? dataDocumentIdProp.GetString() ?? string.Empty
+                    : documentId;
+            }
+
+            if (string.IsNullOrWhiteSpace(rootBlockId)
+                && data.TryGetProperty("document", out var documentObject)
+                && documentObject.TryGetProperty("root_block_id", out var rootBlockIdProp))
+            {
+                rootBlockId = rootBlockIdProp.GetString() ?? string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(documentId))
+            {
+                throw new InvalidOperationException("Failed to create Feishu cloud document: missing document_id.");
+            }
+
+            if (string.IsNullOrWhiteSpace(rootBlockId))
+            {
+                rootBlockId = documentId;
+            }
+
+            return new FeishuCloudDocumentInfo
+            {
+                DocumentId = documentId,
+                RootBlockId = rootBlockId,
+                Url = BuildCloudDocumentUrl(documentId)
+            };
+        }
+
+        throw new InvalidOperationException("Failed to create Feishu cloud document: invalid response.");
+    }
+
+    public async Task AppendCloudDocumentTextAsync(
+        string documentId,
+        string blockId,
+        string text,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("Document id is required.", nameof(documentId));
+        }
+
+        if (string.IsNullOrWhiteSpace(blockId))
+        {
+            throw new ArgumentException("Block id is required.", nameof(blockId));
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            children = new object[]
+            {
+                new
+                {
+                    block_type = 2,
+                    text = new
+                    {
+                        elements = new object[]
+                        {
+                            new
+                            {
+                                text_run = new
+                                {
+                                    content = text,
+                                    text_element_style = new { }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            index = 0
+        };
+
+        var response = await PostAsync(
+            $"/open-apis/docx/v1/documents/{Uri.EscapeDataString(documentId)}/blocks/{Uri.EscapeDataString(blockId)}/children",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Append Feishu cloud document text");
+    }
+
+    public async Task SetCloudDocumentTenantReadableAsync(
+        string documentId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("Document id is required.", nameof(documentId));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            external_access_entity = "open",
+            security_entity = "anyone_can_view",
+            comment_entity = "anyone_can_view"
+        };
+
+        var response = await PatchAsync(
+            $"/open-apis/drive/v2/permissions/{Uri.EscapeDataString(documentId)}/public?type=docx",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Set Feishu cloud document tenant-readable permission");
     }
 
     public async Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
@@ -1162,17 +1252,18 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return await SendAsync(request, options, cancellationToken);
     }
 
-    private async Task<HttpResponseMessage> PostMultipartAsync(
+    private async Task<HttpResponseMessage> PatchAsync(
         string path,
         string token,
-        HttpContent payload,
+        object payload,
         FeishuOptions options,
         CancellationToken cancellationToken)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{path}")
-        {
-            Content = payload
-        };
+        var request = new HttpRequestMessage(HttpMethod.Patch, $"{_baseUrl}{path}");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
 
         if (!string.IsNullOrEmpty(token))
         {
@@ -1195,6 +1286,11 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(options.HttpTimeoutSeconds));
         return await _httpClient.SendAsync(request, timeoutCts.Token);
+    }
+
+    internal static string BuildCloudDocumentUrl(string documentId)
+    {
+        return $"https://feishu.cn/docx/{documentId}";
     }
 
     private static string TryResolveDownloadFileName(
@@ -1264,7 +1360,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
                 "API request failed: Status={Status}, Content={Content}",
                 response.StatusCode,
                 content);
-            throw new HttpRequestException($"API request failed: {response.StatusCode}");
+            throw new HttpRequestException($"API request failed: {response.StatusCode}, Content={content}");
         }
 
         return JsonDocument.Parse(content).RootElement;

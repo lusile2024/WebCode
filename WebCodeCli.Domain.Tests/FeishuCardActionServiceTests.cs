@@ -39,7 +39,7 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_ToggleReplyTts_DisablesReplyTtsAndRefreshesHelpCard()
+    public async Task HandleCardActionAsync_ToggleFullReplyDoc_DisablesFullReplyDocumentAndRefreshesHelpCard()
     {
         var cliExecutor = new RecordingCliExecutorService();
         var feishuChannel = new StubFeishuChannelService(null)
@@ -51,27 +51,111 @@ public class FeishuCardActionServiceTests
         {
             Username = "luhaiyan",
             IsEnabled = true,
-            ReplyTtsEnabled = true,
-            ReplyTtsVoiceId = "voice-a"
+            FullReplyDocEnabled = true,
+            FinalReplyDocEnabled = false,
+            LegacyReplyTtsEnabled = true,
+            LegacyReplyTtsMode = ReplyTtsModes.FullReply,
+            LegacyReplyTtsVoiceId = "voice-a"
         });
 
         var serviceProvider = new TestServiceProvider(feishuBotConfigService: feishuBotConfigService);
         var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
 
         var response = await service.HandleCardActionAsync(
-            """{"action":"toggle_reply_tts"}""",
+            $$"""{"action":"{{FeishuHelpCardAction.ToggleFullReplyDocAction}}"}""",
             chatId: "oc_tts_toggle_chat");
 
         var savedConfig = await feishuBotConfigService.GetByUsernameAsync("luhaiyan");
         Assert.NotNull(savedConfig);
-        Assert.False(savedConfig!.ReplyTtsEnabled);
-        Assert.Equal("voice-a", savedConfig.ReplyTtsVoiceId);
-        Assert.Equal("✅ 已关闭飞书语音回复", ExtractToastContent(response));
-        Assert.Contains("语音回复：关", ExtractCardContentStrings(response));
+        Assert.False(savedConfig!.FullReplyDocEnabled);
+        Assert.False(savedConfig.FinalReplyDocEnabled);
+        Assert.False(savedConfig.LegacyReplyTtsEnabled);
+        Assert.Equal(ReplyTtsModes.Off, savedConfig.LegacyReplyTtsMode);
+        Assert.Null(savedConfig.LegacyReplyTtsVoiceId);
+        Assert.Equal("✅ 已关闭飞书完整回复文档", ExtractToastContent(response));
+        Assert.Contains("完整回复文档：关", ExtractCardContentStrings(response));
+        Assert.Contains("结论回复文档：关", ExtractCardContentStrings(response));
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_ToggleReplyTts_ReturnsErrorToast_WhenUserConfigMissing()
+    public async Task HandleCardActionAsync_ToggleFinalReplyDoc_EnablesFinalReplyDocumentWithoutDisablingFullReplyDocument()
+    {
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null)
+        {
+            SessionUsername = "luhaiyan"
+        };
+        var feishuBotConfigService = new StubUserFeishuBotConfigService();
+        feishuBotConfigService.Seed(new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            IsEnabled = true,
+            FullReplyDocEnabled = true,
+            FinalReplyDocEnabled = false,
+            LegacyReplyTtsEnabled = true,
+            LegacyReplyTtsMode = ReplyTtsModes.FullReply,
+            LegacyReplyTtsVoiceId = "voice-a"
+        });
+
+        var serviceProvider = new TestServiceProvider(feishuBotConfigService: feishuBotConfigService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ToggleFinalReplyDocAction}}"}""",
+            chatId: "oc_tts_toggle_chat");
+
+        var savedConfig = await feishuBotConfigService.GetByUsernameAsync("luhaiyan");
+        Assert.NotNull(savedConfig);
+        Assert.True(savedConfig!.FullReplyDocEnabled);
+        Assert.True(savedConfig.FinalReplyDocEnabled);
+        Assert.True(savedConfig.LegacyReplyTtsEnabled);
+        Assert.Equal(ReplyTtsModes.FullReply, savedConfig.LegacyReplyTtsMode);
+        Assert.Null(savedConfig.LegacyReplyTtsVoiceId);
+        Assert.Equal("✅ 已开启飞书结论回复文档", ExtractToastContent(response));
+        Assert.Contains("完整回复文档：开", ExtractCardContentStrings(response));
+        Assert.Contains("结论回复文档：开", ExtractCardContentStrings(response));
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ToggleFullReplyDoc_FromFinalReplyOnly_EnablesBothReplyDocuments()
+    {
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null)
+        {
+            SessionUsername = "luhaiyan"
+        };
+        var feishuBotConfigService = new StubUserFeishuBotConfigService();
+        feishuBotConfigService.Seed(new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            IsEnabled = true,
+            FullReplyDocEnabled = false,
+            FinalReplyDocEnabled = true,
+            LegacyReplyTtsEnabled = true,
+            LegacyReplyTtsMode = ReplyTtsModes.FinalOnly,
+            LegacyReplyTtsVoiceId = "voice-a"
+        });
+
+        var serviceProvider = new TestServiceProvider(feishuBotConfigService: feishuBotConfigService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            $$"""{"action":"{{FeishuHelpCardAction.ToggleFullReplyDocAction}}"}""",
+            chatId: "oc_tts_toggle_chat");
+
+        var savedConfig = await feishuBotConfigService.GetByUsernameAsync("luhaiyan");
+        Assert.NotNull(savedConfig);
+        Assert.True(savedConfig!.FullReplyDocEnabled);
+        Assert.True(savedConfig.FinalReplyDocEnabled);
+        Assert.True(savedConfig.LegacyReplyTtsEnabled);
+        Assert.Equal(ReplyTtsModes.FullReply, savedConfig.LegacyReplyTtsMode);
+        Assert.Equal("✅ 已开启飞书完整回复文档", ExtractToastContent(response));
+        Assert.Contains("完整回复文档：开", ExtractCardContentStrings(response));
+        Assert.Contains("结论回复文档：开", ExtractCardContentStrings(response));
+    }
+
+    [Fact]
+    public async Task HandleCardActionAsync_ToggleFullReplyDoc_ReturnsErrorToast_WhenUserConfigMissing()
     {
         var cliExecutor = new RecordingCliExecutorService();
         var feishuChannel = new StubFeishuChannelService(null)
@@ -83,11 +167,11 @@ public class FeishuCardActionServiceTests
         var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
 
         var response = await service.HandleCardActionAsync(
-            """{"action":"toggle_reply_tts"}""",
+            $$"""{"action":"{{FeishuHelpCardAction.ToggleFullReplyDocAction}}"}""",
             chatId: "oc_tts_toggle_chat");
 
         Assert.Equal("❌ 未找到当前飞书用户配置", ExtractToastContent(response));
-        Assert.DoesNotContain("语音回复：", SerializeResponse(response));
+        Assert.DoesNotContain("回复文档：", SerializeResponse(response));
     }
 
     [Fact]
@@ -1460,6 +1544,7 @@ public class FeishuCardActionServiceTests
         {
             StandardExecutionContent = "plan completed"
         };
+        cliExecutor.SetCliThreadId(activeSessionId, "goal-thread-1");
         cliExecutor.SetSessionWorkspacePath(activeSessionId, @"D:\repo\goal-runtime");
         cliExecutor.SetToolUsePersistentProcess("codex", false);
 
@@ -1552,11 +1637,17 @@ public class FeishuCardActionServiceTests
 
         var cliExecutor = new RecordingCliExecutorService
         {
+            Adapter = new CodexAdapter(),
+            SupportsStreamParsingEnabled = true,
             StandardStreamChunks =
             [
                 new StreamOutputChunk
                 {
-                    Content = "第一轮输出",
+                    Content = """
+                              {"type":"thread.started","thread_id":"thread-goal-runtime"}
+                              {"type":"item.updated","item":{"type":"agent_message","text":"第一轮过程"}}
+                              {"type":"item.completed","item":{"type":"agent_message","text":"第一轮结论","phase":"final_answer"}}
+                              """ + "\n",
                     IsCompleted = false
                 },
                 new StreamOutputChunk
@@ -1567,7 +1658,10 @@ public class FeishuCardActionServiceTests
                 },
                 new StreamOutputChunk
                 {
-                    Content = "第二轮输出",
+                    Content = """
+                              {"type":"item.updated","item":{"type":"agent_message","text":"第二轮过程"}}
+                              {"type":"item.completed","item":{"type":"agent_message","text":"第二轮结论","phase":"final_answer"}}
+                              """ + "\n",
                     IsCompleted = false
                 },
                 new StreamOutputChunk
@@ -1595,6 +1689,7 @@ public class FeishuCardActionServiceTests
 
         var cardKit = new StubFeishuCardKitClient();
         var feishuChannel = new StubFeishuChannelService(activeSessionId);
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var sessionRepository = new StubChatSessionRepository(
         [
             new ChatSessionEntity
@@ -1621,7 +1716,9 @@ public class FeishuCardActionServiceTests
         var service = CreateService(
             cliExecutor,
             feishuChannel,
-            new TestServiceProvider(chatSessionRepository: sessionRepository),
+            new TestServiceProvider(
+                chatSessionRepository: sessionRepository,
+                replyTtsOrchestrator: replyTtsOrchestrator),
             cardKit,
             chatSessionService);
 
@@ -1633,8 +1730,17 @@ public class FeishuCardActionServiceTests
         await cliExecutor.WaitForExecutionCompletionAsync(TimeSpan.FromSeconds(3));
         await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
 
+        Assert.Equal(2, replyTtsOrchestrator.Requests.Count);
+        Assert.Equal("thread-goal-runtime", replyTtsOrchestrator.Requests[0].CliThreadId);
+        Assert.Equal("继续", replyTtsOrchestrator.Requests[0].OriginalUserQuestion);
+        Assert.Equal("第一轮过程第一轮结论", replyTtsOrchestrator.Requests[0].Output);
+        Assert.Equal("第一轮结论", replyTtsOrchestrator.Requests[0].FinalAnswerOutput);
+        Assert.Equal("thread-goal-runtime", replyTtsOrchestrator.Requests[1].CliThreadId);
+        Assert.Equal("继续", replyTtsOrchestrator.Requests[1].OriginalUserQuestion);
+        Assert.Equal("第二轮过程第二轮结论", replyTtsOrchestrator.Requests[1].Output);
+        Assert.Equal("第二轮结论", replyTtsOrchestrator.Requests[1].FinalAnswerOutput);
         Assert.Equal(2, cardKit.Handles.Count);
-        Assert.Equal("第一轮输出", cardKit.Handles[0].FinalContent);
+        Assert.Equal("第一轮过程第一轮结论", cardKit.Handles[0].FinalContent);
         Assert.Contains("Goal继续中", cardKit.Handles[0].FinalStatusMarkdown, StringComparison.Ordinal);
         Assert.NotNull(cardKit.Handles[0].FinalChromeSnapshot);
         Assert.Null(cardKit.Handles[0].FinalChromeSnapshot!.BottomPrompt);
@@ -1654,8 +1760,8 @@ public class FeishuCardActionServiceTests
         Assert.Contains(cardKit.Handles[1].InitialChromeSnapshot.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
         Assert.Contains(cardKit.Handles[1].InitialChromeSnapshot.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
         Assert.False(string.IsNullOrWhiteSpace(cardKit.Handles[1].InitialContent));
-        Assert.DoesNotContain("第一轮输出", cardKit.Handles[1].InitialContent, StringComparison.Ordinal);
-        Assert.Equal("第二轮输出", cardKit.Handles[1].FinalContent);
+        Assert.DoesNotContain("第一轮过程第一轮结论", cardKit.Handles[1].InitialContent, StringComparison.Ordinal);
+        Assert.Equal("第二轮过程第二轮结论", cardKit.Handles[1].FinalContent);
     }
 
     [Fact]
@@ -1994,15 +2100,15 @@ public class FeishuCardActionServiceTests
                 new TestServiceProvider(chatSessionRepository: sessionRepository),
                 cardKit);
 
-            await service.HandleCardActionAsync(
-                """{"action":"execute_command"}""",
-                chatId: chatId,
-                inputValues: "继续");
+        await service.HandleCardActionAsync(
+            """{"action":"execute_command"}""",
+            chatId: chatId,
+            inputValues: "继续");
 
-            await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
-            await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
+        await cliExecutor.WaitForExecutionAsync(TimeSpan.FromSeconds(3));
+        await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
 
-            Assert.NotNull(cardKit.LastStreamingChrome);
+        Assert.NotNull(cardKit.LastStreamingChrome);
             var chrome = cardKit.LastStreamingChrome!;
             Assert.NotNull(chrome.BottomPrompt);
             Assert.Equal(SuperpowersQuickActionDefaults.QuickInputFieldName, chrome.BottomPrompt!.InputName);
@@ -3203,7 +3309,7 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_ExecuteCommand_QueuesReplyTtsAfterSuccessfulCompletion()
+    public async Task HandleCardActionAsync_ExecuteCommand_QueuesReplyDocumentAfterSuccessfulCompletion()
     {
         const string chatId = "oc_reply_tts_card_chat";
         const string sessionId = "session-reply-tts-card";
@@ -3211,18 +3317,30 @@ public class FeishuCardActionServiceTests
 
         var cliExecutor = new RecordingCliExecutorService
         {
-            StandardExecutionContent = "card action completed"
+            Adapter = new CodexAdapter(),
+            SupportsStreamParsingEnabled = true,
+            StandardExecutionContent =
+                """
+                {"type":"thread.started","thread_id":"thread-1"}
+                {"type":"item.updated","item":{"type":"agent_message","text":"process details"}}
+                """ + "\n",
+            StandardExecutionCompletionContent =
+                """
+                {"type":"item.updated","item":{"type":"agent_message","text":"final conclusion","phase":"final_answer"}}
+                """ + "\n"
         };
+        cliExecutor.SetCliThreadId(sessionId, "thread-1");
         cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
 
         var chatSessionService = new StubChatSessionService();
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         replyTtsOrchestrator.OnQueued = request =>
         {
             Assert.Contains(
                 chatSessionService.Messages[sessionId],
-                message => message.Role == "assistant" && message.Content == "card action completed" && message.IsCompleted);
-            Assert.Equal("card action completed", request.Output);
+                message => message.Role == "assistant" && message.Content == "process detailsfinal conclusion" && message.IsCompleted);
+            Assert.Equal("process detailsfinal conclusion", request.Output);
+            Assert.Equal("final conclusion", request.FinalAnswerOutput);
             return Task.CompletedTask;
         };
 
@@ -3245,11 +3363,14 @@ public class FeishuCardActionServiceTests
         Assert.Equal("luhaiyan", queued.Username);
         Assert.Equal(appId, queued.AppId);
         Assert.Equal(sessionId, queued.SessionId);
-        Assert.Equal("card action completed", queued.Output);
+        Assert.Equal("thread-1", queued.CliThreadId);
+        Assert.Equal("continue", queued.OriginalUserQuestion);
+        Assert.Equal("process detailsfinal conclusion", queued.Output);
+        Assert.Equal("final conclusion", queued.FinalAnswerOutput);
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_LowInterruptionContinue_QueuesReplyTtsAfterSuccessfulCompletion()
+    public async Task HandleCardActionAsync_LowInterruptionContinue_QueuesReplyDocumentAfterSuccessfulCompletion()
     {
         const string chatId = "oc_reply_tts_low_interruption_chat";
         const string sessionId = "session-reply-tts-low-interruption";
@@ -3258,19 +3379,30 @@ public class FeishuCardActionServiceTests
         var cliExecutor = new RecordingCliExecutorService
         {
             SupportsLowInterruption = true,
-            LowInterruptionExecutionContent = "low interruption completed"
+            Adapter = new CodexAdapter(),
+            SupportsStreamParsingEnabled = true,
+            LowInterruptionExecutionContent =
+                """
+                {"type":"thread.started","thread_id":"thread-reply-tts-low-interruption"}
+                {"type":"item.updated","item":{"type":"agent_message","text":"continue context"}}
+                """ + "\n",
+            LowInterruptionExecutionCompletionContent =
+                """
+                {"type":"item.updated","item":{"type":"agent_message","text":"continue final","phase":"final_answer"}}
+                """ + "\n"
         };
         cliExecutor.SetCliThreadId(sessionId, "thread-reply-tts-low-interruption");
         cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
 
         var chatSessionService = new StubChatSessionService();
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         replyTtsOrchestrator.OnQueued = request =>
         {
             Assert.Contains(
                 chatSessionService.Messages[sessionId],
-                message => message.Role == "assistant" && message.Content == "low interruption completed" && message.IsCompleted);
-            Assert.Equal("low interruption completed", request.Output);
+                message => message.Role == "assistant" && message.Content == "continue contextcontinue final" && message.IsCompleted);
+            Assert.Equal("continue contextcontinue final", request.Output);
+            Assert.Equal("continue final", request.FinalAnswerOutput);
             return Task.CompletedTask;
         };
 
@@ -3292,11 +3424,12 @@ public class FeishuCardActionServiceTests
         Assert.Equal("luhaiyan", queued.Username);
         Assert.Equal(appId, queued.AppId);
         Assert.Equal(sessionId, queued.SessionId);
-        Assert.Equal("low interruption completed", queued.Output);
+        Assert.Equal("continue contextcontinue final", queued.Output);
+        Assert.Equal("continue final", queued.FinalAnswerOutput);
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_ExecuteCommand_DoesNotQueueReplyTtsWhenExecutionErrors()
+    public async Task HandleCardActionAsync_ExecuteCommand_DoesNotQueueReplyDocumentWhenExecutionErrors()
     {
         const string sessionId = "session-reply-tts-error";
 
@@ -3307,7 +3440,7 @@ public class FeishuCardActionServiceTests
         };
         cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
 
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var service = CreateService(
             cliExecutor,
             new StubFeishuChannelService(sessionId),
@@ -3324,7 +3457,7 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
-    public async Task HandleCardActionAsync_LowInterruptionContinue_DoesNotQueueReplyTtsWhenExecutionErrors()
+    public async Task HandleCardActionAsync_LowInterruptionContinue_DoesNotQueueReplyDocumentWhenExecutionErrors()
     {
         const string sessionId = "session-reply-tts-low-interruption-error";
 
@@ -3337,7 +3470,7 @@ public class FeishuCardActionServiceTests
         cliExecutor.SetCliThreadId(sessionId, "thread-reply-tts-low-interruption-error");
         cliExecutor.SetSessionWorkspacePath(sessionId, @"D:\repo\superpowers");
 
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var service = CreateService(
             cliExecutor,
             new StubFeishuChannelService(sessionId),
@@ -6156,17 +6289,17 @@ public class FeishuCardActionServiceTests
         public void UpdateMessage(string sessionId, string messageId, Action<ChatMessage> updateAction) { }
     }
 
-    private sealed class RecordingReplyTtsOrchestrator : IReplyTtsOrchestrator
+    private sealed class RecordingReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     {
-        public List<FeishuCompletedReplyTtsRequest> Requests { get; } = new();
+        public List<FeishuCompletedReplyDocumentRequest> Requests { get; } = new();
 
-        public TaskCompletionSource<FeishuCompletedReplyTtsRequest> WhenQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<FeishuCompletedReplyDocumentRequest> WhenQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public TaskCompletionSource<FeishuCompletedReplyTtsRequest> WhenCallbackCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<FeishuCompletedReplyDocumentRequest> WhenCallbackCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Func<FeishuCompletedReplyTtsRequest, Task>? OnQueued { get; set; }
+        public Func<FeishuCompletedReplyDocumentRequest, Task>? OnQueued { get; set; }
 
-        public async Task QueueCompletedReplyAsync(FeishuCompletedReplyTtsRequest request)
+        public async Task QueueCompletedReplyAsync(FeishuCompletedReplyDocumentRequest request)
         {
             Requests.Add(request);
             WhenQueued.TrySetResult(request);
@@ -6667,6 +6800,12 @@ public class FeishuCardActionServiceTests
             LastMaxCount = maxCount;
             return Task.FromResult(_messages.TakeLast(maxCount).ToList());
         }
+
+        public Task<string?> GetCodexFinalAnswerTextAsync(
+            string cliThreadId,
+            string? workspacePath = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<string?>(null);
     }
 
     [Fact]
@@ -6985,7 +7124,7 @@ public class FeishuCardActionServiceTests
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService;
         private readonly IGoalCapabilityService _goalCapabilityService;
         private readonly ICodexAppServerSessionManager? _codexAppServerSessionManager;
-        private readonly IReplyTtsOrchestrator? _replyTtsOrchestrator;
+        private readonly IReplyDocumentOrchestrator? _replyTtsOrchestrator;
         private readonly IMessageSubmissionService _messageSubmissionService;
         private readonly IFeishuAttachmentDraftService _attachmentDraftService;
 
@@ -6999,7 +7138,7 @@ public class FeishuCardActionServiceTests
             ISuperpowersCapabilityService? superpowersCapabilityService = null,
             IGoalCapabilityService? goalCapabilityService = null,
             ICodexAppServerSessionManager? codexAppServerSessionManager = null,
-            IReplyTtsOrchestrator? replyTtsOrchestrator = null,
+            IReplyDocumentOrchestrator? replyTtsOrchestrator = null,
             StubUserFeishuBotConfigService? feishuBotConfigService = null,
             IMessageSubmissionService? messageSubmissionService = null,
             IFeishuAttachmentDraftService? attachmentDraftService = null)
@@ -7086,7 +7225,7 @@ public class FeishuCardActionServiceTests
                 return _codexAppServerSessionManager;
             }
 
-            if (serviceType == typeof(IReplyTtsOrchestrator))
+            if (serviceType == typeof(IReplyDocumentOrchestrator))
             {
                 return _replyTtsOrchestrator;
             }
@@ -7765,8 +7904,11 @@ public class FeishuCardActionServiceTests
                 ThinkingMessage = config.ThinkingMessage,
                 HttpTimeoutSeconds = config.HttpTimeoutSeconds,
                 StreamingThrottleMs = config.StreamingThrottleMs,
-                ReplyTtsEnabled = config.ReplyTtsEnabled,
-                ReplyTtsVoiceId = config.ReplyTtsVoiceId,
+                FullReplyDocEnabled = config.FullReplyDocEnabled,
+                FinalReplyDocEnabled = config.FinalReplyDocEnabled,
+                LegacyReplyTtsEnabled = config.LegacyReplyTtsEnabled,
+                LegacyReplyTtsMode = config.LegacyReplyTtsMode,
+                LegacyReplyTtsVoiceId = config.LegacyReplyTtsVoiceId,
                 LastStartedAt = config.LastStartedAt,
                 CreatedAt = config.CreatedAt,
                 UpdatedAt = config.UpdatedAt

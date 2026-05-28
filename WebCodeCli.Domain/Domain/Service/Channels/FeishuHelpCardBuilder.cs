@@ -21,15 +21,28 @@ public class FeishuHelpCardBuilder
     public ElementsCardV2Dto BuildCommandListCardV2(
         List<FeishuCommandCategory> categories,
         bool showRefreshButton = true,
-        bool replyTtsEnabled = false,
+        bool fullReplyDocEnabled = false,
+        bool finalReplyDocEnabled = false,
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true)
     {
         var elements = new List<object>();
+        var fullReplyDocumentEnabled = fullReplyDocEnabled;
+        var finalReplyDocumentEnabled = finalReplyDocEnabled;
 
         // 顶部操作按钮组
         if (showRefreshButton)
         {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "\u624b\u673a\u4f7f\u7528\u98de\u4e66\u6587\u6863\u53ef\u542c\u8bed\u97f3\uff0c\u70b9 `...` \u542c\u6587\u6863"
+                }
+            });
+
             elements.Add(new
             {
                 tag = "column_set",
@@ -96,9 +109,13 @@ public class FeishuHelpCardBuilder
                 columns = new[]
                 {
                     BuildTopActionColumn(
-                        $"语音回复：{(replyTtsEnabled ? "开" : "关")}",
-                        replyTtsEnabled ? "primary" : "default",
-                        new { action = FeishuHelpCardAction.ToggleReplyTtsAction })
+                        $"完整回复文档：{(fullReplyDocumentEnabled ? "开" : "关")}",
+                        fullReplyDocumentEnabled ? "primary" : "default",
+                        new { action = FeishuHelpCardAction.ToggleFullReplyDocAction }),
+                    BuildTopActionColumn(
+                        $"结论回复文档：{(finalReplyDocumentEnabled ? "开" : "关")}",
+                        finalReplyDocumentEnabled ? "primary" : "default",
+                        new { action = FeishuHelpCardAction.ToggleFinalReplyDocAction })
                 }
             });
         }
@@ -139,9 +156,13 @@ public class FeishuHelpCardBuilder
     public ElementsCardV2Dto BuildFilteredCardV2(
         List<FeishuCommandCategory> categories,
         string keyword,
+        bool fullReplyDocEnabled = false,
+        bool finalReplyDocEnabled = false,
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true)
     {
+        var fullReplyDocumentEnabled = fullReplyDocEnabled;
+        var finalReplyDocumentEnabled = finalReplyDocEnabled;
         var elements = new List<object>
         {
             new
@@ -184,6 +205,32 @@ public class FeishuHelpCardBuilder
                             }
                         }
                     }
+                }
+            },
+            new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "\u624b\u673a\u4f7f\u7528\u98de\u4e66\u6587\u6863\u53ef\u542c\u8bed\u97f3\uff0c\u70b9 `...` \u542c\u6587\u6863"
+                }
+            },
+            new
+            {
+                tag = "column_set",
+                flex_mode = "none",
+                background_style = "default",
+                columns = new[]
+                {
+                    BuildTopActionColumn(
+                        $"完整回复文档：{(fullReplyDocumentEnabled ? "开" : "关")}",
+                        fullReplyDocumentEnabled ? "primary" : "default",
+                        new { action = FeishuHelpCardAction.ToggleFullReplyDocAction }),
+                    BuildTopActionColumn(
+                        $"结论回复文档：{(finalReplyDocumentEnabled ? "开" : "关")}",
+                        finalReplyDocumentEnabled ? "primary" : "default",
+                        new { action = FeishuHelpCardAction.ToggleFinalReplyDocAction })
                 }
             },
             new { tag = "hr" }
@@ -898,15 +945,28 @@ public class FeishuHelpCardBuilder
     public string BuildCommandListCard(
         List<FeishuCommandCategory> categories,
         bool showRefreshButton = true,
-        bool replyTtsEnabled = false,
+        bool fullReplyDocEnabled = false,
+        bool finalReplyDocEnabled = false,
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true)
     {
         var elements = new List<object>();
+        var fullReplyDocumentEnabled = fullReplyDocEnabled;
+        var finalReplyDocumentEnabled = finalReplyDocEnabled;
 
         // 顶部操作按钮组
         if (showRefreshButton)
         {
+            elements.Add(new
+            {
+                tag = "div",
+                text = new
+                {
+                    tag = "lark_md",
+                    content = "\u624b\u673a\u4f7f\u7528\u98de\u4e66\u6587\u6863\u53ef\u542c\u8bed\u97f3\uff0c\u70b9 `...` \u542c\u6587\u6863"
+                }
+            });
+
             elements.Add(new
             {
                 tag = "column_set",
@@ -973,9 +1033,13 @@ public class FeishuHelpCardBuilder
                 columns = new[]
                 {
                     BuildTopActionColumn(
-                        $"语音回复：{(replyTtsEnabled ? "开" : "关")}",
-                        replyTtsEnabled ? "primary" : "default",
-                        new { action = FeishuHelpCardAction.ToggleReplyTtsAction })
+                        $"完整回复文档：{(fullReplyDocumentEnabled ? "开" : "关")}",
+                        fullReplyDocumentEnabled ? "primary" : "default",
+                        new { action = FeishuHelpCardAction.ToggleFullReplyDocAction }),
+                    BuildTopActionColumn(
+                        $"结论回复文档：{(finalReplyDocumentEnabled ? "开" : "关")}",
+                        finalReplyDocumentEnabled ? "primary" : "default",
+                        new { action = FeishuHelpCardAction.ToggleFinalReplyDocAction })
                 }
             });
         }
@@ -1440,6 +1504,8 @@ public class FeishuHelpCardBuilder
 
     private static object BuildTopActionColumn(string text, string type, object value)
     {
+        text = NormalizeTopActionText(text, value);
+
         return new
         {
             tag = "column",
@@ -1464,6 +1530,35 @@ public class FeishuHelpCardBuilder
                 }
             }
         };
+    }
+
+    private static string NormalizeTopActionText(string text, object value)
+    {
+        if (value is null)
+        {
+            return text;
+        }
+
+        var action = value
+            .GetType()
+            .GetProperty("action")
+            ?.GetValue(value) as string;
+
+        if (string.Equals(action, FeishuHelpCardAction.ToggleFullReplyDocAction, StringComparison.Ordinal))
+        {
+            return text.Contains("开", StringComparison.Ordinal)
+                ? "完整回复文档：开"
+                : "完整回复文档：关";
+        }
+
+        if (string.Equals(action, FeishuHelpCardAction.ToggleFinalReplyDocAction, StringComparison.Ordinal))
+        {
+            return text.Contains("开", StringComparison.Ordinal)
+                ? "结论回复文档：开"
+                : "结论回复文档：关";
+        }
+
+        return text;
     }
 
     private static object BuildCommandActionRow(FeishuCommand command)

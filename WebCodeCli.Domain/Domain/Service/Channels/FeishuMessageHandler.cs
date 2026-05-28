@@ -487,9 +487,11 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 _logger.LogInformation("🔥 [FeishuHelp] 获取到 {Count} 个分组", categories.Count);
                 var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(chatId, webUsername, toolId);
                 var showSuperpowersQuickActions = ResolveShowSuperpowersQuickActions(chatId, webUsername, toolId);
+                var replyDocumentSettings = await GetReplyDocumentSettingsAsync(chatId, webUsername);
                 card = _cardBuilder.BuildCommandListCardV2(
                     categories,
-                    replyTtsEnabled: await GetReplyTtsEnabledAsync(chatId, webUsername),
+                    fullReplyDocEnabled: replyDocumentSettings.FullReplyDocEnabled,
+                    finalReplyDocEnabled: replyDocumentSettings.FinalReplyDocEnabled,
                     showGoalQuickActionButtons: showGoalQuickActionButtons,
                     showSuperpowersQuickActions: showSuperpowersQuickActions);
             }
@@ -499,11 +501,14 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                 _logger.LogInformation("🔥 [FeishuHelp] 过滤后获取到 {Count} 个分组", categories.Count);
                 var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(chatId, webUsername, toolId);
                 var showSuperpowersQuickActions = ResolveShowSuperpowersQuickActions(chatId, webUsername, toolId);
+                var replyDocumentSettings = await GetReplyDocumentSettingsAsync(chatId, webUsername);
                 card = _cardBuilder.BuildFilteredCardV2(
                     categories,
                     keyword,
-                    showGoalQuickActionButtons,
-                    showSuperpowersQuickActions);
+                    fullReplyDocEnabled: replyDocumentSettings.FullReplyDocEnabled,
+                    finalReplyDocEnabled: replyDocumentSettings.FinalReplyDocEnabled,
+                    showGoalQuickActionButtons: showGoalQuickActionButtons,
+                    showSuperpowersQuickActions: showSuperpowersQuickActions);
             }
 
             _logger.LogDebug("🔥 [FeishuHelp] 帮助卡片DTO内容: {Card}", JsonSerializer.Serialize(card));
@@ -583,20 +588,20 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         return await userFeishuBotConfigService.GetEffectiveOptionsAsync(username);
     }
 
-    private async Task<bool> GetReplyTtsEnabledAsync(string chatId, string? username)
+    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string chatId, string? username)
     {
         var resolvedUsername = string.IsNullOrWhiteSpace(username)
             ? _feishuChannel.GetSessionUsername(chatId)
             : username;
         if (string.IsNullOrWhiteSpace(resolvedUsername))
         {
-            return false;
+            return (false, false);
         }
 
         using var scope = _serviceProvider.CreateScope();
         var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
         var config = await userFeishuBotConfigService.GetByUsernameAsync(resolvedUsername);
-        return config?.ReplyTtsEnabled == true;
+        return (config?.FullReplyDocEnabled == true, config?.FinalReplyDocEnabled == true);
     }
 
     private bool ResolveShowGoalQuickActionButtons(string chatId, string? username, string? toolId)

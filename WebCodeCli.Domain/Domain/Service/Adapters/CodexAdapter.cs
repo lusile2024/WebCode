@@ -443,6 +443,13 @@ public class CodexAdapter : ICliToolAdapter
             outputEvent.ItemType = itemTypeElement.GetString();
         }
 
+        if (string.Equals(outputEvent.ItemType, "agent_message", StringComparison.Ordinal)
+            && itemElement.TryGetProperty("phase", out var phaseElement)
+            && phaseElement.ValueKind == JsonValueKind.String)
+        {
+            outputEvent.AssistantPhase = phaseElement.GetString();
+        }
+
         if (itemElement.TryGetProperty("thread_id", out var itemThread) && itemThread.ValueKind == JsonValueKind.String)
         {
             var threadId = itemThread.GetString();
@@ -503,6 +510,13 @@ public class CodexAdapter : ICliToolAdapter
             outputEvent.ItemType = itemTypeElement.GetString();
         }
 
+        if (string.Equals(outputEvent.ItemType, "agent_message", StringComparison.Ordinal)
+            && itemElement.TryGetProperty("phase", out var phaseElement)
+            && phaseElement.ValueKind == JsonValueKind.String)
+        {
+            outputEvent.AssistantPhase = phaseElement.GetString();
+        }
+
         if (itemElement.TryGetProperty("thread_id", out var itemThread) && itemThread.ValueKind == JsonValueKind.String)
         {
             var threadId = itemThread.GetString();
@@ -537,6 +551,13 @@ public class CodexAdapter : ICliToolAdapter
         if (itemElement.TryGetProperty("type", out var itemTypeElement) && itemTypeElement.ValueKind == JsonValueKind.String)
         {
             outputEvent.ItemType = itemTypeElement.GetString();
+        }
+
+        if (string.Equals(outputEvent.ItemType, "agent_message", StringComparison.Ordinal)
+            && itemElement.TryGetProperty("phase", out var phaseElement)
+            && phaseElement.ValueKind == JsonValueKind.String)
+        {
+            outputEvent.AssistantPhase = phaseElement.GetString();
         }
 
         if (itemElement.TryGetProperty("thread_id", out var itemThread) && itemThread.ValueKind == JsonValueKind.String)

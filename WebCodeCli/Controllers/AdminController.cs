@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
-using WebCodeCli.Domain.Domain.Service.Channels;
 using WebCodeCli.Domain.Repositories.Base.UserAccount;
 using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 
@@ -20,7 +19,6 @@ public class AdminController : ControllerBase
     private readonly IUserFeishuBotConfigService _userFeishuBotConfigService;
     private readonly IUserFeishuBotRuntimeService _userFeishuBotRuntimeService;
     private readonly ICliExecutorService _cliExecutorService;
-    private readonly IFeishuReplyTtsPlatformService _feishuReplyTtsPlatformService;
 
     public AdminController(
         IUserAccountService userAccountService,
@@ -28,8 +26,7 @@ public class AdminController : ControllerBase
         IUserWorkspacePolicyService userWorkspacePolicyService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
         IUserFeishuBotRuntimeService userFeishuBotRuntimeService,
-        ICliExecutorService cliExecutorService,
-        IFeishuReplyTtsPlatformService feishuReplyTtsPlatformService)
+        ICliExecutorService cliExecutorService)
     {
         _userAccountService = userAccountService;
         _userToolPolicyService = userToolPolicyService;
@@ -37,7 +34,6 @@ public class AdminController : ControllerBase
         _userFeishuBotConfigService = userFeishuBotConfigService;
         _userFeishuBotRuntimeService = userFeishuBotRuntimeService;
         _cliExecutorService = cliExecutorService;
-        _feishuReplyTtsPlatformService = feishuReplyTtsPlatformService;
     }
 
     [HttpGet("users")]
@@ -142,7 +138,13 @@ public class AdminController : ControllerBase
         var config = await _userFeishuBotConfigService.GetByUsernameAsync(username);
         if (config == null)
         {
-            return Ok(new UserFeishuBotConfigDto { Username = username, IsEnabled = false });
+            return Ok(new UserFeishuBotConfigDto
+            {
+                Username = username,
+                IsEnabled = false,
+                FullReplyDocEnabled = false,
+                FinalReplyDocEnabled = false
+            });
         }
 
         return Ok(MapFeishuConfig(config));
@@ -151,6 +153,12 @@ public class AdminController : ControllerBase
     [HttpPut("users/{username}/feishu-bot")]
     public async Task<ActionResult> SaveFeishuBotConfig(string username, [FromBody] UserFeishuBotConfigDto request)
     {
+        var legacyReplyTtsMode = ReplyTtsModes.Resolve(request.ReplyTtsMode, request.ReplyTtsEnabled);
+        var fullReplyDocEnabled = request.FullReplyDocEnabled
+            || string.Equals(legacyReplyTtsMode, ReplyTtsModes.FullReply, StringComparison.Ordinal);
+        var finalReplyDocEnabled = request.FinalReplyDocEnabled
+            || string.Equals(legacyReplyTtsMode, ReplyTtsModes.FinalOnly, StringComparison.Ordinal);
+
         var result = await _userFeishuBotConfigService.SaveAsync(new UserFeishuBotConfigEntity
         {
             Username = username.Trim(),
@@ -163,8 +171,8 @@ public class AdminController : ControllerBase
             ThinkingMessage = request.ThinkingMessage,
             HttpTimeoutSeconds = request.HttpTimeoutSeconds,
             StreamingThrottleMs = request.StreamingThrottleMs,
-            ReplyTtsEnabled = request.ReplyTtsEnabled,
-            ReplyTtsVoiceId = request.ReplyTtsVoiceId
+            FullReplyDocEnabled = fullReplyDocEnabled,
+            FinalReplyDocEnabled = finalReplyDocEnabled
         });
 
         if (!result.Success)
@@ -177,15 +185,8 @@ public class AdminController : ControllerBase
             return StatusCode(500, new { error = result.ErrorMessage ?? "保存飞书机器人配置失败。" });
         }
 
-        FeishuReplyTtsHealthStatus? ttsHealth = null;
-        if (request.ReplyTtsEnabled)
-        {
-            ttsHealth = await _feishuReplyTtsPlatformService.EnsureServiceStartedAsync(
-                HttpContext?.RequestAborted ?? CancellationToken.None);
-        }
-
         var status = await _userFeishuBotRuntimeService.StopAsync(username);
-        return Ok(new { success = true, status = MapFeishuRuntimeStatus(status), ttsHealth });
+        return Ok(new { success = true, status = MapFeishuRuntimeStatus(status) });
     }
 
     [HttpDelete("users/{username}/feishu-bot")]
@@ -233,21 +234,6 @@ public class AdminController : ControllerBase
         var status = await _userFeishuBotRuntimeService.StopAsync(username);
         return Ok(MapFeishuRuntimeStatus(status));
     }
-
-    [HttpGet("feishu-tts/health")]
-    public async Task<ActionResult<FeishuReplyTtsHealthStatus>> GetFeishuTtsHealth()
-    {
-        var health = await _feishuReplyTtsPlatformService.GetHealthAsync(HttpContext?.RequestAborted ?? CancellationToken.None);
-        return Ok(health);
-    }
-
-    [HttpGet("feishu-tts/voices")]
-    public async Task<ActionResult<List<FeishuReplyTtsVoiceOption>>> GetFeishuTtsVoices()
-    {
-        var voices = await _feishuReplyTtsPlatformService.GetVoicesAsync(HttpContext?.RequestAborted ?? CancellationToken.None);
-        return Ok(voices.ToList());
-    }
-
     private static UserAccountResponseDto MapUser(UserAccountEntity account)
     {
         return new UserAccountResponseDto
@@ -276,8 +262,8 @@ public class AdminController : ControllerBase
             ThinkingMessage = config.ThinkingMessage,
             HttpTimeoutSeconds = config.HttpTimeoutSeconds,
             StreamingThrottleMs = config.StreamingThrottleMs,
-            ReplyTtsEnabled = config.ReplyTtsEnabled,
-            ReplyTtsVoiceId = config.ReplyTtsVoiceId
+            FullReplyDocEnabled = config.FullReplyDocEnabled,
+            FinalReplyDocEnabled = config.FinalReplyDocEnabled
         };
     }
 
@@ -346,8 +332,10 @@ public sealed class UserFeishuBotConfigDto
     public string? ThinkingMessage { get; set; }
     public int? HttpTimeoutSeconds { get; set; }
     public int? StreamingThrottleMs { get; set; }
+    public string? ReplyTtsMode { get; set; }
     public bool ReplyTtsEnabled { get; set; }
-    public string? ReplyTtsVoiceId { get; set; }
+    public bool FullReplyDocEnabled { get; set; }
+    public bool FinalReplyDocEnabled { get; set; }
 }
 
 public sealed class UserFeishuBotRuntimeStatusDto

@@ -46,24 +46,34 @@ public class FeishuHelpCardBuilderTests
     }
 
     [Fact]
-    public void BuildCommandListCard_IncludesReplyTtsToggle_WhenEnabled()
+    public void BuildCommandListCard_IncludesReplyDocumentButtons_WhenBothReplyDocumentsEnabled()
     {
-        var cardJson = _builder.BuildCommandListCard(CreateCategories(), replyTtsEnabled: true);
+        var cardJson = _builder.BuildCommandListCard(
+            CreateCategories(),
+            fullReplyDocEnabled: true,
+            finalReplyDocEnabled: true);
         using var document = JsonDocument.Parse(cardJson);
         var elements = document.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.True(ContainsStringValue(elements, "语音回复：开"));
-        Assert.True(ContainsAction(elements, "toggle_reply_tts"));
+        Assert.True(ContainsStringValue(elements, "完整回复文档：开"));
+        Assert.True(ContainsStringValue(elements, "结论回复文档：开"));
+        Assert.True(ContainsAction(elements, FeishuHelpCardAction.ToggleFullReplyDocAction));
+        Assert.True(ContainsAction(elements, FeishuHelpCardAction.ToggleFinalReplyDocAction));
     }
 
     [Fact]
-    public void BuildCommandListCardV2_IncludesReplyTtsToggle_WhenDisabled()
+    public void BuildCommandListCardV2_IncludesReplyDocumentButtons_WhenOnlyFinalReplyDocumentEnabled()
     {
-        var card = _builder.BuildCommandListCardV2(CreateCategories(), replyTtsEnabled: false);
+        var card = _builder.BuildCommandListCardV2(
+            CreateCategories(),
+            fullReplyDocEnabled: false,
+            finalReplyDocEnabled: true);
         using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
 
-        Assert.True(ContainsStringValue(bodyDoc.RootElement, "语音回复：关"));
-        Assert.True(ContainsAction(bodyDoc.RootElement, "toggle_reply_tts"));
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "完整回复文档：关"));
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "结论回复文档：开"));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFullReplyDocAction));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFinalReplyDocAction));
     }
 
     [Fact]
@@ -91,6 +101,22 @@ public class FeishuHelpCardBuilderTests
         Assert.Equal("feishuhelp", actionValue.GetProperty("command_id").GetString());
         Assert.False(ContainsProperty(bodyDoc.RootElement, "overflow"));
         Assert.False(ContainsProperty(bodyDoc.RootElement, "extra"));
+    }
+
+    [Fact]
+    public void BuildFilteredCardV2_IncludesReplyDocumentButtons_WhenOnlyFinalReplyDocumentEnabled()
+    {
+        var card = _builder.BuildFilteredCardV2(
+            CreateCategories(),
+            "help",
+            fullReplyDocEnabled: false,
+            finalReplyDocEnabled: true);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "完整回复文档：关"));
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "结论回复文档：开"));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFullReplyDocAction));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFinalReplyDocAction));
     }
 
     [Fact]
@@ -175,7 +201,6 @@ public class FeishuHelpCardBuilderTests
         Assert.True(ContainsStringValue(elements, "/goal pause"));
         Assert.True(ContainsStringValue(elements, "/goal clear"));
         Assert.True(ContainsStringValue(elements, "/goal resume"));
-        Assert.True(ContainsAction(elements, "status_goal"));
         Assert.True(ContainsAction(elements, "pause_goal"));
         Assert.True(ContainsAction(elements, "clear_goal"));
         Assert.True(ContainsAction(elements, "resume_goal"));
@@ -224,7 +249,7 @@ public class FeishuHelpCardBuilderTests
         Assert.Equal(0, CountInputsByName(elements, SuperpowersQuickActionDefaults.QuickInputFieldName));
         Assert.False(ContainsStringValue(elements, SuperpowersQuickActionDefaults.InstructionText));
         Assert.Equal(1, CountInputsByName(elements, GoalQuickActionDefaults.QuickInputFieldName));
-        Assert.True(ContainsStringValue(elements, "使用 /goal 不间断执行，会自动补前缀：\"/goal \"。用于在当前 app-server 持续会话中设置或更新工作目标，让 Codex 围绕目标持续推进；可配合 /goal pause、/goal clear、/goal resume 管理执行状态。"));
+        Assert.True(ContainsStringValue(elements, GoalQuickActionDefaults.InstructionText));
     }
 
     private static JsonElement GetActionValue(JsonElement elements, string action)

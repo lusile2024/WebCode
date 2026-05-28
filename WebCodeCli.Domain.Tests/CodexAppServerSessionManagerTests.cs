@@ -81,6 +81,68 @@ public class CodexAppServerSessionManagerTests
     }
 
     [Fact]
+    public void TryBuildCliOutputJsonl_PreservesAgentMessagePhaseForCodexAdapter()
+    {
+        var method = GetPrivateStaticMethod("TryBuildCliOutputJsonl");
+        Assert.NotNull(method);
+
+        using var document = JsonDocument.Parse("""
+            {
+              "threadId": "thread-123",
+              "turnId": "turn-456",
+              "itemId": "msg-789",
+              "delta": "done",
+              "phase": "final_answer"
+            }
+            """);
+
+        var jsonl = method!.Invoke(null, new object[] { "item/agentMessage/delta", document.RootElement }) as string;
+
+        Assert.False(string.IsNullOrWhiteSpace(jsonl));
+        Assert.Contains(@"""phase"":""final_answer""", jsonl, StringComparison.Ordinal);
+
+        var adapter = new CodexAdapter();
+        var outputEvent = adapter.ParseOutputLine(jsonl!);
+
+        Assert.NotNull(outputEvent);
+        Assert.Equal("final_answer", outputEvent!.AssistantPhase);
+    }
+
+    [Fact]
+    public void TryBuildCliOutputJsonl_PreservesCompletedAgentMessagePhaseForCodexAdapter()
+    {
+        var method = GetPrivateStaticMethod("TryBuildCliOutputJsonl");
+        Assert.NotNull(method);
+
+        using var document = JsonDocument.Parse("""
+            {
+              "threadId": "thread-123",
+              "turnId": "turn-456",
+              "item": {
+                "type": "agentMessage",
+                "id": "msg-789",
+                "text": "done",
+                "phase": "final_answer"
+              }
+            }
+            """);
+
+        var jsonl = method!.Invoke(null, new object[] { "item/completed", document.RootElement }) as string;
+
+        Assert.False(string.IsNullOrWhiteSpace(jsonl));
+        Assert.Contains(@"""phase"":""final_answer""", jsonl, StringComparison.Ordinal);
+
+        var adapter = new CodexAdapter();
+        var outputEvent = adapter.ParseOutputLine(jsonl!);
+
+        Assert.NotNull(outputEvent);
+        Assert.Equal("item.completed", outputEvent!.EventType);
+        Assert.Equal("agent_message", outputEvent.ItemType);
+        Assert.Equal("done", adapter.ExtractAssistantMessage(outputEvent));
+        Assert.Equal("final_answer", outputEvent.AssistantPhase);
+    }
+
+    [Fact]
     public void TryBuildCliOutputJsonl_IgnoresVerboseCommandOutputDeltas()
     {
         var method = GetPrivateStaticMethod("TryBuildCliOutputJsonl");
@@ -387,7 +449,9 @@ public class CodexAppServerSessionManagerTests
         }
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(tempRoot, "workspace");
         Directory.CreateDirectory(tempRoot);
+        Directory.CreateDirectory(workspacePath);
 
         try
         {
@@ -417,7 +481,7 @@ public class CodexAppServerSessionManagerTests
             var sessionContext = new CliSessionContext
             {
                 SessionId = "session-goal-token-reuse",
-                WorkingDirectory = tempRoot
+                WorkingDirectory = workspacePath
             };
 
             using var startupCts = new CancellationTokenSource();
@@ -425,7 +489,7 @@ public class CodexAppServerSessionManagerTests
                 sessionContext.SessionId,
                 commandPath,
                 tool,
-                tempRoot,
+                workspacePath,
                 environmentVariables: null,
                 sessionContext,
                 existingThreadId: null,
@@ -441,7 +505,7 @@ public class CodexAppServerSessionManagerTests
                 sessionContext.SessionId,
                 commandPath,
                 tool,
-                tempRoot,
+                workspacePath,
                 environmentVariables: null,
                 sessionContext,
                 threadId,
@@ -458,7 +522,7 @@ public class CodexAppServerSessionManagerTests
         {
             if (Directory.Exists(tempRoot))
             {
-                Directory.Delete(tempRoot, recursive: true);
+                DeleteDirectoryWithRetry(tempRoot);
             }
         }
     }
@@ -472,7 +536,9 @@ public class CodexAppServerSessionManagerTests
         }
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N"));
+        var workspacePath = Path.Combine(tempRoot, "workspace");
         Directory.CreateDirectory(tempRoot);
+        Directory.CreateDirectory(workspacePath);
 
         try
         {
@@ -504,7 +570,7 @@ public class CodexAppServerSessionManagerTests
             var sessionContext = new CliSessionContext
             {
                 SessionId = "session-goal-immediate-restart",
-                WorkingDirectory = tempRoot
+                WorkingDirectory = workspacePath
             };
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -512,7 +578,7 @@ public class CodexAppServerSessionManagerTests
                 sessionContext.SessionId,
                 commandPath,
                 tool,
-                tempRoot,
+                workspacePath,
                 environmentVariables: null,
                 sessionContext,
                 "ship it",
@@ -526,7 +592,7 @@ public class CodexAppServerSessionManagerTests
                 sessionContext.SessionId,
                 commandPath,
                 tool,
-                tempRoot,
+                workspacePath,
                 environmentVariables: null,
                 sessionContext,
                 firstTurn.ThreadId,
@@ -538,7 +604,7 @@ public class CodexAppServerSessionManagerTests
                 sessionContext.SessionId,
                 commandPath,
                 tool,
-                tempRoot,
+                workspacePath,
                 environmentVariables: null,
                 sessionContext,
                 "keep working",
@@ -552,7 +618,7 @@ public class CodexAppServerSessionManagerTests
         {
             if (Directory.Exists(tempRoot))
             {
-                Directory.Delete(tempRoot, recursive: true);
+                DeleteDirectoryWithRetry(tempRoot);
             }
         }
     }
@@ -694,5 +760,27 @@ public class CodexAppServerSessionManagerTests
             $"@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0fake-codex-app-server.ps1\" \"{scriptMode}\" %*\r\n");
 
         return shimPath;
+    }
+
+    private static void DeleteDirectoryWithRetry(string path)
+    {
+        const int maxAttempts = 5;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(100 * attempt);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(100 * attempt);
+            }
+        }
     }
 }

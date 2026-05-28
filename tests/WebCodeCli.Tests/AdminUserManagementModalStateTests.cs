@@ -1,7 +1,6 @@
 using System.Reflection;
 using WebCodeCli.Components;
 using WebCodeCli.Domain.Domain.Model;
-using WebCodeCli.Domain.Domain.Model.Channels;
 using Xunit;
 
 namespace WebCodeCli.Tests;
@@ -29,8 +28,8 @@ public sealed class AdminUserManagementModalStateTests
 
         var currentFeishu = Activator.CreateInstance(feishuType, nonPublic: true)!;
         SetProperty(currentFeishu, "AppId", "app-123");
-        SetProperty(currentFeishu, "ReplyTtsEnabled", true);
-        SetProperty(currentFeishu, "ReplyTtsVoiceId", "voice-a");
+        SetProperty(currentFeishu, "FullReplyDocEnabled", true);
+        SetProperty(currentFeishu, "FinalReplyDocEnabled", false);
         SetProperty(currentEditor, "FeishuBot", currentFeishu);
 
         var selectedUser = Activator.CreateInstance(summaryType, nonPublic: true)!;
@@ -55,45 +54,8 @@ public sealed class AdminUserManagementModalStateTests
         Assert.NotSame(GetProperty<HashSet<string>>(currentEditor, "AllowedToolIds"), seededTools);
         Assert.Equal(["git", "shell"], seededTools.OrderBy(static value => value, StringComparer.OrdinalIgnoreCase).ToArray());
         Assert.Equal("app-123", GetProperty<string>(seededFeishu, "AppId"));
-        Assert.Equal("voice-a", GetProperty<string>(seededFeishu, "ReplyTtsVoiceId"));
-        Assert.True(GetProperty<bool>(seededFeishu, "ReplyTtsEnabled"));
-    }
-
-    [Fact]
-    public void MergeReplyTtsPlatformState_PreservesVoiceCatalog_WhenVoiceRefreshFails()
-    {
-        var method = GetStaticMethod("MergeReplyTtsPlatformState");
-        var currentHealth = new FeishuReplyTtsHealthStatus
-        {
-            IsAvailable = true,
-            Message = "Healthy",
-            DefaultVoiceId = "voice-a"
-        };
-        IReadOnlyList<FeishuReplyTtsVoiceOption> currentVoices =
-        [
-            new FeishuReplyTtsVoiceOption
-            {
-                VoiceId = "voice-a",
-                DisplayName = "Voice A"
-            }
-        ];
-        var refreshedHealth = new FeishuReplyTtsHealthStatus
-        {
-            IsAvailable = true,
-            Message = "Healthy",
-            DefaultVoiceId = "voice-a"
-        };
-
-        var merged = method.Invoke(null, [currentHealth, currentVoices, refreshedHealth, null, null, "voice endpoint timed out"])!;
-        var mergedType = merged.GetType();
-        var mergedHealth = (FeishuReplyTtsHealthStatus)mergedType.GetField("Item1")!.GetValue(merged)!;
-        var mergedVoices = (IReadOnlyList<FeishuReplyTtsVoiceOption>)mergedType.GetField("Item2")!.GetValue(merged)!;
-
-        Assert.True(mergedHealth.IsAvailable);
-        Assert.Contains("voice endpoint timed out", mergedHealth.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Same(currentVoices, mergedVoices);
-        Assert.Single(mergedVoices);
-        Assert.Equal("voice-a", mergedVoices[0].VoiceId);
+        Assert.True(GetProperty<bool>(seededFeishu, "FullReplyDocEnabled"));
+        Assert.False(GetProperty<bool>(seededFeishu, "FinalReplyDocEnabled"));
     }
 
     private static Type GetNestedType(string name)

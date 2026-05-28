@@ -52,8 +52,7 @@ public sealed class PublishOutputConfigurationTests : IDisposable
         Assert.Equal("Sqlite", dbConnection.GetProperty("DbType").GetString());
         Assert.Equal("Data Source=WebCodeCli.db", dbConnection.GetProperty("ConnectionStrings").GetString());
 
-        Assert.True(document.RootElement.TryGetProperty("FeishuReplyTts", out var feishuReplyTts));
-        Assert.Equal(60, feishuReplyTts.GetProperty("TtsServiceStartupTimeoutSeconds").GetInt32());
+        Assert.False(document.RootElement.TryGetProperty("FeishuReplyTts", out _));
     }
 
     public void Dispose()

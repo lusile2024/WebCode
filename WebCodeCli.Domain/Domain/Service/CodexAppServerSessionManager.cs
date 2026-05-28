@@ -998,7 +998,7 @@ internal sealed class CodexAppServerSessionManager : ICodexAppServerSessionManag
             "turn/completed" => BuildTurnCompletedPayload(parameters),
             "turn/failed" => BuildTurnFailedPayload(parameters),
             "item/started" => BuildItemPayload("item.started", parameters, includeAgentMessageText: false),
-            "item/completed" => BuildItemPayload("item.completed", parameters, includeAgentMessageText: false),
+            "item/completed" => BuildItemPayload("item.completed", parameters, includeAgentMessageText: true),
             "item/agentMessage/delta" => BuildAgentMessageDeltaPayload(parameters),
             "error" => BuildErrorPayload(parameters),
             _ => null
@@ -1093,6 +1093,11 @@ internal sealed class CodexAppServerSessionManager : ICodexAppServerSessionManag
         if (TryGetString(parameters, "itemId", out var itemId))
         {
             item["id"] = itemId;
+        }
+
+        if (TryGetString(parameters, "phase", out var phase))
+        {
+            item["phase"] = phase;
         }
 
         return new Dictionary<string, object?>
@@ -1280,6 +1285,11 @@ internal sealed class CodexAppServerSessionManager : ICodexAppServerSessionManag
         if (TryGetString(itemElement, "text", out var text))
         {
             item["text"] = text;
+        }
+
+        if (TryGetString(itemElement, "phase", out var phase))
+        {
+            item["phase"] = phase;
         }
 
         return item;

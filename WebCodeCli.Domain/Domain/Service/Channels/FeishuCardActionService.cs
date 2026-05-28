@@ -244,8 +244,10 @@ public class FeishuCardActionService
                     return await HandleSelectCommandAsync(action.CommandId, chatId);
                 case "back_to_list":
                     return await HandleBackToListAsync(chatId);
-                case FeishuHelpCardAction.ToggleReplyTtsAction:
-                    return await HandleToggleReplyTtsAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.ToggleFullReplyDocAction:
+                    return await HandleToggleFullReplyDocAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.ToggleFinalReplyDocAction:
+                    return await HandleToggleFinalReplyDocAsync(chatId, operatorUserId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case FeishuHelpCardAction.SubmitAttachmentPromptAction:
@@ -436,7 +438,32 @@ public class FeishuCardActionService
         return _cardBuilder.BuildCardActionResponseV2(card, "", "info");
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleToggleReplyTtsAsync(string? chatId, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleToggleFullReplyDocAsync(string? chatId, string? operatorUserId)
+    {
+        return await HandleToggleReplyDocumentAsync(
+            chatId,
+            operatorUserId,
+            toggleFullReplyDoc: true,
+            "飞书完整回复文档",
+            "飞书完整回复文档更新失败");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleToggleFinalReplyDocAsync(string? chatId, string? operatorUserId)
+    {
+        return await HandleToggleReplyDocumentAsync(
+            chatId,
+            operatorUserId,
+            toggleFullReplyDoc: false,
+            "飞书结论回复文档",
+            "飞书结论回复文档更新失败");
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleToggleReplyDocumentAsync(
+        string? chatId,
+        string? operatorUserId,
+        bool toggleFullReplyDoc,
+        string modeDisplayName,
+        string defaultFailureMessage)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -458,17 +485,34 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未找到当前飞书用户配置", "error");
         }
 
-        config.ReplyTtsEnabled = !config.ReplyTtsEnabled;
+        if (toggleFullReplyDoc)
+        {
+            config.FullReplyDocEnabled = !config.FullReplyDocEnabled;
+        }
+        else
+        {
+            config.FinalReplyDocEnabled = !config.FinalReplyDocEnabled;
+        }
+
+        config.LegacyReplyTtsEnabled = config.FullReplyDocEnabled || config.FinalReplyDocEnabled;
+        config.LegacyReplyTtsMode = config.FullReplyDocEnabled
+            ? ReplyTtsModes.FullReply
+            : config.FinalReplyDocEnabled
+                ? ReplyTtsModes.FinalOnly
+                : ReplyTtsModes.Off;
+        config.LegacyReplyTtsVoiceId = null;
+
         var saveResult = await userFeishuBotConfigService.SaveAsync(config);
         if (!saveResult.Success)
         {
             return _cardBuilder.BuildCardActionToastOnlyResponse(
-                $"❌ {(string.IsNullOrWhiteSpace(saveResult.ErrorMessage) ? "飞书语音回复更新失败" : saveResult.ErrorMessage)}",
+                $"❌ {(string.IsNullOrWhiteSpace(saveResult.ErrorMessage) ? defaultFailureMessage : saveResult.ErrorMessage)}",
                 "error");
         }
 
         var card = await BuildHelpCommandListCardAsync(chatId);
-        var toastMessage = config.ReplyTtsEnabled ? "✅ 已开启飞书语音回复" : "✅ 已关闭飞书语音回复";
+        var isEnabled = toggleFullReplyDoc ? config.FullReplyDocEnabled : config.FinalReplyDocEnabled;
+        var toastMessage = isEnabled ? $"✅ 已开启{modeDisplayName}" : $"✅ 已关闭{modeDisplayName}";
         return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, "success");
     }
 
@@ -1305,6 +1349,8 @@ public class FeishuCardActionService
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
+        var turnAssistantMessageBuilder = new System.Text.StringBuilder();
+        var finalAnswerMessageBuilder = new System.Text.StringBuilder();
         var jsonlBuffer = new System.Text.StringBuilder();
         var hasStructuredTodoList = false;
         var latestRenderedContent = thinkingMessage;
@@ -1398,6 +1444,19 @@ public class FeishuCardActionService
                         continue;
                     }
 
+                    if (turnAssistantMessageBuilder.Length > 0)
+                    {
+                        await TryQueueCompletedReplyDocumentAsync(
+                            chatId,
+                            username,
+                            appId,
+                            sessionId,
+                            _cliExecutor.GetCliThreadId(sessionId),
+                            userPrompt,
+                            turnAssistantMessageBuilder.ToString().Trim(),
+                            finalAnswerMessageBuilder.ToString().Trim());
+                    }
+
                     var handoffSucceeded = await TryRotateGoalRuntimeTurnCardAsync(
                         sessionId,
                         chatId,
@@ -1431,6 +1490,8 @@ public class FeishuCardActionService
 
                     outputBuilder.Clear();
                     assistantMessageBuilder.Clear();
+                    turnAssistantMessageBuilder.Clear();
+                    finalAnswerMessageBuilder.Clear();
                     jsonlBuffer.Clear();
                     hasStructuredTodoList = false;
                     latestRenderedContent = thinkingMessage;
@@ -1444,7 +1505,15 @@ public class FeishuCardActionService
                 string displayContent;
                 if (useAdapter)
                 {
-                    hasStructuredTodoList |= ProcessJsonlChunk(sessionId, chunk.Content, adapter!, assistantMessageBuilder, jsonlBuffer, streamingChrome);
+                    hasStructuredTodoList |= ProcessJsonlChunk(
+                        sessionId,
+                        chunk.Content,
+                        adapter!,
+                        assistantMessageBuilder,
+                        turnAssistantMessageBuilder,
+                        finalAnswerMessageBuilder,
+                        jsonlBuffer,
+                        streamingChrome);
                     displayContent = assistantMessageBuilder.ToString();
 
                     if (string.IsNullOrWhiteSpace(displayContent))
@@ -1493,7 +1562,14 @@ public class FeishuCardActionService
             {
                 if (jsonlBuffer.Length > 0)
                 {
-                    hasStructuredTodoList |= ProcessJsonlLine(sessionId, jsonlBuffer.ToString(), adapter!, assistantMessageBuilder, streamingChrome);
+                    hasStructuredTodoList |= ProcessJsonlLine(
+                        sessionId,
+                        jsonlBuffer.ToString(),
+                        adapter!,
+                        assistantMessageBuilder,
+                        turnAssistantMessageBuilder,
+                        finalAnswerMessageBuilder,
+                        streamingChrome);
                     jsonlBuffer.Clear();
                 }
 
@@ -1515,6 +1591,8 @@ public class FeishuCardActionService
             {
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
+
+            var finalAnswerOutput = finalAnswerMessageBuilder.ToString().Trim();
 
             if (!cardDisconnected)
             {
@@ -1601,7 +1679,15 @@ public class FeishuCardActionService
 
                 if (!cardDisconnected)
                 {
-                    await TryQueueCompletedReplyTtsAsync(chatId, username, appId, sessionId, finalOutput);
+                    await TryQueueCompletedReplyDocumentAsync(
+                        chatId,
+                        username,
+                        appId,
+                        sessionId,
+                        _cliExecutor.GetCliThreadId(sessionId),
+                        userPrompt,
+                        turnAssistantMessageBuilder.ToString().Trim(),
+                        finalAnswerOutput);
                 }
             }
 
@@ -1659,6 +1745,8 @@ public class FeishuCardActionService
     {
         var outputBuilder = new System.Text.StringBuilder();
         var assistantMessageBuilder = new System.Text.StringBuilder();
+        var turnAssistantMessageBuilder = new System.Text.StringBuilder();
+        var finalAnswerMessageBuilder = new System.Text.StringBuilder();
         var jsonlBuffer = new System.Text.StringBuilder();
         var hasStructuredTodoList = false;
         var latestRenderedContent = thinkingMessage;
@@ -1745,6 +1833,19 @@ public class FeishuCardActionService
                         continue;
                     }
 
+                    if (turnAssistantMessageBuilder.Length > 0)
+                    {
+                        await TryQueueCompletedReplyDocumentAsync(
+                            chatId,
+                            username,
+                            appId,
+                            sessionId,
+                            _cliExecutor.GetCliThreadId(sessionId),
+                            prompt,
+                            turnAssistantMessageBuilder.ToString().Trim(),
+                            finalAnswerMessageBuilder.ToString().Trim());
+                    }
+
                     var handoffSucceeded = await TryRotateGoalRuntimeTurnCardAsync(
                         sessionId,
                         chatId,
@@ -1778,6 +1879,8 @@ public class FeishuCardActionService
 
                     outputBuilder.Clear();
                     assistantMessageBuilder.Clear();
+                    turnAssistantMessageBuilder.Clear();
+                    finalAnswerMessageBuilder.Clear();
                     jsonlBuffer.Clear();
                     hasStructuredTodoList = false;
                     latestRenderedContent = thinkingMessage;
@@ -1791,7 +1894,15 @@ public class FeishuCardActionService
                 string displayContent;
                 if (useAdapter)
                 {
-                    hasStructuredTodoList |= ProcessJsonlChunk(sessionId, chunk.Content, adapter!, assistantMessageBuilder, jsonlBuffer, streamingChrome);
+                    hasStructuredTodoList |= ProcessJsonlChunk(
+                        sessionId,
+                        chunk.Content,
+                        adapter!,
+                        assistantMessageBuilder,
+                        turnAssistantMessageBuilder,
+                        finalAnswerMessageBuilder,
+                        jsonlBuffer,
+                        streamingChrome);
                     displayContent = assistantMessageBuilder.ToString();
 
                     if (string.IsNullOrWhiteSpace(displayContent))
@@ -1840,7 +1951,14 @@ public class FeishuCardActionService
             {
                 if (jsonlBuffer.Length > 0)
                 {
-                    hasStructuredTodoList |= ProcessJsonlLine(sessionId, jsonlBuffer.ToString(), adapter!, assistantMessageBuilder, streamingChrome);
+                    hasStructuredTodoList |= ProcessJsonlLine(
+                        sessionId,
+                        jsonlBuffer.ToString(),
+                        adapter!,
+                        assistantMessageBuilder,
+                        turnAssistantMessageBuilder,
+                        finalAnswerMessageBuilder,
+                        streamingChrome);
                     jsonlBuffer.Clear();
                 }
 
@@ -1862,6 +1980,8 @@ public class FeishuCardActionService
             {
                 finalOutput = FormatMarkdownOutput(outputBuilder.ToString());
             }
+
+            var finalAnswerOutput = finalAnswerMessageBuilder.ToString().Trim();
 
             if (!cardDisconnected)
             {
@@ -1945,7 +2065,15 @@ public class FeishuCardActionService
 
                 if (!cardDisconnected)
                 {
-                    await TryQueueCompletedReplyTtsAsync(chatId, username, appId, sessionId, finalOutput);
+                    await TryQueueCompletedReplyDocumentAsync(
+                        chatId,
+                        username,
+                        appId,
+                        sessionId,
+                        _cliExecutor.GetCliThreadId(sessionId),
+                        prompt,
+                        turnAssistantMessageBuilder.ToString().Trim(),
+                        finalAnswerOutput);
                 }
             }
 
@@ -2077,36 +2205,42 @@ public class FeishuCardActionService
         }
     }
 
-    private async Task TryQueueCompletedReplyTtsAsync(
+    private async Task TryQueueCompletedReplyDocumentAsync(
         string chatId,
         string? username,
         string? appId,
         string sessionId,
-        string finalOutput)
+        string? cliThreadId,
+        string? originalUserQuestion,
+        string finalOutput,
+        string? finalAnswerOutput)
     {
         try
         {
             using var scope = _serviceProvider.CreateScope();
-            var replyTtsOrchestrator = scope.ServiceProvider.GetService<IReplyTtsOrchestrator>();
-            if (replyTtsOrchestrator == null)
+            var replyDocumentOrchestrator = scope.ServiceProvider.GetService<IReplyDocumentOrchestrator>();
+            if (replyDocumentOrchestrator == null)
             {
                 return;
             }
 
-            await replyTtsOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyTtsRequest
+            await replyDocumentOrchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
             {
                 ChatId = chatId,
                 SessionId = sessionId,
+                CliThreadId = cliThreadId,
+                OriginalUserQuestion = originalUserQuestion,
                 Username = username,
                 AppId = appId,
-                Output = finalOutput
+                Output = finalOutput,
+                FinalAnswerOutput = finalAnswerOutput
             });
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
-                "Failed to queue reply TTS after Feishu card action completion: SessionId={SessionId}, ChatId={ChatId}",
+                "Failed to queue reply document after Feishu card action completion: SessionId={SessionId}, ChatId={ChatId}",
                 sessionId,
                 chatId);
         }
@@ -2530,6 +2664,8 @@ public class FeishuCardActionService
         string content,
         ICliToolAdapter adapter,
         System.Text.StringBuilder assistantMessageBuilder,
+        System.Text.StringBuilder turnAssistantMessageBuilder,
+        System.Text.StringBuilder finalAnswerMessageBuilder,
         System.Text.StringBuilder jsonlBuffer,
         FeishuStreamingCardChrome? chrome)
     {
@@ -2554,7 +2690,14 @@ public class FeishuCardActionService
             var line = bufferContent.Substring(0, newlineIndex).TrimEnd('\r');
             jsonlBuffer.Remove(0, newlineIndex + 1);
 
-            hasStructuredTodoList |= ProcessJsonlLine(sessionId, line, adapter, assistantMessageBuilder, chrome);
+            hasStructuredTodoList |= ProcessJsonlLine(
+                sessionId,
+                line,
+                adapter,
+                assistantMessageBuilder,
+                turnAssistantMessageBuilder,
+                finalAnswerMessageBuilder,
+                chrome);
         }
 
         return hasStructuredTodoList;
@@ -2568,6 +2711,8 @@ public class FeishuCardActionService
         string line,
         ICliToolAdapter adapter,
         System.Text.StringBuilder assistantMessageBuilder,
+        System.Text.StringBuilder turnAssistantMessageBuilder,
+        System.Text.StringBuilder finalAnswerMessageBuilder,
         FeishuStreamingCardChrome? chrome)
     {
         var trimmedLine = line.Trim();
@@ -2605,6 +2750,11 @@ public class FeishuCardActionService
             if (!string.IsNullOrEmpty(assistantMessage))
             {
                 assistantMessageBuilder.Append(assistantMessage);
+                turnAssistantMessageBuilder.Append(assistantMessage);
+                if (string.Equals(outputEvent.AssistantPhase, "final_answer", StringComparison.Ordinal))
+                {
+                    finalAnswerMessageBuilder.Append(assistantMessage);
+                }
             }
 
             return LowInterruptionContinueHelper.HasStructuredTodoList(outputEvent);
@@ -3696,13 +3846,14 @@ public class FeishuCardActionService
         var username = string.IsNullOrWhiteSpace(actualChatKey) ? null : _feishuChannel.GetSessionUsername(actualChatKey);
         var toolId = ResolveToolIdForChat(actualChatKey, username);
         var categories = await _commandService.GetCategorizedCommandsAsync(toolId);
-        var replyTtsEnabled = await GetReplyTtsEnabledAsync(username);
+        var replyDocumentSettings = await GetReplyDocumentSettingsAsync(username);
         var showGoalQuickActionButtons = ResolveShowGoalQuickActionButtons(actualChatKey, username, toolId);
         var showSuperpowersQuickActions = ResolveShowSuperpowersQuickActions(actualChatKey, username, toolId);
         return _cardBuilder.BuildCommandListCardV2(
             categories,
             showRefreshButton,
-            replyTtsEnabled,
+            replyDocumentSettings.FullReplyDocEnabled,
+            replyDocumentSettings.FinalReplyDocEnabled,
             showGoalQuickActionButtons,
             showSuperpowersQuickActions);
     }
@@ -3792,17 +3943,17 @@ public class FeishuCardActionService
                && !HasGoalExecutionConflict(session.SessionId);
     }
 
-    private async Task<bool> GetReplyTtsEnabledAsync(string? username)
+    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string? username)
     {
         if (string.IsNullOrWhiteSpace(username))
         {
-            return false;
+            return (false, false);
         }
 
         using var scope = _serviceProvider.CreateScope();
         var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
         var config = await userFeishuBotConfigService.GetByUsernameAsync(username);
-        return config?.ReplyTtsEnabled == true;
+        return (config?.FullReplyDocEnabled == true, config?.FinalReplyDocEnabled == true);
     }
 
     private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username, string? appId = null)

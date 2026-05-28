@@ -27,7 +27,10 @@ public class FeishuHelpCardAction
     public const string ConfirmBoundSuperpowersAction = "confirm_bound_superpowers_action";
     public const string ConfirmCurrentSuperpowersAction = "confirm_current_superpowers_action";
     public const string RetrySuperpowersCapabilityDetectionAction = "retry_superpowers_capability_detection";
-    public const string ToggleReplyTtsAction = "toggle_reply_tts";
+    public const string ToggleFullReplyDocAction = "toggle_full_reply_doc";
+    public const string ToggleFinalReplyDocAction = "toggle_final_reply_doc";
+    public const string ToggleReplyTtsAction = ToggleFullReplyDocAction;
+    public const string ToggleFinalOnlyReplyTtsAction = ToggleFinalReplyDocAction;
 
     /// <summary>
     /// 动作类型

@@ -2187,17 +2187,38 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
-    public async Task HandleIncomingMessageAsync_QueuesReplyTtsAfterSuccessfulCompletionAndAssistantPersistence()
+    public async Task HandleIncomingMessageAsync_QueuesReplyDocumentAfterSuccessfulCompletionAndAssistantPersistence()
     {
         var repository = CreateRepository(out var repositoryProxy);
         var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
         var cardKit = new StreamingRecordingFeishuCardKitClient();
         var chatSessionService = new RecordingChatSessionService();
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-reply-tts-success-{Guid.NewGuid():N}");
         var workspacePath = Path.Combine(workspaceRoot, "superpowers");
         Directory.CreateDirectory(workspacePath);
-        var cliExecutor = new PromptCapturingCliExecutor(workspacePath);
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath)
+        {
+            Adapter = new CodexAdapter(),
+            EnableStreamParsing = true,
+            StreamChunks =
+            [
+                new StreamOutputChunk
+                {
+                    Content = """
+                              {"type":"thread.started","thread_id":"thread-1"}
+                              {"type":"item.updated","item":{"type":"agent_message","text":"过程说明"}}
+                              {"type":"item.updated","item":{"type":"agent_message","text":"结论内容","phase":"final_answer"}}
+                              """ + "\n",
+                    IsCompleted = false
+                },
+                new StreamOutputChunk
+                {
+                    Content = string.Empty,
+                    IsCompleted = true
+                }
+            ]
+        };
         var serviceProvider = new TestServiceProvider(
             repository,
             sessionDirectoryService,
@@ -2232,11 +2253,12 @@ public class FeishuChannelServiceTests
 
             replyTtsOrchestrator.OnQueued = request =>
             {
-                Assert.Equal("补充完成", request.Output);
+                Assert.Equal("过程说明结论内容", request.Output);
+                Assert.Equal("结论内容", request.FinalAnswerOutput);
                 Assert.Contains(
                     chatSessionService.Messages[sessionId],
-                    message => message.Role == "assistant" && message.Content == "补充完成" && message.IsCompleted);
-                Assert.Equal("补充完成", Assert.Single(cardKit.Handles).FinalContent);
+                    message => message.Role == "assistant" && message.Content == "过程说明结论内容" && message.IsCompleted);
+                Assert.Equal("过程说明结论内容", Assert.Single(cardKit.Handles).FinalContent);
                 return Task.CompletedTask;
             };
 
@@ -2251,9 +2273,13 @@ public class FeishuChannelServiceTests
 
             var queued = await replyTtsOrchestrator.WhenQueued.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal("oc_reply_tts_chat", queued.ChatId);
+            Assert.Equal(sessionId, queued.SessionId);
+            Assert.Equal("thread-1", queued.CliThreadId);
+            Assert.Equal("继续", queued.OriginalUserQuestion);
             Assert.Equal("luhaiyan", queued.Username);
             Assert.Equal("cli_test", queued.AppId);
-            Assert.Equal("补充完成", queued.Output);
+            Assert.Equal("过程说明结论内容", queued.Output);
+            Assert.Equal("结论内容", queued.FinalAnswerOutput);
         }
         finally
         {
@@ -2262,13 +2288,13 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
-    public async Task HandleIncomingMessageAsync_DoesNotQueueReplyTtsWhenExecutionErrors()
+    public async Task HandleIncomingMessageAsync_DoesNotQueueReplyDocumentWhenExecutionErrors()
     {
         var repository = CreateRepository(out var repositoryProxy);
         var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
         var cardKit = new StreamingRecordingFeishuCardKitClient();
         var chatSessionService = new RecordingChatSessionService();
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-reply-tts-error-{Guid.NewGuid():N}");
         var workspacePath = Path.Combine(workspaceRoot, "superpowers");
         Directory.CreateDirectory(workspacePath);
@@ -2322,13 +2348,13 @@ public class FeishuChannelServiceTests
     }
 
     [Fact]
-    public async Task HandleIncomingMessageAsync_DoesNotQueueReplyTtsForSupersededExecution()
+    public async Task HandleIncomingMessageAsync_DoesNotQueueReplyDocumentForSupersededExecution()
     {
         var repository = CreateRepository(out var repositoryProxy);
         var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
         var cardKit = new StreamingRecordingFeishuCardKitClient();
         var chatSessionService = new RecordingChatSessionService();
-        var replyTtsOrchestrator = new RecordingReplyTtsOrchestrator();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-reply-tts-superseded-{Guid.NewGuid():N}");
         var workspacePath = Path.Combine(workspaceRoot, "superpowers");
         Directory.CreateDirectory(workspacePath);
@@ -2818,11 +2844,13 @@ public class FeishuChannelServiceTests
         IExternalCliSessionHistoryService? externalCliSessionHistoryService = null,
         ISuperpowersCapabilityService? superpowersCapabilityService = null,
         IGoalCapabilityService? goalCapabilityService = null,
+        IReplyDocumentOrchestrator? replyTtsOrchestrator = null,
         IFeishuAttachmentDraftService? attachmentDraftService = null) : IServiceProvider, IServiceScopeFactory, IServiceScope
     {
         private readonly IExternalCliSessionHistoryService _externalCliSessionHistoryService = externalCliSessionHistoryService ?? new StubExternalCliSessionHistoryService([]);
         private readonly ISuperpowersCapabilityService _superpowersCapabilityService = superpowersCapabilityService ?? new StubSuperpowersCapabilityService();
         private readonly IGoalCapabilityService _goalCapabilityService = goalCapabilityService ?? new StubGoalCapabilityService();
+        private readonly IReplyDocumentOrchestrator? _replyTtsOrchestrator = replyTtsOrchestrator;
         private readonly IFeishuAttachmentDraftService _attachmentDraftService = attachmentDraftService ?? new FeishuAttachmentDraftService();
 
         public object? GetService(Type serviceType)
@@ -2870,6 +2898,11 @@ public class FeishuChannelServiceTests
             if (serviceType == typeof(IGoalCapabilityService))
             {
                 return _goalCapabilityService;
+            }
+
+            if (serviceType == typeof(IReplyDocumentOrchestrator))
+            {
+                return _replyTtsOrchestrator;
             }
 
             if (serviceType == typeof(IFeishuAttachmentDraftService))
@@ -3043,15 +3076,15 @@ public class FeishuChannelServiceTests
                 });
     }
 
-    private sealed class RecordingReplyTtsOrchestrator : IReplyTtsOrchestrator
+    private sealed class RecordingReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     {
-        public List<FeishuCompletedReplyTtsRequest> Requests { get; } = new();
+        public List<FeishuCompletedReplyDocumentRequest> Requests { get; } = new();
 
-        public TaskCompletionSource<FeishuCompletedReplyTtsRequest> WhenQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<FeishuCompletedReplyDocumentRequest> WhenQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Func<FeishuCompletedReplyTtsRequest, Task>? OnQueued { get; set; }
+        public Func<FeishuCompletedReplyDocumentRequest, Task>? OnQueued { get; set; }
 
-        public async Task QueueCompletedReplyAsync(FeishuCompletedReplyTtsRequest request)
+        public async Task QueueCompletedReplyAsync(FeishuCompletedReplyDocumentRequest request)
         {
             Requests.Add(request);
             WhenQueued.TrySetResult(request);
@@ -4231,6 +4264,7 @@ public class FeishuChannelServiceTests
         var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
         var cardKit = new StreamingRecordingFeishuCardKitClient();
         var chatSessionService = new RecordingChatSessionService();
+        var replyTtsOrchestrator = new RecordingReplyDocumentOrchestrator();
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-goal-runtime-turn-boundary-{Guid.NewGuid():N}");
         var workspacePath = Path.Combine(workspaceRoot, "superpowers");
         Directory.CreateDirectory(workspacePath);
@@ -4259,11 +4293,17 @@ public class FeishuChannelServiceTests
 
         var cliExecutor = new PromptCapturingCliExecutor(workspacePath)
         {
+            Adapter = new CodexAdapter(),
+            EnableStreamParsing = true,
             StreamChunks =
             [
                 new StreamOutputChunk
                 {
-                    Content = "第一轮输出",
+                    Content = """
+                              {"type":"thread.started","thread_id":"thread-1"}
+                              {"type":"item.updated","item":{"type":"agent_message","text":"第一轮过程"}}
+                              {"type":"item.completed","item":{"type":"agent_message","text":"第一轮结论","phase":"final_answer"}}
+                              """ + "\n",
                     IsCompleted = false
                 },
                 new StreamOutputChunk
@@ -4274,7 +4314,10 @@ public class FeishuChannelServiceTests
                 },
                 new StreamOutputChunk
                 {
-                    Content = "第二轮输出",
+                    Content = """
+                              {"type":"item.updated","item":{"type":"agent_message","text":"第二轮过程"}}
+                              {"type":"item.completed","item":{"type":"agent_message","text":"第二轮结论","phase":"final_answer"}}
+                              """ + "\n",
                     IsCompleted = false
                 },
                 new StreamOutputChunk
@@ -4290,7 +4333,8 @@ public class FeishuChannelServiceTests
             sessionDirectoryService,
             new StubFeishuUserBindingService(),
             new StubUserFeishuBotConfigService(),
-            new StubUserContextService());
+            new StubUserContextService(),
+            replyTtsOrchestrator: replyTtsOrchestrator);
 
         var service = new FeishuChannelService(
             Options.Create(new FeishuOptions
@@ -4303,7 +4347,8 @@ public class FeishuChannelServiceTests
             cardKit,
             serviceProvider,
             cliExecutor,
-            chatSessionService);
+            chatSessionService,
+            replyTtsOrchestrator);
 
         await service.StartAsync(CancellationToken.None);
         try
@@ -4316,8 +4361,13 @@ public class FeishuChannelServiceTests
                 SenderName = "luhaiyan"
             });
 
+            Assert.Equal(2, replyTtsOrchestrator.Requests.Count);
+            Assert.Equal("第一轮过程第一轮结论", replyTtsOrchestrator.Requests[0].Output);
+            Assert.Equal("第一轮结论", replyTtsOrchestrator.Requests[0].FinalAnswerOutput);
+            Assert.Equal("第二轮过程第二轮结论", replyTtsOrchestrator.Requests[1].Output);
+            Assert.Equal("第二轮结论", replyTtsOrchestrator.Requests[1].FinalAnswerOutput);
             Assert.Equal(2, cardKit.Handles.Count);
-            Assert.Equal("第一轮输出", cardKit.Handles[0].FinalContent);
+            Assert.Equal("第一轮过程第一轮结论", cardKit.Handles[0].FinalContent);
             Assert.Contains("Goal继续中", cardKit.Handles[0].FinalStatusMarkdown, StringComparison.Ordinal);
             Assert.NotNull(cardKit.Handles[0].FinalChromeSnapshot);
             Assert.Null(cardKit.Handles[0].FinalChromeSnapshot!.BottomPrompt);
@@ -4337,8 +4387,8 @@ public class FeishuChannelServiceTests
             Assert.Contains(cardKit.Handles[1].InitialChromeSnapshot.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
             Assert.Contains(cardKit.Handles[1].InitialChromeSnapshot.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
             Assert.False(string.IsNullOrWhiteSpace(cardKit.Handles[1].InitialContent));
-            Assert.DoesNotContain("第一轮输出", cardKit.Handles[1].InitialContent, StringComparison.Ordinal);
-            Assert.Equal("第二轮输出", cardKit.Handles[1].FinalContent);
+            Assert.DoesNotContain("第一轮过程第一轮结论", cardKit.Handles[1].InitialContent, StringComparison.Ordinal);
+            Assert.Equal("第二轮过程第二轮结论", cardKit.Handles[1].FinalContent);
         }
         finally
         {
@@ -4383,6 +4433,12 @@ public class FeishuChannelServiceTests
             LastCliThreadId = cliThreadId;
             return Task.FromResult(_messages.TakeLast(maxCount).ToList());
         }
+
+        public Task<string?> GetCodexFinalAnswerTextAsync(
+            string cliThreadId,
+            string? workspacePath = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<string?>(null);
     }
 
     private sealed class ErrorCliExecutor(string workspacePath) : ICliExecutorService
