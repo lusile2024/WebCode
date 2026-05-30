@@ -20,7 +20,9 @@ public sealed class AdminUserManagementReplyDocumentModeTests
                     Username = "alice",
                     IsEnabled = true,
                     FullReplyDocEnabled = true,
-                    FinalReplyDocEnabled = true
+                    FinalReplyDocEnabled = true,
+                    AudioFullReplyDocEnabled = true,
+                    AudioFinalReplyDocEnabled = false
                 }
             }
         };
@@ -33,6 +35,8 @@ public sealed class AdminUserManagementReplyDocumentModeTests
         var dto = Assert.IsType<UserFeishuBotConfigDto>(ok.Value);
         Assert.True(dto.FullReplyDocEnabled);
         Assert.True(dto.FinalReplyDocEnabled);
+        Assert.True(dto.AudioFullReplyDocEnabled);
+        Assert.False(dto.AudioFinalReplyDocEnabled);
     }
 
     [Theory]

@@ -20,7 +20,9 @@ public sealed class AdminControllerReplyDocumentTests
                     Username = "alice",
                     IsEnabled = true,
                     FullReplyDocEnabled = true,
-                    FinalReplyDocEnabled = false
+                    FinalReplyDocEnabled = false,
+                    AudioFullReplyDocEnabled = true,
+                    AudioFinalReplyDocEnabled = false
                 }
             }
         };
@@ -33,6 +35,8 @@ public sealed class AdminControllerReplyDocumentTests
         var dto = Assert.IsType<UserFeishuBotConfigDto>(ok.Value);
         Assert.True(dto.FullReplyDocEnabled);
         Assert.False(dto.FinalReplyDocEnabled);
+        Assert.True(dto.AudioFullReplyDocEnabled);
+        Assert.False(dto.AudioFinalReplyDocEnabled);
     }
 
     [Fact]
@@ -47,6 +51,8 @@ public sealed class AdminControllerReplyDocumentTests
         Assert.Equal("bob", dto.Username);
         Assert.False(dto.FullReplyDocEnabled);
         Assert.False(dto.FinalReplyDocEnabled);
+        Assert.False(dto.AudioFullReplyDocEnabled);
+        Assert.False(dto.AudioFinalReplyDocEnabled);
     }
 
     [Fact]
@@ -59,7 +65,9 @@ public sealed class AdminControllerReplyDocumentTests
         {
             IsEnabled = true,
             FullReplyDocEnabled = true,
-            FinalReplyDocEnabled = true
+            FinalReplyDocEnabled = true,
+            AudioFullReplyDocEnabled = true,
+            AudioFinalReplyDocEnabled = true
         });
 
         Assert.IsType<OkObjectResult>(result);
@@ -67,6 +75,8 @@ public sealed class AdminControllerReplyDocumentTests
         Assert.Equal("alice", configService.LastSavedConfig!.Username);
         Assert.True(configService.LastSavedConfig.FullReplyDocEnabled);
         Assert.True(configService.LastSavedConfig.FinalReplyDocEnabled);
+        Assert.True(configService.LastSavedConfig.AudioFullReplyDocEnabled);
+        Assert.True(configService.LastSavedConfig.AudioFinalReplyDocEnabled);
     }
 
     [Fact]

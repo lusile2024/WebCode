@@ -1847,6 +1847,51 @@ public class CliExecutorServiceTests
     }
 
     [Fact]
+    public async Task ExecuteStreamAsync_ForCodexOneTimeProcess_WritesPromptToStandardInput()
+    {
+        var tool = new CliToolConfig
+        {
+            Id = "codex-like-stdin",
+            Name = "Codex-like stdin",
+            Command = "powershell.exe",
+            Enabled = true
+        };
+        var adapter = new RecordingCodexOneTimeInputAdapter();
+        var service = new CliExecutorService(
+            NullLogger<CliExecutorService>.Instance,
+            Options.Create(new CliToolsOption
+            {
+                TempWorkspaceRoot = Path.Combine(Path.GetTempPath(), "WebCodeCli.Tests", Guid.NewGuid().ToString("N")),
+                Tools = [tool]
+            }),
+            NullLogger<PersistentProcessManager>.Instance,
+            new NullServiceProvider(),
+            new StubChatSessionService(),
+            new StubCliAdapterFactory(adapter),
+            new StubCcSwitchService(includeBuiltInManagedTools: false));
+
+        var request = new CliExecutionRequest
+        {
+            SessionId = "session-one-time-stdin",
+            ToolId = tool.Id,
+            PromptText = "keep prompt for image submission"
+        };
+
+        var chunks = new List<StreamOutputChunk>();
+        await foreach (var chunk in service.ExecuteStreamAsync(request))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Contains(
+            chunks,
+            chunk => string.Equals(
+                chunk.Content?.Trim(),
+                "keep prompt for image submission",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ResetSessionRuntimeAsync_ClearsCachedAndPersistedThreadIdsWithoutRemovingWorkspace()
     {
         const string sessionId = "session-reset-runtime";
@@ -4926,6 +4971,40 @@ args = ["mcp", "serve"]
 
         public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
             => "-NoProfile -Command \"$inputText = [Console]::In.ReadToEnd(); Write-Output $inputText\"";
+
+        public CliOutputEvent? ParseOutputLine(string line) => null;
+
+        public string? ExtractSessionId(CliOutputEvent outputEvent) => null;
+
+        public string? ExtractAssistantMessage(CliOutputEvent outputEvent) => null;
+
+        public string GetEventTitle(CliOutputEvent outputEvent) => outputEvent.Title ?? string.Empty;
+
+        public string GetEventBadgeClass(CliOutputEvent outputEvent) => string.Empty;
+
+        public string GetEventBadgeLabel(CliOutputEvent outputEvent) => string.Empty;
+    }
+
+    private sealed class RecordingCodexOneTimeInputAdapter : ICliToolAdapter
+    {
+        public string[] SupportedToolIds => ["codex"];
+
+        public bool SupportsStreamParsing => false;
+
+        public bool CanHandle(CliToolConfig tool)
+            => string.Equals(tool.Id, "codex-like-stdin", StringComparison.OrdinalIgnoreCase);
+
+        public CliAttachmentCapabilities GetAttachmentCapabilities(CliToolConfig tool)
+            => CliAttachmentCapabilities.ReferenceOnly();
+
+        public string BuildArguments(CliToolConfig tool, CliExecutionRequest request)
+            => "-NoProfile -Command \"$inputText = [Console]::In.ReadToEnd(); Write-Output $inputText\"";
+
+        public string BuildArguments(CliToolConfig tool, string prompt, CliSessionContext context)
+            => throw new NotSupportedException();
+
+        public string BuildLowInterruptionArguments(CliToolConfig tool, CliSessionContext context)
+            => throw new NotSupportedException();
 
         public CliOutputEvent? ParseOutputLine(string line) => null;
 

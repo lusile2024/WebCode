@@ -100,6 +100,8 @@ internal static class AdminControllerReplyDocumentTestsAccessor
                 StreamingThrottleMs = entity.StreamingThrottleMs,
                 FullReplyDocEnabled = entity.FullReplyDocEnabled,
                 FinalReplyDocEnabled = entity.FinalReplyDocEnabled,
+                AudioFullReplyDocEnabled = entity.AudioFullReplyDocEnabled,
+                AudioFinalReplyDocEnabled = entity.AudioFinalReplyDocEnabled,
                 LastStartedAt = entity.LastStartedAt,
                 CreatedAt = entity.CreatedAt,
                 UpdatedAt = entity.UpdatedAt

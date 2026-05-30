@@ -1679,7 +1679,7 @@ public class CliExecutorService : ICliExecutorService
 
         RegisterActiveSessionProcess(sessionId, process);
 
-        WriteStandardInput(process, BuildStandardInput(tool, adapter, sessionContext, useLowInterruption, lowInterruptionPrompt));
+        WriteStandardInput(process, BuildStandardInput(tool, adapter, requestWithContext, sessionContext, useLowInterruption, lowInterruptionPrompt));
         
         _logger.LogInformation("进程已启动，PID: {ProcessId}，开始读取输出流", process.Id);
 
@@ -2918,10 +2918,16 @@ public class CliExecutorService : ICliExecutorService
     private static string? BuildStandardInput(
         CliToolConfig tool,
         ICliToolAdapter? adapter,
+        CliExecutionRequest request,
         CliSessionContext sessionContext,
         bool useLowInterruption,
         string? lowInterruptionPrompt)
     {
+        if (!useLowInterruption && IsCodexExecution(tool, adapter))
+        {
+            return request.BuildPromptText();
+        }
+
         if (!useLowInterruption)
         {
             return null;

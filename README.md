@@ -4,6 +4,20 @@
   <a href="README.md">简体中文</a> | <a href="README_EN.md">English</a>
 </p>
 
+---
+
+## Feishu Reply Documents
+
+WebCode has removed reply TTS for Feishu responses.
+
+Feishu reply delivery now works through cloud documents:
+
+- Full reply documents keep the complete AI final reply content.
+- Conclusion reply documents keep only the conclusion-focused final content.
+- The generated cloud document link gives the chat a durable record of the AI reply.
+- Users can listen to the AI reply result with Feishu document audio instead of WebCode-managed TTS playback.
+- On mobile Feishu, open the document and use the `...` menu to start document audio.
+
 <p align="center">
   <strong>把 AI CLI、Web 会话、移动端和飞书工作流接到同一个控制面板里</strong>
 </p>

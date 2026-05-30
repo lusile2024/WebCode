@@ -273,6 +273,11 @@ $releaseNotes = @"
 - Default install path is %LOCALAPPDATA%\Programs\WebCode
 - Default runtime data paths are data/ and workspaces/ under the install directory
 - After launch, open $launchUrl in the browser
+
+## Feishu reply delivery
+- Reply TTS has been removed from WebCode.
+- Feishu full-reply and conclusion-reply outputs are stored as cloud documents.
+- Users can listen to the generated reply through Feishu document audio.
 "@
 [System.IO.File]::WriteAllText($releaseNotesPath, $releaseNotes.Trim() + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 

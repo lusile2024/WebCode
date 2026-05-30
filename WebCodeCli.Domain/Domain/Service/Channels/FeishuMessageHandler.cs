@@ -493,7 +493,9 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                     fullReplyDocEnabled: replyDocumentSettings.FullReplyDocEnabled,
                     finalReplyDocEnabled: replyDocumentSettings.FinalReplyDocEnabled,
                     showGoalQuickActionButtons: showGoalQuickActionButtons,
-                    showSuperpowersQuickActions: showSuperpowersQuickActions);
+                    showSuperpowersQuickActions: showSuperpowersQuickActions,
+                    audioFullReplyDocEnabled: replyDocumentSettings.AudioFullReplyDocEnabled,
+                    audioFinalReplyDocEnabled: replyDocumentSettings.AudioFinalReplyDocEnabled);
             }
             else
             {
@@ -508,7 +510,9 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
                     fullReplyDocEnabled: replyDocumentSettings.FullReplyDocEnabled,
                     finalReplyDocEnabled: replyDocumentSettings.FinalReplyDocEnabled,
                     showGoalQuickActionButtons: showGoalQuickActionButtons,
-                    showSuperpowersQuickActions: showSuperpowersQuickActions);
+                    showSuperpowersQuickActions: showSuperpowersQuickActions,
+                    audioFullReplyDocEnabled: replyDocumentSettings.AudioFullReplyDocEnabled,
+                    audioFinalReplyDocEnabled: replyDocumentSettings.AudioFinalReplyDocEnabled);
             }
 
             _logger.LogDebug("🔥 [FeishuHelp] 帮助卡片DTO内容: {Card}", JsonSerializer.Serialize(card));
@@ -588,20 +592,24 @@ public class FeishuMessageHandler : IEventHandler<EventV2Dto<ImMessageReceiveV1E
         return await userFeishuBotConfigService.GetEffectiveOptionsAsync(username);
     }
 
-    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string chatId, string? username)
+    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled, bool AudioFullReplyDocEnabled, bool AudioFinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string chatId, string? username)
     {
         var resolvedUsername = string.IsNullOrWhiteSpace(username)
             ? _feishuChannel.GetSessionUsername(chatId)
             : username;
         if (string.IsNullOrWhiteSpace(resolvedUsername))
         {
-            return (false, false);
+            return (false, false, false, false);
         }
 
         using var scope = _serviceProvider.CreateScope();
         var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
         var config = await userFeishuBotConfigService.GetByUsernameAsync(resolvedUsername);
-        return (config?.FullReplyDocEnabled == true, config?.FinalReplyDocEnabled == true);
+        return (
+            config?.FullReplyDocEnabled == true,
+            config?.FinalReplyDocEnabled == true,
+            config?.AudioFullReplyDocEnabled == true,
+            config?.AudioFinalReplyDocEnabled == true);
     }
 
     private bool ResolveShowGoalQuickActionButtons(string chatId, string? username, string? toolId)

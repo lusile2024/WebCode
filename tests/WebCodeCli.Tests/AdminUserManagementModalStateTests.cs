@@ -30,6 +30,8 @@ public sealed class AdminUserManagementModalStateTests
         SetProperty(currentFeishu, "AppId", "app-123");
         SetProperty(currentFeishu, "FullReplyDocEnabled", true);
         SetProperty(currentFeishu, "FinalReplyDocEnabled", false);
+        SetProperty(currentFeishu, "AudioFullReplyDocEnabled", true);
+        SetProperty(currentFeishu, "AudioFinalReplyDocEnabled", true);
         SetProperty(currentEditor, "FeishuBot", currentFeishu);
 
         var selectedUser = Activator.CreateInstance(summaryType, nonPublic: true)!;
@@ -56,6 +58,8 @@ public sealed class AdminUserManagementModalStateTests
         Assert.Equal("app-123", GetProperty<string>(seededFeishu, "AppId"));
         Assert.True(GetProperty<bool>(seededFeishu, "FullReplyDocEnabled"));
         Assert.False(GetProperty<bool>(seededFeishu, "FinalReplyDocEnabled"));
+        Assert.True(GetProperty<bool>(seededFeishu, "AudioFullReplyDocEnabled"));
+        Assert.True(GetProperty<bool>(seededFeishu, "AudioFinalReplyDocEnabled"));
     }
 
     private static Type GetNestedType(string name)

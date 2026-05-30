@@ -248,6 +248,10 @@ public class FeishuCardActionService
                     return await HandleToggleFullReplyDocAsync(chatId, operatorUserId);
                 case FeishuHelpCardAction.ToggleFinalReplyDocAction:
                     return await HandleToggleFinalReplyDocAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.ToggleAudioFullReplyDocAction:
+                    return await HandleToggleAudioFullReplyDocAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.ToggleAudioFinalReplyDocAction:
+                    return await HandleToggleAudioFinalReplyDocAsync(chatId, operatorUserId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case FeishuHelpCardAction.SubmitAttachmentPromptAction:
@@ -458,12 +462,36 @@ public class FeishuCardActionService
             "飞书结论回复文档更新失败");
     }
 
+    private async Task<CardActionTriggerResponseDto> HandleToggleAudioFullReplyDocAsync(string? chatId, string? operatorUserId)
+    {
+        return await HandleToggleReplyDocumentAsync(
+            chatId,
+            operatorUserId,
+            toggleFullReplyDoc: false,
+            modeDisplayName: "飞书听完整文档",
+            defaultFailureMessage: "飞书听完整文档更新失败",
+            toggleAudioFullReplyDoc: true);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleToggleAudioFinalReplyDocAsync(string? chatId, string? operatorUserId)
+    {
+        return await HandleToggleReplyDocumentAsync(
+            chatId,
+            operatorUserId,
+            toggleFullReplyDoc: false,
+            modeDisplayName: "飞书听结论文档",
+            defaultFailureMessage: "飞书听结论文档更新失败",
+            toggleAudioFinalReplyDoc: true);
+    }
+
     private async Task<CardActionTriggerResponseDto> HandleToggleReplyDocumentAsync(
         string? chatId,
         string? operatorUserId,
         bool toggleFullReplyDoc,
         string modeDisplayName,
-        string defaultFailureMessage)
+        string defaultFailureMessage,
+        bool toggleAudioFullReplyDoc = false,
+        bool toggleAudioFinalReplyDoc = false)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -485,7 +513,15 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未找到当前飞书用户配置", "error");
         }
 
-        if (toggleFullReplyDoc)
+        if (toggleAudioFullReplyDoc)
+        {
+            config.AudioFullReplyDocEnabled = !config.AudioFullReplyDocEnabled;
+        }
+        else if (toggleAudioFinalReplyDoc)
+        {
+            config.AudioFinalReplyDocEnabled = !config.AudioFinalReplyDocEnabled;
+        }
+        else if (toggleFullReplyDoc)
         {
             config.FullReplyDocEnabled = !config.FullReplyDocEnabled;
         }
@@ -511,7 +547,13 @@ public class FeishuCardActionService
         }
 
         var card = await BuildHelpCommandListCardAsync(chatId);
-        var isEnabled = toggleFullReplyDoc ? config.FullReplyDocEnabled : config.FinalReplyDocEnabled;
+        var isEnabled = toggleAudioFullReplyDoc
+            ? config.AudioFullReplyDocEnabled
+            : toggleAudioFinalReplyDoc
+                ? config.AudioFinalReplyDocEnabled
+                : toggleFullReplyDoc
+                    ? config.FullReplyDocEnabled
+                    : config.FinalReplyDocEnabled;
         var toastMessage = isEnabled ? $"✅ 已开启{modeDisplayName}" : $"✅ 已关闭{modeDisplayName}";
         return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, "success");
     }
@@ -1370,7 +1412,8 @@ public class FeishuCardActionService
                 streamingChrome,
                 baseStatusMarkdown,
                 latestContent,
-                token));
+                token),
+            deferReplacementUntilNextForegroundUpdate: IsGoalRuntimeSession(sessionId, toolId));
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
@@ -1417,7 +1460,10 @@ public class FeishuCardActionService
                 latestRenderedContent = content;
                 PausePulseForOverflowCard(streamingChrome, pulseGate);
             },
-            content => cardSession.UpdateAsync(content, executionCancellationToken),
+            content => cardSession.UpdateAsync(
+                content,
+                executionCancellationToken,
+                allowPendingReplacementActivation: false),
             statusPulseCts.Token);
 
         try
@@ -1533,7 +1579,10 @@ public class FeishuCardActionService
                 {
                     latestRenderedContent = displayContent;
                     PausePulseForOverflowCard(streamingChrome, pulseGate);
-                    var updateSucceeded = await cardSession.UpdateAsync(displayContent, executionCancellationToken);
+                    var updateSucceeded = await cardSession.UpdateAsync(
+                        displayContent,
+                        executionCancellationToken,
+                        allowPendingReplacementActivation: true);
                     var disconnectedContent = updateSucceeded
                         ? null
                         : await TryHandleStreamingCardDisconnectAsync(
@@ -1766,7 +1815,8 @@ public class FeishuCardActionService
                 streamingChrome,
                 baseStatusMarkdown,
                 latestContent,
-                token));
+                token),
+            deferReplacementUntilNextForegroundUpdate: IsGoalRuntimeSession(sessionId, toolId));
         var resolvedToolId = NormalizeToolId(toolId) ?? ResolveDefaultToolId();
         var tool = _cliExecutor.GetTool(resolvedToolId);
 
@@ -1806,7 +1856,10 @@ public class FeishuCardActionService
                 latestRenderedContent = content;
                 PausePulseForOverflowCard(streamingChrome, pulseGate);
             },
-            content => cardSession.UpdateAsync(content, executionCancellationToken),
+            content => cardSession.UpdateAsync(
+                content,
+                executionCancellationToken,
+                allowPendingReplacementActivation: false),
             statusPulseCts.Token);
 
         try
@@ -1922,7 +1975,10 @@ public class FeishuCardActionService
                 {
                     latestRenderedContent = displayContent;
                     PausePulseForOverflowCard(streamingChrome, pulseGate);
-                    var updateSucceeded = await cardSession.UpdateAsync(displayContent, executionCancellationToken);
+                    var updateSucceeded = await cardSession.UpdateAsync(
+                        displayContent,
+                        executionCancellationToken,
+                        allowPendingReplacementActivation: true);
                     var disconnectedContent = updateSucceeded
                         ? null
                         : await TryHandleStreamingCardDisconnectAsync(
@@ -2388,7 +2444,10 @@ public class FeishuCardActionService
                 }
 
                 streamingChrome.StatusMarkdown = FeishuStreamingStatusFormatter.WithRunningState(baseStatusMarkdown, ++frameIndex);
-                await cardSession.UpdateAsync(contentAccessor(), cardWriteCancellationToken);
+                await cardSession.UpdateAsync(
+                    contentAccessor(),
+                    cardWriteCancellationToken,
+                    allowPendingReplacementActivation: false);
             }
         }
         catch (OperationCanceledException)
@@ -3855,7 +3914,9 @@ public class FeishuCardActionService
             replyDocumentSettings.FullReplyDocEnabled,
             replyDocumentSettings.FinalReplyDocEnabled,
             showGoalQuickActionButtons,
-            showSuperpowersQuickActions);
+            showSuperpowersQuickActions,
+            replyDocumentSettings.AudioFullReplyDocEnabled,
+            replyDocumentSettings.AudioFinalReplyDocEnabled);
     }
 
     private bool ResolveShowGoalQuickActionButtons(string? chatKey, string? username, string? toolId)
@@ -3943,17 +4004,21 @@ public class FeishuCardActionService
                && !HasGoalExecutionConflict(session.SessionId);
     }
 
-    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string? username)
+    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled, bool AudioFullReplyDocEnabled, bool AudioFinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string? username)
     {
         if (string.IsNullOrWhiteSpace(username))
         {
-            return (false, false);
+            return (false, false, false, false);
         }
 
         using var scope = _serviceProvider.CreateScope();
         var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
         var config = await userFeishuBotConfigService.GetByUsernameAsync(username);
-        return (config?.FullReplyDocEnabled == true, config?.FinalReplyDocEnabled == true);
+        return (
+            config?.FullReplyDocEnabled == true,
+            config?.FinalReplyDocEnabled == true,
+            config?.AudioFullReplyDocEnabled == true,
+            config?.AudioFinalReplyDocEnabled == true);
     }
 
     private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username, string? appId = null)

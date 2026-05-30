@@ -62,6 +62,24 @@ public class FeishuHelpCardBuilderTests
     }
 
     [Fact]
+    public void BuildCommandListCard_IncludesListeningReplyDocumentButtons_WhenListeningReplyDocumentsEnabled()
+    {
+        var cardJson = _builder.BuildCommandListCard(
+            CreateCategories(),
+            fullReplyDocEnabled: false,
+            finalReplyDocEnabled: false,
+            audioFullReplyDocEnabled: true,
+            audioFinalReplyDocEnabled: true);
+        using var document = JsonDocument.Parse(cardJson);
+        var elements = document.RootElement.GetProperty("body").GetProperty("elements");
+
+        Assert.True(ContainsStringValue(elements, "听完整文档：开"));
+        Assert.True(ContainsStringValue(elements, "听结论文档：开"));
+        Assert.True(ContainsAction(elements, FeishuHelpCardAction.ToggleAudioFullReplyDocAction));
+        Assert.True(ContainsAction(elements, FeishuHelpCardAction.ToggleAudioFinalReplyDocAction));
+    }
+
+    [Fact]
     public void BuildCommandListCardV2_IncludesReplyDocumentButtons_WhenOnlyFinalReplyDocumentEnabled()
     {
         var card = _builder.BuildCommandListCardV2(
@@ -74,6 +92,24 @@ public class FeishuHelpCardBuilderTests
         Assert.True(ContainsStringValue(bodyDoc.RootElement, "结论回复文档：开"));
         Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFullReplyDocAction));
         Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFinalReplyDocAction));
+    }
+
+    [Fact]
+    public void BuildFilteredCardV2_IncludesListeningReplyDocumentButtons_WhenOnlyListeningFinalReplyDocumentEnabled()
+    {
+        var card = _builder.BuildFilteredCardV2(
+            CreateCategories(),
+            "help",
+            fullReplyDocEnabled: false,
+            finalReplyDocEnabled: false,
+            audioFullReplyDocEnabled: false,
+            audioFinalReplyDocEnabled: true);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "听完整文档：关"));
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "听结论文档：开"));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleAudioFullReplyDocAction));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleAudioFinalReplyDocAction));
     }
 
     [Fact]

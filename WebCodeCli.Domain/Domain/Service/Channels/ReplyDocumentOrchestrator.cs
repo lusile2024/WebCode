@@ -20,6 +20,11 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     private const string FullReplyLinkPrefix = "已生成完整回复文档：";
     private const string FinalReplyLinkPrefix = "已生成结论回复文档：";
 
+    private const string AudioFullReplySuffix = " - 听完整回复";
+    private const string AudioFinalReplySuffix = " - 听结论回复";
+    private const string AudioFullReplyLinkPrefix = "已生成听完整回复文档：";
+    private const string AudioFinalReplyLinkPrefix = "已生成听结论回复文档：";
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ReplyDocumentOrchestrator> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _chatLocks = new(StringComparer.OrdinalIgnoreCase);
@@ -102,6 +107,28 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 finalReplyContent,
                 FinalReplyLinkPrefix);
         }
+
+        if (userConfig.AudioFullReplyDocEnabled && !string.IsNullOrWhiteSpace(fullReplyContent))
+        {
+            await TryCreateAndSendDocumentAsync(
+                cardKitClient,
+                configService,
+                request,
+                $"{titlePrefix}{AudioFullReplySuffix}",
+                ListeningReplyDocumentFormatter.Format(fullReplyContent),
+                AudioFullReplyLinkPrefix);
+        }
+
+        if (userConfig.AudioFinalReplyDocEnabled && !string.IsNullOrWhiteSpace(finalReplyContent))
+        {
+            await TryCreateAndSendDocumentAsync(
+                cardKitClient,
+                configService,
+                request,
+                $"{titlePrefix}{AudioFinalReplySuffix}",
+                ListeningReplyDocumentFormatter.Format(finalReplyContent),
+                AudioFinalReplyLinkPrefix);
+        }
     }
 
     private async Task TryCreateAndSendDocumentAsync(
@@ -155,7 +182,11 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         var scopeHint = TryExtractPermissionScopes(exception.Message);
         var target = string.Equals(messagePrefix, FinalReplyLinkPrefix, StringComparison.Ordinal)
             ? "\u7ed3\u8bba\u56de\u590d\u6587\u6863"
-            : "\u5b8c\u6574\u56de\u590d\u6587\u6863";
+            : string.Equals(messagePrefix, AudioFullReplyLinkPrefix, StringComparison.Ordinal)
+                ? "听完整回复文档"
+                : string.Equals(messagePrefix, AudioFinalReplyLinkPrefix, StringComparison.Ordinal)
+                    ? "听结论回复文档"
+                    : "\u5b8c\u6574\u56de\u590d\u6587\u6863";
 
         if (!string.IsNullOrWhiteSpace(scopeHint))
         {

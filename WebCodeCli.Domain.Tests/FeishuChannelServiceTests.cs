@@ -4397,6 +4397,140 @@ public class FeishuChannelServiceTests
         }
     }
 
+    [Fact]
+    public async Task HandleIncomingMessageAsync_WhenGoalRuntimeCardUpdateFails_DelaysReplacementUntilNextNewOutput()
+    {
+        var repository = CreateRepository(out var repositoryProxy);
+        var sessionDirectoryService = new RecordingSessionDirectoryService(repositoryProxy);
+        var cardKit = new StreamingRecordingFeishuCardKitClient();
+        cardKit.FailUpdateAttemptSequence.Enqueue(1);
+        var chatSessionService = new RecordingChatSessionService();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"feishu-goal-runtime-deferred-replacement-{Guid.NewGuid():N}");
+        var workspacePath = Path.Combine(workspaceRoot, "superpowers");
+        Directory.CreateDirectory(workspacePath);
+
+        var cliExecutor = new PromptCapturingCliExecutor(workspacePath)
+        {
+            Adapter = new CodexAdapter(),
+            EnableStreamParsing = true,
+            StreamChunks =
+            [
+                new StreamOutputChunk
+                {
+                    Content = """
+                              {"type":"thread.started","thread_id":"thread-goal-runtime-deferred"}
+                              {"type":"item.updated","item":{"type":"agent_message","text":"第一段"}}
+                              """ + "\n",
+                    IsCompleted = false
+                },
+                new StreamOutputChunk
+                {
+                    Content = """
+                              {"type":"item.updated","item":{"type":"agent_message","text":"第二段"}}
+                              """ + "\n",
+                    IsCompleted = false
+                },
+                new StreamOutputChunk
+                {
+                    Content = """
+                              {"type":"item.completed","item":{"type":"agent_message","text":"最终结论","phase":"final_answer"}}
+                              """ + "\n",
+                    IsCompleted = true
+                }
+            ],
+            StreamChunkDelays =
+            [
+                TimeSpan.Zero,
+                TimeSpan.FromMilliseconds(1200),
+                TimeSpan.Zero
+            ]
+        };
+
+        var serviceProvider = new TestServiceProvider(
+            repository,
+            sessionDirectoryService,
+            new StubFeishuUserBindingService(),
+            new StubUserFeishuBotConfigService(),
+            new StubUserContextService());
+
+        var service = new FeishuChannelService(
+            Options.Create(new FeishuOptions
+            {
+                Enabled = true,
+                AppId = "cli_test",
+                AppSecret = "secret"
+            }),
+            NullLogger<FeishuChannelService>.Instance,
+            cardKit,
+            serviceProvider,
+            cliExecutor,
+            chatSessionService);
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            service.CreateNewSession(
+                new FeishuIncomingMessage
+                {
+                    ChatId = "oc_goal_runtime_deferred_replacement_chat",
+                    SenderName = "luhaiyan"
+                },
+                workspacePath,
+                "codex");
+
+            var sessionId = service.GetCurrentSession("oc_goal_runtime_deferred_replacement_chat", "luhaiyan");
+            Assert.NotNull(sessionId);
+
+            await repositoryProxy.UpdateAsync(new ChatSessionEntity
+            {
+                SessionId = sessionId!,
+                Username = "luhaiyan",
+                ToolId = "codex",
+                WorkspacePath = workspacePath,
+                FeishuChatKey = "oc_goal_runtime_deferred_replacement_chat",
+                IsWorkspaceValid = true,
+                IsFeishuActive = true,
+                ToolLaunchOverridesJson = SessionLaunchOverrideHelper.Serialize(
+                    new Dictionary<string, SessionToolLaunchOverride>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["codex"] = new SessionToolLaunchOverride
+                        {
+                            UsePersistentProcess = false,
+                            UseGoalRuntime = true
+                        }
+                    }),
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTime.UtcNow
+            });
+
+            var handleMessageTask = service.HandleIncomingMessageAsync(new FeishuIncomingMessage
+            {
+                MessageId = "msg-goal-runtime-deferred-replacement",
+                ChatId = "oc_goal_runtime_deferred_replacement_chat",
+                Content = "继续",
+                SenderName = "luhaiyan"
+            });
+
+            await Task.Delay(400, TestContext.Current.CancellationToken);
+
+            Assert.Single(cardKit.Handles);
+            Assert.Null(cardKit.Handles[0].FinalContent);
+
+            await handleMessageTask;
+
+            Assert.Equal(2, cardKit.Handles.Count);
+            Assert.Equal(
+                "第一段第二段\n\n当前回复已停止：当前卡片已停止更新，请查看新卡片继续结果。",
+                cardKit.Handles[0].FinalContent);
+            Assert.Equal("第一段第二段最终结论", cardKit.Handles[1].FinalContent);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
     private sealed class StubExternalCliSessionHistoryService(IEnumerable<ExternalCliHistoryMessage> messages)
         : IExternalCliSessionHistoryService
     {
@@ -4626,6 +4760,12 @@ public class FeishuChannelServiceTests
         public void Store(ChatSessionEntity session)
         {
             _sessions[session.SessionId] = Clone(session);
+        }
+
+        public Task<bool> UpdateAsync(ChatSessionEntity session)
+        {
+            _sessions[session.SessionId] = Clone(session);
+            return Task.FromResult(true);
         }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)

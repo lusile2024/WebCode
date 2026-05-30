@@ -143,7 +143,9 @@ public class AdminController : ControllerBase
                 Username = username,
                 IsEnabled = false,
                 FullReplyDocEnabled = false,
-                FinalReplyDocEnabled = false
+                FinalReplyDocEnabled = false,
+                AudioFullReplyDocEnabled = false,
+                AudioFinalReplyDocEnabled = false
             });
         }
 
@@ -172,7 +174,9 @@ public class AdminController : ControllerBase
             HttpTimeoutSeconds = request.HttpTimeoutSeconds,
             StreamingThrottleMs = request.StreamingThrottleMs,
             FullReplyDocEnabled = fullReplyDocEnabled,
-            FinalReplyDocEnabled = finalReplyDocEnabled
+            FinalReplyDocEnabled = finalReplyDocEnabled,
+            AudioFullReplyDocEnabled = request.AudioFullReplyDocEnabled,
+            AudioFinalReplyDocEnabled = request.AudioFinalReplyDocEnabled
         });
 
         if (!result.Success)
@@ -263,7 +267,9 @@ public class AdminController : ControllerBase
             HttpTimeoutSeconds = config.HttpTimeoutSeconds,
             StreamingThrottleMs = config.StreamingThrottleMs,
             FullReplyDocEnabled = config.FullReplyDocEnabled,
-            FinalReplyDocEnabled = config.FinalReplyDocEnabled
+            FinalReplyDocEnabled = config.FinalReplyDocEnabled,
+            AudioFullReplyDocEnabled = config.AudioFullReplyDocEnabled,
+            AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled
         };
     }
 
@@ -336,6 +342,8 @@ public sealed class UserFeishuBotConfigDto
     public bool ReplyTtsEnabled { get; set; }
     public bool FullReplyDocEnabled { get; set; }
     public bool FinalReplyDocEnabled { get; set; }
+    public bool AudioFullReplyDocEnabled { get; set; }
+    public bool AudioFinalReplyDocEnabled { get; set; }
 }
 
 public sealed class UserFeishuBotRuntimeStatusDto

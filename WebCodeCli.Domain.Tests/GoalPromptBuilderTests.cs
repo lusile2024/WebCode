@@ -22,4 +22,13 @@ public sealed class GoalPromptBuilderTests
     {
         Assert.Null(GoalPromptBuilder.BuildGoalPrompt(input));
     }
+
+    [Fact]
+    public void BuildSubagentPlanGoalPrompt_RequiresClosingAllPlanChecklistItemsBeforeGoalCompletion()
+    {
+        var prompt = GoalPromptBuilder.BuildSubagentPlanGoalPrompt();
+
+        Assert.StartsWith("/goal ", prompt, StringComparison.Ordinal);
+        Assert.Contains("plan文档内的[ ]check list都检查收口后，变成[x]后才算goal完成", prompt, StringComparison.Ordinal);
+    }
 }

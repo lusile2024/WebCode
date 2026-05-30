@@ -231,6 +231,22 @@
                                                 </div>
                                             </label>
                                         </div>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <label class="rounded-2xl border border-gray-200 bg-white px-4 py-3 flex items-start gap-3">
+                                                <input type="checkbox" @bind="_editor.FeishuBot.AudioFullReplyDocEnabled" class="mt-1 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.audioFullReplyDocTitle", "听完整文档", "Listen full document")</div>
+                                                    <div class="text-xs text-gray-500">@Tx("adminUserManagement.audioFullReplyDocHint", "写入适合听文档的完整回复版本，会将文件路径改写为易听的映射占位符。", "Write a listening-friendly full reply doc and replace file references with spoken placeholders.")</div>
+                                                </div>
+                                            </label>
+                                            <label class="rounded-2xl border border-gray-200 bg-white px-4 py-3 flex items-start gap-3">
+                                                <input type="checkbox" @bind="_editor.FeishuBot.AudioFinalReplyDocEnabled" class="mt-1 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.audioFinalReplyDocTitle", "听结论文档", "Listen conclusion document")</div>
+                                                    <div class="text-xs text-gray-500">@Tx("adminUserManagement.audioFinalReplyDocHint", "只写入可听的结论文档版本，只处理 final_answer 内容。", "Write only the listening-friendly conclusion doc from final_answer content.")</div>
+                                                </div>
+                                            </label>
+                                        </div>
                                     </div>
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <input @bind="_editor.FeishuBot.AppId" @bind:event="oninput" type="text" placeholder="App ID" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />

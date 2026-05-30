@@ -9,61 +9,60 @@ internal sealed class FeishuStreamingCardSession
     private readonly Func<FeishuStreamingHandle, string, CancellationToken, Task<FeishuStreamingHandle?>> _replacementFactory;
     private readonly Action<FeishuStreamingHandle> _handleChanged;
     private readonly Func<FeishuStreamingHandle, string, CancellationToken, Task>? _stoppedHandleFinalizer;
+    private readonly bool _deferReplacementUntilNextForegroundUpdate;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private int _replacementCount;
+    private bool _replacementPending;
 
     public FeishuStreamingCardSession(
         FeishuStreamingHandle initialHandle,
         Func<FeishuStreamingHandle, string, CancellationToken, Task<FeishuStreamingHandle?>> replacementFactory,
         Action<FeishuStreamingHandle>? handleChanged = null,
-        Func<FeishuStreamingHandle, string, CancellationToken, Task>? stoppedHandleFinalizer = null)
+        Func<FeishuStreamingHandle, string, CancellationToken, Task>? stoppedHandleFinalizer = null,
+        bool deferReplacementUntilNextForegroundUpdate = false)
     {
         CurrentHandle = initialHandle;
         _replacementFactory = replacementFactory;
         _handleChanged = handleChanged ?? (_ => { });
         _stoppedHandleFinalizer = stoppedHandleFinalizer;
+        _deferReplacementUntilNextForegroundUpdate = deferReplacementUntilNextForegroundUpdate;
     }
 
     public FeishuStreamingHandle CurrentHandle { get; private set; }
 
-    public async Task<bool> UpdateAsync(string content, CancellationToken cancellationToken)
+    public bool HasPendingReplacement => _replacementPending;
+
+    public async Task<bool> UpdateAsync(
+        string content,
+        CancellationToken cancellationToken,
+        bool allowPendingReplacementActivation = true)
     {
         await _lock.WaitAsync(cancellationToken);
         try
         {
+            if (_replacementPending && CurrentHandle.AreCardUpdatesStopped)
+            {
+                if (!allowPendingReplacementActivation)
+                {
+                    return true;
+                }
+
+                return await TryCreateReplacementHandleAsync(content, cancellationToken);
+            }
+
             await CurrentHandle.UpdateAsync(content);
             if (!CurrentHandle.AreCardUpdatesStopped)
             {
                 return true;
             }
 
-            if (_replacementCount >= MaxReplacementCardsPerLogicalStream)
+            if (_deferReplacementUntilNextForegroundUpdate)
             {
-                return false;
+                _replacementPending = true;
+                return true;
             }
 
-            var stoppedHandle = CurrentHandle;
-            var replacement = await _replacementFactory(stoppedHandle, content, cancellationToken);
-            if (replacement == null)
-            {
-                return false;
-            }
-
-            if (_stoppedHandleFinalizer != null)
-            {
-                try
-                {
-                    await _stoppedHandleFinalizer(stoppedHandle, content, cancellationToken);
-                }
-                catch
-                {
-                }
-            }
-
-            _replacementCount++;
-            CurrentHandle = replacement;
-            _handleChanged(replacement);
-            return true;
+            return await TryCreateReplacementHandleAsync(content, cancellationToken);
         }
         finally
         {
@@ -76,33 +75,65 @@ internal sealed class FeishuStreamingCardSession
         await _lock.WaitAsync();
         try
         {
+            if (_replacementPending || CurrentHandle.AreCardUpdatesStopped)
+            {
+                return await TryCreateReplacementAndFinishAsync(finalContent);
+            }
+
             var finished = await CurrentHandle.FinishAsync(finalContent);
             if (finished)
             {
                 return true;
             }
 
-            if (_replacementCount >= MaxReplacementCardsPerLogicalStream)
-            {
-                return false;
-            }
-
-            var stoppedHandle = CurrentHandle;
-            var replacement = await _replacementFactory(stoppedHandle, finalContent, CancellationToken.None);
-            if (replacement == null)
-            {
-                return false;
-            }
-
-            _replacementCount++;
-            CurrentHandle = replacement;
-            _handleChanged(replacement);
-            return await CurrentHandle.FinishAsync(finalContent);
+            return await TryCreateReplacementAndFinishAsync(finalContent);
         }
         finally
         {
             _lock.Release();
         }
+    }
+
+    private async Task<bool> TryCreateReplacementAndFinishAsync(string finalContent)
+    {
+        if (!await TryCreateReplacementHandleAsync(finalContent, CancellationToken.None))
+        {
+            return false;
+        }
+
+        return await CurrentHandle.FinishAsync(finalContent);
+    }
+
+    private async Task<bool> TryCreateReplacementHandleAsync(string latestContent, CancellationToken cancellationToken)
+    {
+        if (_replacementCount >= MaxReplacementCardsPerLogicalStream)
+        {
+            return false;
+        }
+
+        var stoppedHandle = CurrentHandle;
+        var replacement = await _replacementFactory(stoppedHandle, latestContent, cancellationToken);
+        if (replacement == null)
+        {
+            return false;
+        }
+
+        if (_stoppedHandleFinalizer != null)
+        {
+            try
+            {
+                await _stoppedHandleFinalizer(stoppedHandle, latestContent, cancellationToken);
+            }
+            catch
+            {
+            }
+        }
+
+        _replacementCount++;
+        _replacementPending = false;
+        CurrentHandle = replacement;
+        _handleChanged(replacement);
+        return true;
     }
 
     public async Task SwitchHandleAsync(
@@ -116,6 +147,7 @@ internal sealed class FeishuStreamingCardSession
         try
         {
             CurrentHandle = handle;
+            _replacementPending = false;
             if (resetReplacementCount)
             {
                 _replacementCount = 0;

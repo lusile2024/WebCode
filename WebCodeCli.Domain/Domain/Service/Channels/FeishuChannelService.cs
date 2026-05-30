@@ -462,7 +462,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 stoppedHandle,
                 activeExecution,
                 latestContent,
-                token));
+                token),
+            deferReplacementUntilNextForegroundUpdate: IsGoalRuntimeSession(TryGetSessionEntity(sessionId)));
         activeExecution.PausePulseForOverflowCard(StreamingStatusPulseQuietWindow);
         using var backgroundUpdatesCts = new CancellationTokenSource();
         var statusPulseTask = RunStreamingStatusPulseAsync(activeExecution, cardSession, backgroundUpdatesCts.Token);
@@ -482,7 +483,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 activeExecution.SetLatestRenderedContent(content);
                 activeExecution.PausePulseForOverflowCard(StreamingStatusPulseQuietWindow);
             },
-            content => cardSession.UpdateAsync(content, activeExecution.UpdateCancellationTokenSource.Token),
+            content => cardSession.UpdateAsync(
+                content,
+                activeExecution.UpdateCancellationTokenSource.Token,
+                allowPendingReplacementActivation: false),
             backgroundUpdatesCts.Token);
         var previousExecution = RegisterActiveExecution(sessionId, activeExecution);
         if (previousExecution != null)
@@ -1216,7 +1220,10 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                     activeExecution.SetLatestRenderedContent(displayContent);
                     latestRenderedContent = displayContent;
                     activeExecution.PausePulseForOverflowCard(StreamingStatusPulseQuietWindow);
-                    var updateSucceeded = await cardSession.UpdateAsync(displayContent, cancellationToken);
+                    var updateSucceeded = await cardSession.UpdateAsync(
+                        displayContent,
+                        cancellationToken,
+                        allowPendingReplacementActivation: true);
                     var disconnectedContent = updateSucceeded
                         ? null
                         : await TryHandleStreamingCardDisconnectAsync(activeExecution, latestRenderedContent, cancellationToken);
@@ -2656,7 +2663,8 @@ public class FeishuChannelService : BackgroundService, IFeishuChannelService
                 execution.AdvanceRunningStatus();
                 await cardSession.UpdateAsync(
                     execution.GetLatestRenderedContent(),
-                    execution.UpdateCancellationTokenSource.Token);
+                    execution.UpdateCancellationTokenSource.Token,
+                    allowPendingReplacementActivation: false);
             }
         }
         catch (OperationCanceledException)

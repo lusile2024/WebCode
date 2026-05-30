@@ -48,6 +48,12 @@ public class UserFeishuBotConfigEntity
     [SugarColumn(IsNullable = false)]
     public bool FinalReplyDocEnabled { get; set; }
 
+    [SugarColumn(IsNullable = false)]
+    public bool AudioFullReplyDocEnabled { get; set; }
+
+    [SugarColumn(IsNullable = false)]
+    public bool AudioFinalReplyDocEnabled { get; set; }
+
     [SugarColumn(ColumnName = "ReplyTtsEnabled", IsNullable = true)]
     public bool? LegacyReplyTtsEnabled { get; set; }
 

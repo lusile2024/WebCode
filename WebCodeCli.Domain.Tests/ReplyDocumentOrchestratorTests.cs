@@ -65,7 +65,7 @@ public sealed class ReplyDocumentOrchestratorTests
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
-        Assert.Equal("thread-1 先把这个关键产品约束定掉�?- 完整回复", document.Title);
+        Assert.Equal("thread-1 question - 完整回复", document.Title);
         Assert.Equal("完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Single(harness.CardKit.PermissionUpdates);
         Assert.Single(harness.CardKit.TextMessages);
@@ -171,8 +171,8 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(2, harness.CardKit.AppendedTexts.Count);
         Assert.Equal(2, harness.CardKit.PermissionUpdates.Count);
         Assert.Equal(2, harness.CardKit.TextMessages.Count);
-        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both 问题一 问题�?- 完整回复");
-        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both 问题一 问题�?- 结论回复");
+        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both question - 完整回复");
+        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both question - 结论回复");
     }
 
     [Fact]
