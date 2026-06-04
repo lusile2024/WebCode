@@ -10,6 +10,7 @@ using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
+using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 using System.Text.Json.Nodes;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -252,6 +253,8 @@ public class FeishuCardActionService
                     return await HandleToggleAudioFullReplyDocAsync(chatId, operatorUserId);
                 case FeishuHelpCardAction.ToggleAudioFinalReplyDocAction:
                     return await HandleToggleAudioFinalReplyDocAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.SetDocumentAdminOpenIdAction:
+                    return await HandleSetDocumentAdminOpenIdAsync(chatId, operatorUserId, appId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case FeishuHelpCardAction.SubmitAttachmentPromptAction:
@@ -482,6 +485,52 @@ public class FeishuCardActionService
             modeDisplayName: "飞书听结论文档",
             defaultFailureMessage: "飞书听结论文档更新失败",
             toggleAudioFinalReplyDoc: true);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleSetDocumentAdminOpenIdAsync(
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        if (string.IsNullOrWhiteSpace(operatorUserId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法识别当前飞书用户，保存文档管理员失败", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+
+        UserFeishuBotConfigEntity? config = null;
+        if (!string.IsNullOrWhiteSpace(appId))
+        {
+            config = await userFeishuBotConfigService.GetByAppIdAsync(appId.Trim());
+        }
+
+        if (config == null && !string.IsNullOrWhiteSpace(chatId))
+        {
+            var actualChatKey = NormalizeChatKey(chatId);
+            var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+            if (!string.IsNullOrWhiteSpace(username))
+            {
+                config = await userFeishuBotConfigService.GetByUsernameAsync(username);
+            }
+        }
+
+        if (config == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未找到当前飞书机器人配置", "error");
+        }
+
+        config.DocumentAdminOpenId = operatorUserId.Trim();
+        var saveResult = await userFeishuBotConfigService.SaveAsync(config);
+        if (!saveResult.Success)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                $"❌ {(string.IsNullOrWhiteSpace(saveResult.ErrorMessage) ? "保存文档管理员失败" : saveResult.ErrorMessage)}",
+                "error");
+        }
+
+        return _cardBuilder.BuildCardActionToastOnlyResponse("✅ 已将当前操作者保存为文档管理员", "success");
     }
 
     private async Task<CardActionTriggerResponseDto> HandleToggleReplyDocumentAsync(
@@ -1025,6 +1074,8 @@ public class FeishuCardActionService
             await _cliExecutor.StopSessionExecutionAsync(activeSessionId, effectiveToolId);
         }
 
+        await EnsureGoalRuntimeOverrideEnabledAsync(activeSessionId, targetChatKey, effectiveToolId, operatorUserId);
+
         return await HandleExecuteCommandAsync(
             formValue: null,
             commandFromAction: prompt,
@@ -1112,6 +1163,65 @@ public class FeishuCardActionService
         return appServerSessionManager?.HasActiveTurn(sessionId) == true;
     }
 
+    private async Task EnsureGoalRuntimeOverrideEnabledAsync(
+        string sessionId,
+        string chatKey,
+        string? toolId,
+        string? operatorUserId)
+    {
+        var normalizedToolId = SessionLaunchOverrideHelper.NormalizeToolId(toolId);
+        if (string.IsNullOrWhiteSpace(sessionId)
+            || !string.Equals(normalizedToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (repo == null)
+        {
+            return;
+        }
+
+        var session = await repo.GetByIdAndUsernameAsync(sessionId, username);
+        if (session == null)
+        {
+            return;
+        }
+
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(session.ToolId, session.CcSwitchSnapshotToolId);
+        if (!string.Equals(effectiveToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var currentOverrides = SessionLaunchOverrideHelper.Deserialize(session.ToolLaunchOverridesJson);
+        var currentOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(
+            currentOverrides,
+            effectiveToolId,
+            session.ToolId,
+            session.CcSwitchSnapshotToolId);
+        if (currentOverride?.UseGoalRuntime == true)
+        {
+            return;
+        }
+
+        var updatedOverrides = SessionLaunchOverrideHelper.ApplyGoalRuntimeOverride(
+            currentOverrides,
+            effectiveToolId,
+            true);
+        session.ToolLaunchOverridesJson = SessionLaunchOverrideHelper.Serialize(updatedOverrides);
+        session.UpdatedAt = DateTime.Now;
+        await repo.UpdateAsync(session);
+    }
+
     private async Task<CardActionTriggerResponseDto> HandleTemporarilyExitGoalRuntimeAsync(
         string? sessionId,
         string? chatKey,
@@ -1146,7 +1256,15 @@ public class FeishuCardActionService
 
         if (HasGoalExecutionConflict(sessionId))
         {
-            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前 goal 正在执行，暂时不能临时退出", "warning");
+            var autoPauseResult = await TryAutoPauseGoalRuntimeBeforeTemporaryExitAsync(
+                sessionId,
+                actualChatKey,
+                operatorUserId,
+                effectiveToolId);
+            if (!autoPauseResult.Success)
+            {
+                return _cardBuilder.BuildCardActionToastOnlyResponse(autoPauseResult.Message, "warning");
+            }
         }
 
         try
@@ -1182,6 +1300,48 @@ public class FeishuCardActionService
         {
             _logger.LogError(ex, "临时退出 goal 持续会话失败: SessionId={SessionId}", sessionId);
             return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 临时退出 goal 持续会话失败: {ex.Message}", "error");
+        }
+    }
+
+    private async Task<(bool Success, string Message)> TryAutoPauseGoalRuntimeBeforeTemporaryExitAsync(
+        string sessionId,
+        string chatKey,
+        string? operatorUserId,
+        string? preferredToolId)
+    {
+        if (_feishuChannel.IsSessionExecutionActive(sessionId))
+        {
+            return (false, "⚠️ 当前会话还有任务在执行，无法自动暂停后临时退出");
+        }
+
+        try
+        {
+            var pauseResponse = await HandleExecuteCommandAsync(
+                formValue: null,
+                commandFromAction: GoalQuickActionDefaults.PausePrompt,
+                chatId: chatKey,
+                operatorUserId: operatorUserId,
+                inputValues: null,
+                appId: null,
+                preferredSessionId: sessionId,
+                preferredToolId: preferredToolId);
+
+            var toastType = pauseResponse.Toast?.Type;
+            if (toastType == CardActionTriggerResponseDto.ToastSuffix.ToastType.Error
+                || toastType == CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning)
+            {
+                var message = string.IsNullOrWhiteSpace(pauseResponse.Toast?.Content)
+                    ? "⚠️ 当前 goal 无法自动暂停，暂时不能临时退出"
+                    : $"⚠️ 当前 goal 无法自动暂停，暂时不能临时退出：{pauseResponse.Toast!.Content}";
+                return (false, message);
+            }
+
+            return (true, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "自动暂停 goal runtime 失败: SessionId={SessionId}", sessionId);
+            return (false, $"⚠️ 当前 goal 无法自动暂停，暂时不能临时退出：{ex.Message}");
         }
     }
 

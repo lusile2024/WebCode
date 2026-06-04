@@ -153,6 +153,53 @@ The document still references page-metadata-ops.ps1 outside the command block.
     }
 
     [Fact]
+    public void Format_ReplacesMarkdownListCommandItems_WithCommandPlaceholdersAndAppendsCommandsAtEnd()
+    {
+        const string input = """
+**验证**
+- `dotnet build WebCodeCli.sln --no-restore -v minimal`
+- `dotnet test WebCodeCli.Domain.Tests/WebCodeCli.Domain.Tests.csproj --filter "FullyQualifiedName~ListeningReplyDocumentFormatterTests"`
+
+这几项现在都通过了。
+""";
+
+        var output = ListeningReplyDocumentFormatter.Format(input);
+        var parts = output.Split(Environment.NewLine + Environment.NewLine, StringSplitOptions.None);
+        var bodyOnly = parts[0];
+        var appendixOnly = string.Join(Environment.NewLine + Environment.NewLine, parts.Skip(1));
+
+        Assert.Contains("- [命令内容1]", bodyOnly, StringComparison.Ordinal);
+        Assert.Contains("- [命令内容2]", bodyOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet build", bodyOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet test", bodyOnly, StringComparison.Ordinal);
+        Assert.Contains("命令内容1：dotnet build WebCodeCli.sln --no-restore -v minimal", appendixOnly, StringComparison.Ordinal);
+        Assert.Contains("命令内容2：dotnet test WebCodeCli.Domain.Tests/WebCodeCli.Domain.Tests.csproj --filter \"FullyQualifiedName~ListeningReplyDocumentFormatterTests\"", appendixOnly, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_ReplacesStandaloneCommandLines_WithoutTouchingInlineCommandProse()
+    {
+        const string input = """
+验证命令如下：
+dotnet build WebCodeCli.sln --no-restore -v minimal
+powershell -NoProfile -File scripts/check.ps1
+
+运行 `dotnet build` 即可看到结果说明。
+""";
+
+        var output = ListeningReplyDocumentFormatter.Format(input);
+        var parts = output.Split(Environment.NewLine + Environment.NewLine, StringSplitOptions.None);
+        var bodyOnly = parts[0];
+        var appendixOnly = string.Join(Environment.NewLine + Environment.NewLine, parts.Skip(1));
+
+        Assert.Contains("[命令内容1]", bodyOnly, StringComparison.Ordinal);
+        Assert.Contains("[命令内容2]", bodyOnly, StringComparison.Ordinal);
+        Assert.Contains("运行 `dotnet build` 即可看到结果说明。", bodyOnly, StringComparison.Ordinal);
+        Assert.Contains("命令内容1：dotnet build WebCodeCli.sln --no-restore -v minimal", appendixOnly, StringComparison.Ordinal);
+        Assert.Contains("命令内容2：powershell -NoProfile -File scripts/check.ps1", appendixOnly, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Format_LeavesNonCommandFencedCodeBlockUntouched()
     {
         const string input = """

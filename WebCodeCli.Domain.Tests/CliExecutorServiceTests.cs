@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using SqlSugar;
 using System.Diagnostics;
 using System.Reflection;
+using System.Text;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Service;
@@ -1393,7 +1394,7 @@ public class CliExecutorServiceTests
             Assert.Contains(
                 chunks,
                 c => !string.IsNullOrWhiteSpace(c.Content)
-                     && c.Content.Contains($"exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json {cliThreadId} \"/goal keep working\"", StringComparison.Ordinal));
+                     && c.Content.Contains($"exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json {cliThreadId} -- \"/goal keep working\"", StringComparison.Ordinal));
             Assert.Contains(
                 chunks,
                 c => !string.IsNullOrWhiteSpace(c.Content) && c.Content.Contains("\"turn.completed\"", StringComparison.Ordinal));
@@ -1534,7 +1535,39 @@ public class CliExecutorServiceTests
         var arguments = adapter.BuildArguments(tool, request);
 
         Assert.Equal(
-            "exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json thread-123 \"/goal resume\"",
+            "exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json thread-123 -- \"/goal resume\"",
+            arguments);
+    }
+
+    [Fact]
+    public void CodexAdapter_BuildArguments_WhenPromptStartsWithDash_InsertsArgumentTerminator()
+    {
+        var adapter = new CodexAdapter();
+        var tool = new CliToolConfig
+        {
+            Id = "codex",
+            Name = "Codex",
+            Command = "codex",
+            Enabled = true
+        };
+        var context = new CliSessionContext
+        {
+            SessionId = "session-resume",
+            CliThreadId = "thread-123",
+            WorkingDirectory = Path.GetTempPath()
+        };
+        var request = new CliExecutionRequest
+        {
+            SessionId = "session-resume",
+            ToolId = "codex",
+            PromptText = "- Docs/superpowers/plans/test.md",
+            SessionContext = context
+        };
+
+        var arguments = adapter.BuildArguments(tool, request);
+
+        Assert.Equal(
+            "exec resume --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json thread-123 -- \"- Docs/superpowers/plans/test.md\"",
             arguments);
     }
 
@@ -1889,6 +1922,15 @@ public class CliExecutorServiceTests
                 chunk.Content?.Trim(),
                 "keep prompt for image submission",
                 StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GetCodexTransportEncoding_ReturnsUtf8WithoutBom()
+    {
+        Encoding encoding = CliExecutorService.GetCodexTransportEncoding();
+
+        Assert.Equal("utf-8", encoding.WebName);
+        Assert.Empty(encoding.GetPreamble());
     }
 
     [Fact]

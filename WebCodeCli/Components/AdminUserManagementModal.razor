@@ -247,6 +247,11 @@
                                                 </div>
                                             </label>
                                         </div>
+                                        <div class="space-y-2">
+                                            <div class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.documentAdminTitle", "文档管理员 OpenID", "Document admin OpenID")</div>
+                                            <input value="@(_editor.FeishuBot.DocumentAdminOpenId ?? string.Empty)" readonly type="text" placeholder="@Tx("adminUserManagement.documentAdminPlaceholder", "可在飞书帮助卡片点击按钮保存当前操作者", "Use the Feishu help-card button to save the current operator.")" class="w-full rounded-2xl border border-gray-200 bg-gray-100 px-4 py-3 text-sm text-gray-700 outline-none font-mono" />
+                                            <div class="text-xs text-gray-500">@Tx("adminUserManagement.documentAdminHint", "该值由飞书帮助卡片中的“设为文档管理员”按钮写入。后续生成的回复文档会自动授予该 OpenID 管理权限。", "This value is written from the Feishu help-card button. Future reply documents automatically grant this OpenID admin access.")</div>
+                                        </div>
                                     </div>
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <input @bind="_editor.FeishuBot.AppId" @bind:event="oninput" type="text" placeholder="App ID" class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none transition focus:border-gray-400 focus:bg-white" />

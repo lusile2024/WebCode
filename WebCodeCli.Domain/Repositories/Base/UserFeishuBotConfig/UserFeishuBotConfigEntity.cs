@@ -54,6 +54,9 @@ public class UserFeishuBotConfigEntity
     [SugarColumn(IsNullable = false)]
     public bool AudioFinalReplyDocEnabled { get; set; }
 
+    [SugarColumn(Length = 256, IsNullable = true)]
+    public string? DocumentAdminOpenId { get; set; }
+
     [SugarColumn(ColumnName = "ReplyTtsEnabled", IsNullable = true)]
     public bool? LegacyReplyTtsEnabled { get; set; }
 

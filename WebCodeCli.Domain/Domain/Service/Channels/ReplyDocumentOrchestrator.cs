@@ -1,5 +1,6 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WebCodeCli.Domain.Common.Extensions;
@@ -15,6 +16,8 @@ namespace WebCodeCli.Domain.Domain.Service.Channels;
 public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
 {
     private const int MaxTitleLength = 180;
+    private const string FailureStageDataKey = "ReplyDocumentFailureStage";
+    private static readonly char[] InvalidFolderNameCharacters = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
     private const string FullReplySuffix = " - 完整回复";
     private const string FinalReplySuffix = " - 结论回复";
     private const string FullReplyLinkPrefix = "已生成完整回复文档：";
@@ -90,54 +93,64 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         {
             await TryCreateAndSendDocumentAsync(
                 cardKitClient,
+                scope.ServiceProvider,
                 configService,
                 request,
                 $"{titlePrefix}{FullReplySuffix}",
                 fullReplyContent,
-                FullReplyLinkPrefix);
+                FullReplyLinkPrefix,
+                userConfig.DocumentAdminOpenId);
         }
 
         if (userConfig.FinalReplyDocEnabled && !string.IsNullOrWhiteSpace(finalReplyContent))
         {
             await TryCreateAndSendDocumentAsync(
                 cardKitClient,
+                scope.ServiceProvider,
                 configService,
                 request,
                 $"{titlePrefix}{FinalReplySuffix}",
                 finalReplyContent,
-                FinalReplyLinkPrefix);
+                FinalReplyLinkPrefix,
+                userConfig.DocumentAdminOpenId);
         }
 
         if (userConfig.AudioFullReplyDocEnabled && !string.IsNullOrWhiteSpace(fullReplyContent))
         {
             await TryCreateAndSendDocumentAsync(
                 cardKitClient,
+                scope.ServiceProvider,
                 configService,
                 request,
                 $"{titlePrefix}{AudioFullReplySuffix}",
                 ListeningReplyDocumentFormatter.Format(fullReplyContent),
-                AudioFullReplyLinkPrefix);
+                AudioFullReplyLinkPrefix,
+                userConfig.DocumentAdminOpenId);
         }
 
         if (userConfig.AudioFinalReplyDocEnabled && !string.IsNullOrWhiteSpace(finalReplyContent))
         {
             await TryCreateAndSendDocumentAsync(
                 cardKitClient,
+                scope.ServiceProvider,
                 configService,
                 request,
                 $"{titlePrefix}{AudioFinalReplySuffix}",
                 ListeningReplyDocumentFormatter.Format(finalReplyContent),
-                AudioFinalReplyLinkPrefix);
+                AudioFinalReplyLinkPrefix,
+                userConfig.DocumentAdminOpenId);
         }
     }
 
     private async Task TryCreateAndSendDocumentAsync(
         IFeishuCardKitClient cardKitClient,
+        IServiceProvider serviceProvider,
         IUserFeishuBotConfigService configService,
         FeishuCompletedReplyDocumentRequest request,
         string title,
         string body,
-        string messagePrefix)
+        string messagePrefix,
+        string? documentAdminOpenId)
     {
         try
         {
@@ -145,6 +158,56 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             var document = await cardKitClient.CreateCloudDocumentAsync(
                 TruncateTitle(title),
                 optionsOverride: effectiveOptions);
+            string? placementWarningMessage = null;
+            string? documentAdminWarningMessage = null;
+
+            var folderName = await ResolveReplyDocumentFolderNameAsync(serviceProvider, request);
+            if (!string.IsNullOrWhiteSpace(folderName))
+            {
+                string folderToken;
+                try
+                {
+                    folderToken = await cardKitClient.EnsureCloudFolderAsync(
+                        folderName,
+                        optionsOverride: effectiveOptions);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    MarkFailureStage(ex, ReplyDocumentFailureStage.ResolveFolder);
+                    placementWarningMessage = BuildPlacementWarningMessage(messagePrefix, ex);
+                    _logger.LogWarning(
+                        ex,
+                        "Reply document folder placement failed for chat {ChatId}, session {SessionId}, title {Title}, stage {FailureStage}",
+                        request.ChatId,
+                        request.SessionId,
+                        title,
+                        ReplyDocumentFailureStage.ResolveFolder);
+                    folderToken = string.Empty;
+                }
+
+                if (!string.IsNullOrWhiteSpace(folderToken))
+                {
+                    try
+                    {
+                        await cardKitClient.MoveCloudDocumentToFolderAsync(
+                            document.DocumentId,
+                            folderToken,
+                            optionsOverride: effectiveOptions);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        MarkFailureStage(ex, ReplyDocumentFailureStage.MoveToFolder);
+                        placementWarningMessage = BuildPlacementWarningMessage(messagePrefix, ex);
+                        _logger.LogWarning(
+                            ex,
+                            "Reply document folder placement failed for chat {ChatId}, session {SessionId}, title {Title}, stage {FailureStage}",
+                            request.ChatId,
+                            request.SessionId,
+                            title,
+                            ReplyDocumentFailureStage.MoveToFolder);
+                    }
+                }
+            }
 
             await cardKitClient.AppendCloudDocumentTextAsync(
                 document.DocumentId,
@@ -156,19 +219,58 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 document.DocumentId,
                 optionsOverride: effectiveOptions);
 
+            if (!string.IsNullOrWhiteSpace(documentAdminOpenId))
+            {
+                try
+                {
+                    await cardKitClient.GrantCloudDocumentMemberFullAccessAsync(
+                        document.DocumentId,
+                        documentAdminOpenId,
+                        optionsOverride: effectiveOptions);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    documentAdminWarningMessage = BuildDocumentAdminGrantWarningMessage(messagePrefix, ex);
+                    _logger.LogWarning(
+                        ex,
+                        "Reply document admin grant failed for chat {ChatId}, session {SessionId}, title {Title}",
+                        request.ChatId,
+                        request.SessionId,
+                        title);
+                }
+            }
+
             await cardKitClient.SendTextMessageAsync(
                 request.ChatId,
                 $"{messagePrefix}{document.Url}",
                 optionsOverride: effectiveOptions);
+
+            if (!string.IsNullOrWhiteSpace(placementWarningMessage))
+            {
+                await TrySendPlacementWarningMessageAsync(
+                    cardKitClient,
+                    request,
+                    placementWarningMessage);
+            }
+
+            if (!string.IsNullOrWhiteSpace(documentAdminWarningMessage))
+            {
+                await TrySendDocumentAdminWarningMessageAsync(
+                    cardKitClient,
+                    request,
+                    documentAdminWarningMessage);
+            }
         }
         catch (Exception ex)
         {
+            var failureStage = GetFailureStage(ex)?.ToString() ?? "unknown";
             _logger.LogWarning(
                 ex,
-                "Reply document generation failed for chat {ChatId}, session {SessionId}, title {Title}",
+                "Reply document generation failed for chat {ChatId}, session {SessionId}, title {Title}, stage {FailureStage}",
                 request.ChatId,
                 request.SessionId,
-                title);
+                title,
+                failureStage);
 
             await TrySendFailureMessageAsync(
                 cardKitClient,
@@ -180,23 +282,26 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     private static string BuildFailureMessage(string messagePrefix, Exception exception)
     {
         var scopeHint = TryExtractPermissionScopes(exception.Message);
-        var target = string.Equals(messagePrefix, FinalReplyLinkPrefix, StringComparison.Ordinal)
-            ? "\u7ed3\u8bba\u56de\u590d\u6587\u6863"
-            : string.Equals(messagePrefix, AudioFullReplyLinkPrefix, StringComparison.Ordinal)
-                ? "听完整回复文档"
-                : string.Equals(messagePrefix, AudioFinalReplyLinkPrefix, StringComparison.Ordinal)
-                    ? "听结论回复文档"
-                    : "\u5b8c\u6574\u56de\u590d\u6587\u6863";
+        var target = ResolveDocumentTarget(messagePrefix);
+        var failureStage = GetFailureStage(exception);
 
         if (!string.IsNullOrWhiteSpace(scopeHint))
         {
-            return $"{target}\u751f\u6210\u5931\u8d25\uff1a\u98de\u4e66\u5e94\u7528\u7f3a\u5c11\u6587\u6863\u6743\u9650\uff0c\u8bf7\u5f00\u901a {scopeHint} \u540e\u91cd\u8bd5\u3002";
+            var permissionGuidance = TryExtractPermissionGuidance(exception.Message);
+            return string.IsNullOrWhiteSpace(permissionGuidance)
+                ? $"{target}生成失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。"
+                : $"{target}生成失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。{permissionGuidance}";
+        }
+
+        if (IsDriveResourceNotFoundError(exception.Message))
+        {
+            return BuildDriveResourceNotFoundMessage(target, failureStage);
         }
 
         var compactReason = BuildCompactErrorReason(exception.Message);
         return string.IsNullOrWhiteSpace(compactReason)
-            ? $"{target}\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u98de\u4e66\u6587\u6863\u6743\u9650\u6216\u670d\u52a1\u65e5\u5fd7\u3002"
-            : $"{target}\u751f\u6210\u5931\u8d25\uff1a{compactReason}";
+            ? $"{target}生成失败，请检查飞书文档权限或服务日志。"
+            : $"{target}生成失败：{compactReason}";
     }
 
     private static string BuildCompactErrorReason(string? message)
@@ -219,20 +324,186 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             return null;
         }
 
-        var scopes = new List<string>();
-        if (message.Contains("docx:document:create", StringComparison.OrdinalIgnoreCase))
+        if (!message.Contains("scope", StringComparison.OrdinalIgnoreCase)
+            && !message.Contains("permission", StringComparison.OrdinalIgnoreCase)
+            && !message.Contains("权限", StringComparison.OrdinalIgnoreCase)
+            && !message.Contains("Access denied", StringComparison.OrdinalIgnoreCase))
         {
-            scopes.Add("docx:document:create");
+            return null;
         }
 
-        if (message.Contains("docx:document", StringComparison.OrdinalIgnoreCase))
-        {
-            scopes.Add("docx:document");
-        }
+        var scopes = Regex.Matches(
+                message,
+                @"\b(?:docx|drive):[a-z0-9.-]+(?::[a-z0-9.-]+)*\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            .Select(static match => match.Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         return scopes.Count == 0
             ? null
-            : string.Join("\u3001", scopes.Distinct(StringComparer.OrdinalIgnoreCase));
+            : string.Join("\u3001", scopes);
+    }
+
+    private static string? TryExtractPermissionGuidance(string? message)
+    {
+        const string prefix = "应用尚未开通所需的应用身份权限：";
+
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return null;
+        }
+
+        var startIndex = message.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (startIndex < 0)
+        {
+            return null;
+        }
+
+        var guidance = message[startIndex..];
+        var endIndex = guidance.IndexOfAny(['"', '\r', '\n']);
+        if (endIndex >= 0)
+        {
+            guidance = guidance[..endIndex];
+        }
+
+        guidance = guidance.Trim().TrimEnd('}');
+        if (!guidance.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return guidance.Length == prefix.Length
+            ? null
+            : guidance;
+    }
+
+    private static bool IsDriveResourceNotFoundError(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        return message.Contains("Status=NotFound", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("\"code\":1061003", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("code=1061003", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("\"msg\":\"not found.\"", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("msg\":\"not found", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildDriveResourceNotFoundMessage(string target, ReplyDocumentFailureStage? failureStage)
+    {
+        return failureStage switch
+        {
+            ReplyDocumentFailureStage.ResolveFolder
+                => $"{target}生成失败：在定位会话文档文件夹时，飞书文件夹资源不存在或已失效，请稍后重试；若持续出现，请检查该会话文档文件夹是否已被删除。",
+            ReplyDocumentFailureStage.MoveToFolder
+                => $"{target}生成失败：在移动到会话文档文件夹时，飞书文档或目标文件夹资源不存在或已失效，请稍后重试；若持续出现，请检查目标文件夹是否已被删除。",
+            _ => $"{target}生成失败：飞书文档资源不存在或已失效，请稍后重试；若持续出现，请检查目标文档或文件夹是否已被删除。"
+        };
+    }
+
+    private static string BuildPlacementWarningMessage(string messagePrefix, Exception exception)
+    {
+        var target = ResolveDocumentTarget(messagePrefix);
+        var failureStage = GetFailureStage(exception);
+        var scopeHint = TryExtractPermissionScopes(exception.Message);
+
+        if (!string.IsNullOrWhiteSpace(scopeHint))
+        {
+            var permissionGuidance = TryExtractPermissionGuidance(exception.Message);
+            var guidanceSuffix = string.IsNullOrWhiteSpace(permissionGuidance) ? string.Empty : permissionGuidance;
+            return $"{target}已生成，但归档到会话文档文件夹失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。{guidanceSuffix}文档已保留在飞书默认目录。";
+        }
+
+        if (IsDriveResourceNotFoundError(exception.Message))
+        {
+            return failureStage switch
+            {
+                ReplyDocumentFailureStage.ResolveFolder
+                    => $"{target}已生成，但在定位会话文档文件夹时，飞书文件夹资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查该会话文档文件夹是否已被删除。",
+                ReplyDocumentFailureStage.MoveToFolder
+                    => $"{target}已生成，但在移动到会话文档文件夹时，飞书文档或目标文件夹资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查目标文件夹是否已被删除。",
+                _ => $"{target}已生成，但归档到会话文档文件夹时遇到资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查目标文档或文件夹是否已被删除。"
+            };
+        }
+
+        var compactReason = BuildCompactErrorReason(exception.Message);
+        return string.IsNullOrWhiteSpace(compactReason)
+            ? $"{target}已生成，但归档到会话文档文件夹失败。文档已保留在飞书默认目录。"
+            : $"{target}已生成，但归档到会话文档文件夹失败：{compactReason}。文档已保留在飞书默认目录。";
+    }
+
+    private static string BuildDocumentAdminGrantWarningMessage(string messagePrefix, Exception exception)
+    {
+        var target = ResolveDocumentTarget(messagePrefix);
+        var scopeHint = TryExtractPermissionScopes(exception.Message);
+
+        if (!string.IsNullOrWhiteSpace(scopeHint))
+        {
+            var permissionGuidance = TryExtractPermissionGuidance(exception.Message);
+            return string.IsNullOrWhiteSpace(permissionGuidance)
+                ? $"{target}已生成，但文档管理员权限授予失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。"
+                : $"{target}已生成，但文档管理员权限授予失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。{permissionGuidance}";
+        }
+
+        if (IsDriveResourceNotFoundError(exception.Message))
+        {
+            return $"{target}已生成，但文档管理员权限授予失败：飞书文档资源不存在或已失效，请稍后重试；若持续出现，请检查目标文档是否已被删除。";
+        }
+
+        var compactReason = BuildCompactErrorReason(exception.Message);
+        return string.IsNullOrWhiteSpace(compactReason)
+            ? $"{target}已生成，但文档管理员权限授予失败，请稍后重试。"
+            : $"{target}已生成，但文档管理员权限授予失败：{compactReason}";
+    }
+
+    private static void MarkFailureStage(Exception exception, ReplyDocumentFailureStage failureStage)
+    {
+        exception.Data[FailureStageDataKey] = failureStage;
+    }
+
+    private static ReplyDocumentFailureStage? GetFailureStage(Exception exception)
+    {
+        if (exception.Data[FailureStageDataKey] is ReplyDocumentFailureStage failureStage)
+        {
+            return failureStage;
+        }
+
+        if (exception.Data[FailureStageDataKey] is string failureStageText
+            && Enum.TryParse<ReplyDocumentFailureStage>(failureStageText, ignoreCase: true, out var parsedFailureStage))
+        {
+            return parsedFailureStage;
+        }
+
+        return null;
+    }
+
+    private static string ResolveDocumentTarget(string messagePrefix)
+    {
+        if (string.Equals(messagePrefix, FinalReplyLinkPrefix, StringComparison.Ordinal))
+        {
+            return "结论回复文档";
+        }
+
+        if (string.Equals(messagePrefix, AudioFullReplyLinkPrefix, StringComparison.Ordinal))
+        {
+            return "听完整回复文档";
+        }
+
+        if (string.Equals(messagePrefix, AudioFinalReplyLinkPrefix, StringComparison.Ordinal))
+        {
+            return "听结论回复文档";
+        }
+
+        return "完整回复文档";
+    }
+
+    private enum ReplyDocumentFailureStage
+    {
+        ResolveFolder,
+        MoveToFolder
     }
 
     private async Task TrySendFailureMessageAsync(
@@ -403,6 +674,133 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         }
     }
 
+    private async Task TrySendPlacementWarningMessageAsync(
+        IFeishuCardKitClient cardKitClient,
+        FeishuCompletedReplyDocumentRequest request,
+        string message)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(configService, request.Username, request.AppId);
+            await cardKitClient.SendTextMessageAsync(
+                request.ChatId,
+                message,
+                optionsOverride: effectiveOptions);
+        }
+        catch (Exception notifyEx)
+        {
+            _logger.LogWarning(
+                notifyEx,
+                "Reply document placement warning notification failed for chat {ChatId}, session {SessionId}",
+                request.ChatId,
+                request.SessionId);
+        }
+    }
+
+    private async Task TrySendDocumentAdminWarningMessageAsync(
+        IFeishuCardKitClient cardKitClient,
+        FeishuCompletedReplyDocumentRequest request,
+        string message)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+            var effectiveOptions = await ResolveEffectiveOptionsAsync(configService, request.Username, request.AppId);
+            await cardKitClient.SendTextMessageAsync(
+                request.ChatId,
+                message,
+                optionsOverride: effectiveOptions);
+        }
+        catch (Exception notifyEx)
+        {
+            _logger.LogWarning(
+                notifyEx,
+                "Reply document admin warning notification failed for chat {ChatId}, session {SessionId}",
+                request.ChatId,
+                request.SessionId);
+        }
+    }
+
+    private async Task<string?> ResolveReplyDocumentFolderNameAsync(
+        IServiceProvider serviceProvider,
+        FeishuCompletedReplyDocumentRequest request)
+    {
+        var session = await TryGetSessionAsync(serviceProvider, request.SessionId);
+        var candidate = ResolveFolderNameCandidate(session, request);
+        return SanitizeFolderName(candidate);
+    }
+
+    private static string? ResolveFolderNameCandidate(
+        ChatSessionEntity? session,
+        FeishuCompletedReplyDocumentRequest request)
+    {
+        if (!IsUnnamedSessionTitle(session?.Title))
+        {
+            return session?.Title;
+        }
+
+        var cliThreadId = !string.IsNullOrWhiteSpace(request.CliThreadId)
+            ? request.CliThreadId
+            : session?.CliThreadId;
+        if (!string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            return cliThreadId;
+        }
+
+        return request.SessionId ?? session?.SessionId;
+    }
+
+    private static bool IsUnnamedSessionTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return true;
+        }
+
+        var normalizedTitle = title.Trim();
+        return string.Equals(normalizedTitle, "未命名", StringComparison.Ordinal)
+            || string.Equals(normalizedTitle, "鏈懡鍚?", StringComparison.Ordinal)
+            || string.Equals(normalizedTitle, "閺堫亜鎳￠崥?", StringComparison.Ordinal);
+    }
+
+    private static string? SanitizeFolderName(string? folderName)
+    {
+        if (string.IsNullOrWhiteSpace(folderName))
+        {
+            return null;
+        }
+
+        var sanitized = folderName.Trim();
+        foreach (var invalidCharacter in InvalidFolderNameCharacters)
+        {
+            sanitized = sanitized.Replace(invalidCharacter, '-');
+        }
+
+        sanitized = string.Join(
+            " ",
+            sanitized.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? null
+            : sanitized;
+    }
+
+    private static async Task<ChatSessionEntity?> TryGetSessionAsync(IServiceProvider serviceProvider, string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var sessionRepository = serviceProvider.GetService<IChatSessionRepository>();
+        return sessionRepository == null
+            ? null
+            : await sessionRepository.GetByIdAsync(sessionId.Trim());
+    }
+
     private static async Task<FeishuOptions> ResolveEffectiveOptionsAsync(
         IUserFeishuBotConfigService configService,
         string? username,
@@ -425,5 +823,4 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         return configService.GetSharedDefaults();
     }
 }
-
 

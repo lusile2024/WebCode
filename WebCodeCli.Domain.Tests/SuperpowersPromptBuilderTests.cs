@@ -11,6 +11,7 @@ public class SuperpowersPromptBuilderTests
         Assert.Equal(
             SuperpowersQuickActionDefaults.ContinuePrompt,
             SuperpowersPromptBuilder.BuildContinuePrompt());
+        Assert.StartsWith("可以，认可", SuperpowersPromptBuilder.BuildContinuePrompt(), StringComparison.Ordinal);
     }
 
     [Fact]

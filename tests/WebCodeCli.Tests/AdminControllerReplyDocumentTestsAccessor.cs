@@ -20,7 +20,8 @@ internal static class AdminControllerReplyDocumentTestsAccessor
             new StubUserWorkspacePolicyService(),
             configService ?? new StubUserFeishuBotConfigService(),
             runtimeService ?? new StubUserFeishuBotRuntimeService(),
-            new StubCliExecutorService());
+            new StubCliExecutorService(),
+            new StubFeishuDocumentAdminGrantService());
     }
 
     internal sealed class StubUserFeishuBotConfigService : IUserFeishuBotConfigService
@@ -84,7 +85,7 @@ internal static class AdminControllerReplyDocumentTestsAccessor
 
         private static UserFeishuBotConfigEntity Clone(UserFeishuBotConfigEntity entity)
         {
-            return new UserFeishuBotConfigEntity
+            var clone = new UserFeishuBotConfigEntity
             {
                 Id = entity.Id,
                 Username = entity.Username,
@@ -106,6 +107,10 @@ internal static class AdminControllerReplyDocumentTestsAccessor
                 CreatedAt = entity.CreatedAt,
                 UpdatedAt = entity.UpdatedAt
             };
+
+            var documentAdminProperty = typeof(UserFeishuBotConfigEntity).GetProperty("DocumentAdminOpenId");
+            documentAdminProperty?.SetValue(clone, documentAdminProperty.GetValue(entity));
+            return clone;
         }
     }
 
@@ -200,5 +205,14 @@ internal static class AdminControllerReplyDocumentTestsAccessor
         public Task<int> BatchDeleteFilesAsync(string sessionId, List<string> relativePaths) => throw new NotSupportedException();
         public Task<string> InitializeSessionWorkspaceAsync(string sessionId, string? projectId = null, bool includeGit = false) => throw new NotSupportedException();
         public void RefreshWorkspaceRootCache() => throw new NotSupportedException();
+    }
+
+    internal sealed class StubFeishuDocumentAdminGrantService : IFeishuDocumentAdminGrantService
+    {
+        public Task<FeishuDocumentAdminGrantResult> GrantConfiguredAdminAsync(string username, string documentId)
+            => throw new NotSupportedException();
+
+        public Task<FeishuDocumentAdminGrantBatchResult> GrantConfiguredAdminBatchAsync(string username, IEnumerable<string> documentIds)
+            => throw new NotSupportedException();
     }
 }

@@ -380,6 +380,130 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         EnsureBusinessSuccess(result, "Set Feishu cloud document tenant-readable permission");
     }
 
+    public async Task GrantCloudDocumentMemberFullAccessAsync(
+        string documentId,
+        string openId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("Document id is required.", nameof(documentId));
+        }
+
+        if (string.IsNullOrWhiteSpace(openId))
+        {
+            throw new ArgumentException("OpenID is required.", nameof(openId));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            member_type = "openid",
+            member_id = openId.Trim(),
+            perm = "full_access",
+            perm_type = "container",
+            type = "user"
+        };
+
+        var response = await PostAsync(
+            $"/open-apis/drive/v1/permissions/{Uri.EscapeDataString(documentId)}/members?type=docx",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Grant Feishu cloud document member full-access permission");
+    }
+
+    public async Task<string> EnsureCloudFolderAsync(
+        string folderName,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(folderName))
+        {
+            throw new ArgumentException("Folder name is required.", nameof(folderName));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var rootFolderToken = await GetRootFolderTokenAsync(token, effectiveOptions, cancellationToken);
+        var existingFolderToken = await TryFindFolderTokenByNameAsync(
+            rootFolderToken,
+            folderName.Trim(),
+            token,
+            effectiveOptions,
+            cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(existingFolderToken))
+        {
+            return existingFolderToken;
+        }
+
+        var createPayload = new
+        {
+            folder_token = rootFolderToken,
+            name = folderName.Trim()
+        };
+
+        var createResponse = await PostAsync(
+            "/open-apis/drive/v1/files/create_folder",
+            token,
+            createPayload,
+            effectiveOptions,
+            cancellationToken);
+
+        var createResult = await ParseResponseAsync(createResponse, cancellationToken);
+        EnsureBusinessSuccess(createResult, "Create Feishu cloud folder");
+
+        if (createResult.TryGetProperty("data", out var createData)
+            && createData.TryGetProperty("token", out var folderTokenProp)
+            && !string.IsNullOrWhiteSpace(folderTokenProp.GetString()))
+        {
+            return folderTokenProp.GetString()!;
+        }
+
+        throw new InvalidOperationException("Failed to create Feishu cloud folder: missing token.");
+    }
+
+    public async Task MoveCloudDocumentToFolderAsync(
+        string documentId,
+        string folderToken,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("Document id is required.", nameof(documentId));
+        }
+
+        if (string.IsNullOrWhiteSpace(folderToken))
+        {
+            throw new ArgumentException("Folder token is required.", nameof(folderToken));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            folder_token = folderToken.Trim(),
+            type = "file"
+        };
+
+        var response = await PostAsync(
+            $"/open-apis/drive/v1/files/{Uri.EscapeDataString(documentId)}/move",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Move Feishu cloud document to folder");
+    }
+
     public async Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
         string messageId,
         string fileKey,
@@ -1291,6 +1415,100 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     internal static string BuildCloudDocumentUrl(string documentId)
     {
         return $"https://feishu.cn/docx/{documentId}";
+    }
+
+    private async Task<string> GetRootFolderTokenAsync(
+        string token,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        var response = await GetAsync(
+            "/open-apis/drive/explorer/v2/root_folder/meta",
+            token,
+            options,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Get Feishu root folder metadata");
+
+        if (result.TryGetProperty("data", out var data)
+            && data.TryGetProperty("token", out var tokenProp)
+            && !string.IsNullOrWhiteSpace(tokenProp.GetString()))
+        {
+            return tokenProp.GetString()!;
+        }
+
+        throw new InvalidOperationException("Failed to get Feishu root folder metadata: missing token.");
+    }
+
+    private async Task<string?> TryFindFolderTokenByNameAsync(
+        string parentFolderToken,
+        string folderName,
+        string token,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        string? pageToken = null;
+        do
+        {
+            var queryBuilder = new StringBuilder("/open-apis/drive/v1/files?page_size=200");
+            queryBuilder.Append("&folder_token=").Append(Uri.EscapeDataString(parentFolderToken));
+            queryBuilder.Append("&order_by=EditedTime");
+            if (!string.IsNullOrWhiteSpace(pageToken))
+            {
+                queryBuilder.Append("&page_token=").Append(Uri.EscapeDataString(pageToken));
+            }
+
+            var response = await GetAsync(
+                queryBuilder.ToString(),
+                token,
+                options,
+                cancellationToken);
+
+            var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "List Feishu cloud folder items");
+
+            if (result.TryGetProperty("data", out var data))
+            {
+                if (data.TryGetProperty("files", out var files)
+                    && files.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var file in files.EnumerateArray())
+                    {
+                        var type = file.TryGetProperty("type", out var typeProp)
+                            ? typeProp.GetString()
+                            : null;
+                        var name = file.TryGetProperty("name", out var nameProp)
+                            ? nameProp.GetString()
+                            : null;
+                        var currentToken = file.TryGetProperty("token", out var fileTokenProp)
+                            ? fileTokenProp.GetString()
+                            : null;
+
+                        if (string.Equals(type, "folder", StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(name, folderName, StringComparison.Ordinal)
+                            && !string.IsNullOrWhiteSpace(currentToken))
+                        {
+                            return currentToken;
+                        }
+                    }
+                }
+
+                var hasMore = data.TryGetProperty("has_more", out var hasMoreProp)
+                    && hasMoreProp.ValueKind == JsonValueKind.True;
+                pageToken = hasMore
+                    && data.TryGetProperty("next_page_token", out var nextPageTokenProp)
+                    ? nextPageTokenProp.GetString()
+                    : null;
+            }
+            else
+            {
+                pageToken = null;
+            }
+        }
+        while (!string.IsNullOrWhiteSpace(pageToken));
+
+        return null;
     }
 
     private static string TryResolveDownloadFileName(
