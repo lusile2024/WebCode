@@ -219,7 +219,8 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     public async Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(
         string title,
         CancellationToken cancellationToken = default,
-        FeishuOptions? optionsOverride = null)
+        FeishuOptions? optionsOverride = null,
+        string? folderToken = null)
     {
         if (string.IsNullOrWhiteSpace(title))
         {
@@ -228,10 +229,16 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-        var payload = new
-        {
-            title
-        };
+        object payload = string.IsNullOrWhiteSpace(folderToken)
+            ? new
+            {
+                title
+            }
+            : new
+            {
+                title,
+                folder_token = folderToken.Trim()
+            };
 
         var response = await PostAsync(
             "/open-apis/docx/v1/documents",
@@ -418,6 +425,44 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         EnsureBusinessSuccess(result, "Grant Feishu cloud document member full-access permission");
     }
 
+    public async Task GrantCloudFolderMemberFullAccessAsync(
+        string folderToken,
+        string openId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(folderToken))
+        {
+            throw new ArgumentException("Folder token is required.", nameof(folderToken));
+        }
+
+        if (string.IsNullOrWhiteSpace(openId))
+        {
+            throw new ArgumentException("OpenID is required.", nameof(openId));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            member_type = "openid",
+            member_id = openId.Trim(),
+            perm = "full_access",
+            perm_type = "container",
+            type = "user"
+        };
+
+        var response = await PostAsync(
+            $"/open-apis/drive/v1/permissions/{Uri.EscapeDataString(folderToken)}/members?type=folder",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Grant Feishu cloud folder member full-access permission");
+    }
+
     public async Task<string> EnsureCloudFolderAsync(
         string folderName,
         CancellationToken cancellationToken = default,
@@ -490,7 +535,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         var payload = new
         {
             folder_token = folderToken.Trim(),
-            type = "file"
+            type = "docx"
         };
 
         var response = await PostAsync(

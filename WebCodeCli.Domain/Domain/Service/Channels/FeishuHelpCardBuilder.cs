@@ -921,7 +921,8 @@ public class FeishuHelpCardBuilder
         string sessionId,
         string chatKey,
         string? toolId,
-        bool showAllSessions = false)
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var elements = new List<object>
         {
@@ -951,7 +952,8 @@ public class FeishuHelpCardBuilder
                         {
                             action = "open_session_manager",
                             chat_key = chatKey,
-                            show_all_sessions = showAllSessions
+                            show_all_sessions = showAllSessions,
+                            session_page = sessionPage ?? 0
                         }),
                     BuildTopActionColumn(
                         "中断并同步 Provider",
@@ -962,7 +964,8 @@ public class FeishuHelpCardBuilder
                             session_id = sessionId,
                             chat_key = chatKey,
                             tool_id = toolId,
-                            show_all_sessions = showAllSessions
+                            show_all_sessions = showAllSessions,
+                            session_page = sessionPage ?? 0
                         }),
                     BuildTopActionColumn(
                         "查看当前状态",
@@ -972,7 +975,9 @@ public class FeishuHelpCardBuilder
                             action = FeishuHelpCardAction.StatusGoalAction,
                             session_id = sessionId,
                             chat_key = chatKey,
-                            tool_id = toolId
+                            tool_id = toolId,
+                            show_all_sessions = showAllSessions,
+                            session_page = sessionPage ?? 0
                         })
                 }
             }

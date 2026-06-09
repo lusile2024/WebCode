@@ -36,6 +36,31 @@ public class FeishuCardKitClientTests
 
         using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
         Assert.Equal("thread-1 缁х画 - 瀹屾暣鍥炲", requestDoc.RootElement.GetProperty("title").GetString());
+        Assert.False(requestDoc.RootElement.TryGetProperty("folder_token", out _));
+    }
+
+    [Fact]
+    public async Task CreateCloudDocumentAsync_WhenFolderTokenProvided_PostsFolderTokenInDocxCreateRequest()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"document":{"document_id":"doccn123","root_block_id":"root123"}}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var document = await client.CreateCloudDocumentAsync(
+            "thread-1 缁х画 - 瀹屾暣鍥炲",
+            TestContext.Current.CancellationToken,
+            folderToken: "fld-target");
+
+        Assert.Equal("doccn123", document.DocumentId);
+        Assert.Equal("root123", document.RootBlockId);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("thread-1 缁х画 - 瀹屾暣鍥炲", requestDoc.RootElement.GetProperty("title").GetString());
+        Assert.Equal("fld-target", requestDoc.RootElement.GetProperty("folder_token").GetString());
     }
 
     [Fact]
@@ -128,6 +153,38 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task GrantCloudFolderMemberFullAccessAsync_PostsPermissionMemberRequest()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"member_id":"ou_doc_admin"}}""")
+        ]);
+
+        dynamic client = CreateClient(handler);
+
+        await client.GrantCloudFolderMemberFullAccessAsync(
+            "fld_123",
+            "ou_doc_admin",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/permissions/fld_123/members"
+        ], handler.RequestPaths);
+        Assert.Equal("type=folder", handler.RequestQueries[1]);
+        Assert.Equal("POST", handler.RequestMethods[1]);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("ou_doc_admin", requestDoc.RootElement.GetProperty("member_id").GetString());
+        Assert.Equal("openid", requestDoc.RootElement.GetProperty("member_type").GetString());
+        Assert.Equal("full_access", requestDoc.RootElement.GetProperty("perm").GetString());
+        Assert.Equal("container", requestDoc.RootElement.GetProperty("perm_type").GetString());
+        Assert.Equal("user", requestDoc.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task EnsureCloudFolderAsync_WhenFolderExists_ReturnsExistingFolderToken()
     {
         var handler = new StubHttpMessageHandler(
@@ -204,7 +261,7 @@ public class FeishuCardKitClientTests
 
         using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
         Assert.Equal("fld-target", requestDoc.RootElement.GetProperty("folder_token").GetString());
-        Assert.Equal("file", requestDoc.RootElement.GetProperty("type").GetString());
+        Assert.Equal("docx", requestDoc.RootElement.GetProperty("type").GetString());
     }
 
     [Fact]
@@ -222,7 +279,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.CreateCloudDocumentAsync("thread-1 continue - 瀹屾暣鍥炲", TestContext.Current.CancellationToken));
+            client.CreateCloudDocumentAsync("thread-1 continue - 瀹屾暣鍥炲", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("BadRequest", exception.Message, StringComparison.Ordinal);
         Assert.Contains("99991672", exception.Message, StringComparison.Ordinal);

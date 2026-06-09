@@ -92,7 +92,8 @@ public interface IFeishuCardKitClient
     Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(
         string title,
         CancellationToken cancellationToken = default,
-        FeishuOptions? optionsOverride = null)
+        FeishuOptions? optionsOverride = null,
+        string? folderToken = null)
     {
         throw new NotSupportedException();
     }
@@ -117,6 +118,15 @@ public interface IFeishuCardKitClient
 
     Task GrantCloudDocumentMemberFullAccessAsync(
         string documentId,
+        string openId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task GrantCloudFolderMemberFullAccessAsync(
+        string folderToken,
         string openId,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)

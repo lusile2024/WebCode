@@ -145,6 +145,12 @@ public class FeishuHelpCardAction
     public bool? ShowAllSessions { get; set; }
 
     /// <summary>
+    /// 会话管理分页页码（从 0 开始）
+    /// </summary>
+    [JsonPropertyName("session_page")]
+    public int? SessionPage { get; set; }
+
+    /// <summary>
     /// 表单中的模型值（会话启动设置时使用）
     /// </summary>
     [JsonPropertyName("model")]

@@ -155,16 +155,14 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         try
         {
             var effectiveOptions = await ResolveEffectiveOptionsAsync(configService, request.Username, request.AppId);
-            var document = await cardKitClient.CreateCloudDocumentAsync(
-                TruncateTitle(title),
-                optionsOverride: effectiveOptions);
             string? placementWarningMessage = null;
             string? documentAdminWarningMessage = null;
+            string? folderAdminWarningMessage = null;
+            string? folderToken = null;
 
             var folderName = await ResolveReplyDocumentFolderNameAsync(serviceProvider, request);
             if (!string.IsNullOrWhiteSpace(folderName))
             {
-                string folderToken;
                 try
                 {
                     folderToken = await cardKitClient.EnsureCloudFolderAsync(
@@ -182,31 +180,92 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                         request.SessionId,
                         title,
                         ReplyDocumentFailureStage.ResolveFolder);
-                    folderToken = string.Empty;
+                    folderToken = null;
                 }
 
                 if (!string.IsNullOrWhiteSpace(folderToken))
                 {
-                    try
+                    if (!string.IsNullOrWhiteSpace(documentAdminOpenId))
                     {
-                        await cardKitClient.MoveCloudDocumentToFolderAsync(
-                            document.DocumentId,
-                            folderToken,
-                            optionsOverride: effectiveOptions);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        MarkFailureStage(ex, ReplyDocumentFailureStage.MoveToFolder);
-                        placementWarningMessage = BuildPlacementWarningMessage(messagePrefix, ex);
-                        _logger.LogWarning(
-                            ex,
-                            "Reply document folder placement failed for chat {ChatId}, session {SessionId}, title {Title}, stage {FailureStage}",
-                            request.ChatId,
-                            request.SessionId,
-                            title,
-                            ReplyDocumentFailureStage.MoveToFolder);
+                        try
+                        {
+                            await cardKitClient.GrantCloudFolderMemberFullAccessAsync(
+                                folderToken,
+                                documentAdminOpenId,
+                                optionsOverride: effectiveOptions);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            folderAdminWarningMessage = BuildFolderAdminGrantWarningMessage(messagePrefix, ex);
+                            _logger.LogWarning(
+                                ex,
+                                "Reply document folder admin grant failed for chat {ChatId}, session {SessionId}, title {Title}",
+                                request.ChatId,
+                                request.SessionId,
+                                title);
+                        }
                     }
                 }
+            }
+
+            FeishuCloudDocumentInfo document;
+            if (!string.IsNullOrWhiteSpace(folderToken))
+            {
+                try
+                {
+                    document = await cardKitClient.CreateCloudDocumentAsync(
+                        TruncateTitle(title),
+                        optionsOverride: effectiveOptions,
+                        folderToken: folderToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    MarkFailureStage(ex, ReplyDocumentFailureStage.CreateInFolder);
+                    _logger.LogWarning(
+                        ex,
+                        "Reply document direct folder creation failed for chat {ChatId}, session {SessionId}, title {Title}, stage {FailureStage}",
+                        request.ChatId,
+                        request.SessionId,
+                        title,
+                        ReplyDocumentFailureStage.CreateInFolder);
+
+                    document = await cardKitClient.CreateCloudDocumentAsync(
+                        TruncateTitle(title),
+                        optionsOverride: effectiveOptions);
+
+                    if (ShouldAttemptMoveFallbackAfterCreateFailure(ex))
+                    {
+                        try
+                        {
+                            await cardKitClient.MoveCloudDocumentToFolderAsync(
+                                document.DocumentId,
+                                folderToken,
+                                optionsOverride: effectiveOptions);
+                        }
+                        catch (Exception moveEx) when (moveEx is not OperationCanceledException)
+                        {
+                            MarkFailureStage(moveEx, ReplyDocumentFailureStage.MoveToFolder);
+                            placementWarningMessage = BuildPlacementWarningMessage(messagePrefix, moveEx);
+                            _logger.LogWarning(
+                                moveEx,
+                                "Reply document folder placement failed for chat {ChatId}, session {SessionId}, title {Title}, stage {FailureStage}",
+                                request.ChatId,
+                                request.SessionId,
+                                title,
+                                ReplyDocumentFailureStage.MoveToFolder);
+                        }
+                    }
+                    else
+                    {
+                        placementWarningMessage = BuildPlacementWarningMessage(messagePrefix, ex);
+                    }
+                }
+            }
+            else
+            {
+                document = await cardKitClient.CreateCloudDocumentAsync(
+                    TruncateTitle(title),
+                    optionsOverride: effectiveOptions);
             }
 
             await cardKitClient.AppendCloudDocumentTextAsync(
@@ -259,6 +318,14 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                     cardKitClient,
                     request,
                     documentAdminWarningMessage);
+            }
+
+            if (!string.IsNullOrWhiteSpace(folderAdminWarningMessage))
+            {
+                await TrySendDocumentAdminWarningMessageAsync(
+                    cardKitClient,
+                    request,
+                    folderAdminWarningMessage);
             }
         }
         catch (Exception ex)
@@ -398,6 +465,8 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         {
             ReplyDocumentFailureStage.ResolveFolder
                 => $"{target}生成失败：在定位会话文档文件夹时，飞书文件夹资源不存在或已失效，请稍后重试；若持续出现，请检查该会话文档文件夹是否已被删除。",
+            ReplyDocumentFailureStage.CreateInFolder
+                => $"{target}生成失败：在归档到会话文档文件夹时，飞书文档或目标文件夹资源不存在或已失效，请稍后重试；若持续出现，请检查目标文件夹是否已被删除。",
             ReplyDocumentFailureStage.MoveToFolder
                 => $"{target}生成失败：在移动到会话文档文件夹时，飞书文档或目标文件夹资源不存在或已失效，请稍后重试；若持续出现，请检查目标文件夹是否已被删除。",
             _ => $"{target}生成失败：飞书文档资源不存在或已失效，请稍后重试；若持续出现，请检查目标文档或文件夹是否已被删除。"
@@ -423,6 +492,8 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             {
                 ReplyDocumentFailureStage.ResolveFolder
                     => $"{target}已生成，但在定位会话文档文件夹时，飞书文件夹资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查该会话文档文件夹是否已被删除。",
+                ReplyDocumentFailureStage.CreateInFolder
+                    => $"{target}已生成，但在归档到会话文档文件夹时，飞书文档或目标文件夹资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查目标文件夹是否已被删除。",
                 ReplyDocumentFailureStage.MoveToFolder
                     => $"{target}已生成，但在移动到会话文档文件夹时，飞书文档或目标文件夹资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查目标文件夹是否已被删除。",
                 _ => $"{target}已生成，但归档到会话文档文件夹时遇到资源不存在或已失效。文档已保留在飞书默认目录；若持续出现，请检查目标文档或文件夹是否已被删除。"
@@ -457,6 +528,30 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         return string.IsNullOrWhiteSpace(compactReason)
             ? $"{target}已生成，但文档管理员权限授予失败，请稍后重试。"
             : $"{target}已生成，但文档管理员权限授予失败：{compactReason}";
+    }
+
+    private static string BuildFolderAdminGrantWarningMessage(string messagePrefix, Exception exception)
+    {
+        var target = ResolveDocumentTarget(messagePrefix);
+        var scopeHint = TryExtractPermissionScopes(exception.Message);
+
+        if (!string.IsNullOrWhiteSpace(scopeHint))
+        {
+            var permissionGuidance = TryExtractPermissionGuidance(exception.Message);
+            return string.IsNullOrWhiteSpace(permissionGuidance)
+                ? $"{target}已生成，但会话文档文件夹管理员权限授予失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。"
+                : $"{target}已生成，但会话文档文件夹管理员权限授予失败：飞书应用缺少文档权限，请开通 {scopeHint} 后重试。{permissionGuidance}";
+        }
+
+        if (IsDriveResourceNotFoundError(exception.Message))
+        {
+            return $"{target}已生成，但会话文档文件夹管理员权限授予失败：目标文件夹资源不存在或已失效，请稍后重试；若持续出现，请检查目标文件夹是否已被删除。";
+        }
+
+        var compactReason = BuildCompactErrorReason(exception.Message);
+        return string.IsNullOrWhiteSpace(compactReason)
+            ? $"{target}已生成，但会话文档文件夹管理员权限授予失败，请稍后重试。"
+            : $"{target}已生成，但会话文档文件夹管理员权限授予失败：{compactReason}";
     }
 
     private static void MarkFailureStage(Exception exception, ReplyDocumentFailureStage failureStage)
@@ -503,7 +598,29 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     private enum ReplyDocumentFailureStage
     {
         ResolveFolder,
+        CreateInFolder,
         MoveToFolder
+    }
+
+    private static bool ShouldAttemptMoveFallbackAfterCreateFailure(Exception exception)
+    {
+        var message = exception.Message;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return true;
+        }
+
+        if (IsDriveResourceNotFoundError(message))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(TryExtractPermissionScopes(message)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private async Task TrySendFailureMessageAsync(

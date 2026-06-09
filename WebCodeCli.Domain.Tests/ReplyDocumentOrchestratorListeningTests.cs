@@ -218,7 +218,7 @@ public sealed class ReplyDocumentOrchestratorListeningTests
         public List<(string Title, string DocumentId, string RootBlockId, string Url)> CreatedDocuments { get; } = [];
         public List<(string DocumentId, string BlockId, string Text)> AppendedTexts { get; } = [];
 
-        public Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, string? folderToken = null)
         {
             CreatedDocuments.Add((title, $"doc-{CreatedDocuments.Count + 1}", $"root-{CreatedDocuments.Count + 1}", $"https://feishu.cn/docx/doc-{CreatedDocuments.Count + 1}"));
             var created = CreatedDocuments[^1];
