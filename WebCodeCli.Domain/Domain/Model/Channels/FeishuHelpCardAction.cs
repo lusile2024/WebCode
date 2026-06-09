@@ -31,6 +31,7 @@ public class FeishuHelpCardAction
     public const string ToggleFinalReplyDocAction = "toggle_final_reply_doc";
     public const string ToggleAudioFullReplyDocAction = "toggle_audio_full_reply_doc";
     public const string ToggleAudioFinalReplyDocAction = "toggle_audio_final_reply_doc";
+    public const string ToggleReferencedMarkdownDocImportAction = "toggle_referenced_markdown_doc_import";
     public const string SetDocumentAdminOpenIdAction = "set_document_admin_openid";
     public const string ToggleReplyTtsAction = ToggleFullReplyDocAction;
     public const string ToggleFinalOnlyReplyTtsAction = ToggleFinalReplyDocAction;

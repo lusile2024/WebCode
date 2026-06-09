@@ -26,7 +26,8 @@ public class FeishuHelpCardBuilder
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true,
         bool audioFullReplyDocEnabled = false,
-        bool audioFinalReplyDocEnabled = false)
+        bool audioFinalReplyDocEnabled = false,
+        bool referencedMarkdownDocImportEnabled = false)
     {
         var elements = new List<object>();
         var fullReplyDocumentEnabled = fullReplyDocEnabled;
@@ -161,6 +162,7 @@ public class FeishuHelpCardBuilder
         elements.Add(BuildAudioReplyDocumentToggleRow(
             audioFullReplyDocEnabled,
             audioFinalReplyDocEnabled));
+        elements.Add(BuildReferencedMarkdownDocImportToggleRow(referencedMarkdownDocImportEnabled));
         elements.Add(BuildDocumentAdminHintElement());
         elements.Add(BuildDocumentAdminActionRow());
 
@@ -205,7 +207,8 @@ public class FeishuHelpCardBuilder
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true,
         bool audioFullReplyDocEnabled = false,
-        bool audioFinalReplyDocEnabled = false)
+        bool audioFinalReplyDocEnabled = false,
+        bool referencedMarkdownDocImportEnabled = false)
     {
         var fullReplyDocumentEnabled = fullReplyDocEnabled;
         var finalReplyDocumentEnabled = finalReplyDocEnabled;
@@ -288,6 +291,8 @@ public class FeishuHelpCardBuilder
                 audioFullReplyDocEnabled,
                 audioFinalReplyDocEnabled));
         var documentAdminInsertIndex = Math.Max(0, elements.Count - 1);
+        elements.Insert(documentAdminInsertIndex, BuildReferencedMarkdownDocImportToggleRow(referencedMarkdownDocImportEnabled));
+        documentAdminInsertIndex++;
         elements.Insert(documentAdminInsertIndex, BuildDocumentAdminHintElement());
         elements.Insert(documentAdminInsertIndex + 1, BuildDocumentAdminActionRow());
 
@@ -1010,7 +1015,8 @@ public class FeishuHelpCardBuilder
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true,
         bool audioFullReplyDocEnabled = false,
-        bool audioFinalReplyDocEnabled = false)
+        bool audioFinalReplyDocEnabled = false,
+        bool referencedMarkdownDocImportEnabled = false)
     {
         var elements = new List<object>();
         var fullReplyDocumentEnabled = fullReplyDocEnabled;
@@ -1145,6 +1151,7 @@ public class FeishuHelpCardBuilder
         elements.Add(BuildAudioReplyDocumentToggleRow(
             audioFullReplyDocEnabled,
             audioFinalReplyDocEnabled));
+        elements.Add(BuildReferencedMarkdownDocImportToggleRow(referencedMarkdownDocImportEnabled));
         elements.Add(BuildDocumentAdminHintElement());
         elements.Add(BuildDocumentAdminActionRow());
 
@@ -1283,6 +1290,7 @@ public class FeishuHelpCardBuilder
     public string BuildFilteredCard(
         List<FeishuCommandCategory> categories,
         string keyword,
+        bool referencedMarkdownDocImportEnabled = false,
         bool showGoalQuickActionButtons = true,
         bool showSuperpowersQuickActions = true)
     {
@@ -1329,6 +1337,8 @@ public class FeishuHelpCardBuilder
                 }
             }
         });
+
+        elements.Add(BuildReferencedMarkdownDocImportToggleRow(referencedMarkdownDocImportEnabled));
 
         elements.Add(new { tag = "hr" });
 
@@ -1659,6 +1669,27 @@ public class FeishuHelpCardBuilder
         };
     }
 
+    private static object BuildReferencedMarkdownDocImportToggleRow(bool referencedMarkdownDocImportEnabled)
+    {
+        return new
+        {
+            tag = "column_set",
+            flex_mode = "none",
+            background_style = "default",
+            columns = new[]
+            {
+                BuildTopActionColumn(
+                    "referenced_markdown_doc_import",
+                    referencedMarkdownDocImportEnabled ? "primary" : "default",
+                    new
+                    {
+                        action = FeishuHelpCardAction.ToggleReferencedMarkdownDocImportAction,
+                        enabled = referencedMarkdownDocImportEnabled
+                    })
+            }
+        };
+    }
+
     #if false
     private static object BuildReplyDocumentToggleRow(
         bool fullReplyDocumentEnabled,
@@ -1875,6 +1906,15 @@ public class FeishuHelpCardBuilder
                 : (text.Contains("\u5f00", StringComparison.Ordinal)
                     ? "\u7ed3\u8bba\u56de\u590d\u6587\u6863\uff1a\u5f00"
                     : "\u7ed3\u8bba\u56de\u590d\u6587\u6863\uff1a\u5173");
+        }
+
+        if (string.Equals(action, FeishuHelpCardAction.ToggleReferencedMarkdownDocImportAction, StringComparison.Ordinal))
+        {
+            return TryResolveToggleState(value, out var referencedMarkdownEnabled)
+                ? (referencedMarkdownEnabled ? "MD转在线文档：开" : "MD转在线文档：关")
+                : (text.Contains("\u5f00", StringComparison.Ordinal)
+                    ? "MD转在线文档：开"
+                    : "MD转在线文档：关");
         }
 
         return text;

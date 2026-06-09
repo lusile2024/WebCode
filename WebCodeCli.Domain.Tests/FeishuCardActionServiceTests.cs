@@ -246,6 +246,37 @@ public class FeishuCardActionServiceTests
     }
 
     [Fact]
+    public async Task HandleCardActionAsync_ToggleReferencedMarkdownDocImport_EnablesMarkdownImportAndRefreshesHelpCard()
+    {
+        var cliExecutor = new RecordingCliExecutorService();
+        var feishuChannel = new StubFeishuChannelService(null)
+        {
+            SessionUsername = "luhaiyan"
+        };
+        var feishuBotConfigService = new StubUserFeishuBotConfigService();
+        var seededConfig = new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            IsEnabled = true
+        };
+        SetBooleanProperty(seededConfig, "ReferencedMarkdownDocImportEnabled", false);
+        feishuBotConfigService.Seed(seededConfig);
+
+        var serviceProvider = new TestServiceProvider(feishuBotConfigService: feishuBotConfigService);
+        var service = CreateService(cliExecutor, feishuChannel, serviceProvider);
+
+        var response = await service.HandleCardActionAsync(
+            """{"action":"toggle_referenced_markdown_doc_import"}""",
+            chatId: "oc_md_toggle_chat");
+
+        var savedConfig = await feishuBotConfigService.GetByUsernameAsync("luhaiyan");
+        Assert.NotNull(savedConfig);
+        Assert.True(GetBooleanProperty(savedConfig!, "ReferencedMarkdownDocImportEnabled"));
+        Assert.Equal("✅ 已开启MD转在线文档", ExtractToastContent(response));
+        Assert.Contains("MD转在线文档：开", ExtractCardContentStrings(response));
+    }
+
+    [Fact]
     public async Task HandleCardActionAsync_ExecuteCommand_ForwardsRawPromptWithoutReplyPrefixInstructions()
     {
         const string chatId = "oc_current_chat";
@@ -6409,6 +6440,20 @@ public class FeishuCardActionServiceTests
             .GetValue(target) as string;
     }
 
+    private static bool GetBooleanProperty(object target, string propertyName)
+    {
+        return target
+                .GetType()
+                .GetProperty(propertyName)?
+                .GetValue(target) as bool?
+            ?? false;
+    }
+
+    private static void SetBooleanProperty(object target, string propertyName, bool value)
+    {
+        target.GetType().GetProperty(propertyName)?.SetValue(target, value);
+    }
+
     private static string? ExtractActionCommandValue(CardActionTriggerResponseDto response, string actionName)
     {
         using var document = JsonDocument.Parse(SerializeResponse(response));
@@ -8549,6 +8594,7 @@ public class FeishuCardActionServiceTests
                 FinalReplyDocEnabled = config.FinalReplyDocEnabled,
                 AudioFullReplyDocEnabled = config.AudioFullReplyDocEnabled,
                 AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled,
+                ReferencedMarkdownDocImportEnabled = config.ReferencedMarkdownDocImportEnabled,
                 LegacyReplyTtsEnabled = config.LegacyReplyTtsEnabled,
                 LegacyReplyTtsMode = config.LegacyReplyTtsMode,
                 LegacyReplyTtsVoiceId = config.LegacyReplyTtsVoiceId,

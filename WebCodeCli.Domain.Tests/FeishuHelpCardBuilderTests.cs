@@ -137,6 +137,32 @@ public class FeishuHelpCardBuilderTests
     }
 
     [Fact]
+    public void BuildCommandListCardV2_WhenReferencedMarkdownImportEnabled_ContainsMarkdownImportToggle()
+    {
+        var card = _builder.BuildCommandListCardV2(
+            CreateCategories(),
+            showRefreshButton: false,
+            referencedMarkdownDocImportEnabled: true);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "MD转在线文档：开"));
+        Assert.True(ContainsAction(bodyDoc.RootElement, "toggle_referenced_markdown_doc_import"));
+    }
+
+    [Fact]
+    public void BuildFilteredCardV2_WhenReferencedMarkdownImportDisabled_ContainsMarkdownImportToggle()
+    {
+        var card = _builder.BuildFilteredCardV2(
+            CreateCategories(),
+            "help",
+            referencedMarkdownDocImportEnabled: false);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsStringValue(bodyDoc.RootElement, "MD转在线文档：关"));
+        Assert.True(ContainsAction(bodyDoc.RootElement, "toggle_referenced_markdown_doc_import"));
+    }
+
+    [Fact]
     public void BuildFilteredCardV2_IncludesListeningReplyDocumentButtons_WhenOnlyListeningFinalReplyDocumentEnabled()
     {
         var card = _builder.BuildFilteredCardV2(

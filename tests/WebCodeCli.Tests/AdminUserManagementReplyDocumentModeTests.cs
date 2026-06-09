@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using WebCodeCli.Controllers;
+using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model.Channels;
+using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 using Xunit;
 
@@ -79,5 +81,139 @@ public sealed class AdminUserManagementReplyDocumentModeTests
         Assert.NotNull(configService.LastSavedConfig);
         Assert.True(configService.LastSavedConfig!.FullReplyDocEnabled);
         Assert.False(configService.LastSavedConfig.FinalReplyDocEnabled);
+    }
+
+    [Fact]
+    public async Task SaveFeishuBotConfig_WhenLegacyModeProvided_KeepsReferencedMarkdownImportIndependent()
+    {
+        var configService = new DirectStubUserFeishuBotConfigService();
+        var controller = CreateDirectController(configService);
+        var request = new UserFeishuBotConfigDto
+        {
+            IsEnabled = true,
+            ReplyTtsMode = ReplyTtsModes.FinalOnly
+        };
+        SetBooleanProperty(request, "ReferencedMarkdownDocImportEnabled", true);
+
+        var result = await controller.SaveFeishuBotConfig("alice", request);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.NotNull(configService.LastSavedConfig);
+        Assert.False(configService.LastSavedConfig!.FullReplyDocEnabled);
+        Assert.True(configService.LastSavedConfig.FinalReplyDocEnabled);
+        Assert.True(GetBooleanProperty(configService.LastSavedConfig, "ReferencedMarkdownDocImportEnabled"));
+    }
+
+    private static bool GetBooleanProperty(object target, string propertyName)
+    {
+        return target
+                .GetType()
+                .GetProperty(propertyName)?
+                .GetValue(target) as bool?
+            ?? false;
+    }
+
+    private static void SetBooleanProperty(object target, string propertyName, bool value)
+    {
+        target.GetType().GetProperty(propertyName)?.SetValue(target, value);
+    }
+
+    private static AdminController CreateDirectController(DirectStubUserFeishuBotConfigService configService)
+    {
+        return new AdminController(
+            new AdminControllerReplyDocumentTestsAccessor.StubUserAccountService(),
+            new AdminControllerReplyDocumentTestsAccessor.StubUserToolPolicyService(),
+            new AdminControllerReplyDocumentTestsAccessor.StubUserWorkspacePolicyService(),
+            configService,
+            new AdminControllerReplyDocumentTestsAccessor.StubUserFeishuBotRuntimeService(),
+            new AdminControllerReplyDocumentTestsAccessor.StubCliExecutorService(),
+            new AdminControllerReplyDocumentTestsAccessor.StubFeishuDocumentAdminGrantService());
+    }
+
+    private sealed class DirectStubUserFeishuBotConfigService : IUserFeishuBotConfigService
+    {
+        public UserFeishuBotConfigEntity? LastSavedConfig { get; private set; }
+
+        public Task<UserFeishuBotConfigEntity?> GetByUsernameAsync(string username)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<UserFeishuBotConfigEntity?> GetByAppIdAsync(string appId)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<UserFeishuBotConfigSaveResult> SaveAsync(UserFeishuBotConfigEntity config)
+        {
+            LastSavedConfig = Clone(config);
+            return Task.FromResult(UserFeishuBotConfigSaveResult.Saved());
+        }
+
+        public Task<bool> DeleteAsync(string username)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<string?> FindConflictingUsernameByAppIdAsync(string username, string? appId)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<List<UserFeishuBotConfigEntity>> GetAutoStartCandidatesAsync()
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<bool> UpdateRuntimePreferenceAsync(string username, bool autoStartEnabled, DateTime? lastStartedAt = null)
+        {
+            throw new NotSupportedException();
+        }
+
+        public FeishuOptions GetSharedDefaults()
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<FeishuOptions> GetEffectiveOptionsAsync(string? username)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<FeishuOptions?> GetEffectiveOptionsByAppIdAsync(string? appId)
+        {
+            throw new NotSupportedException();
+        }
+
+        private static UserFeishuBotConfigEntity Clone(UserFeishuBotConfigEntity entity)
+        {
+            var clone = new UserFeishuBotConfigEntity
+            {
+                Id = entity.Id,
+                Username = entity.Username,
+                IsEnabled = entity.IsEnabled,
+                AutoStartEnabled = entity.AutoStartEnabled,
+                AppId = entity.AppId,
+                AppSecret = entity.AppSecret,
+                EncryptKey = entity.EncryptKey,
+                VerificationToken = entity.VerificationToken,
+                DefaultCardTitle = entity.DefaultCardTitle,
+                ThinkingMessage = entity.ThinkingMessage,
+                HttpTimeoutSeconds = entity.HttpTimeoutSeconds,
+                StreamingThrottleMs = entity.StreamingThrottleMs,
+                FullReplyDocEnabled = entity.FullReplyDocEnabled,
+                FinalReplyDocEnabled = entity.FinalReplyDocEnabled,
+                AudioFullReplyDocEnabled = entity.AudioFullReplyDocEnabled,
+                AudioFinalReplyDocEnabled = entity.AudioFinalReplyDocEnabled,
+                DocumentAdminOpenId = entity.DocumentAdminOpenId,
+                LastStartedAt = entity.LastStartedAt,
+                CreatedAt = entity.CreatedAt,
+                UpdatedAt = entity.UpdatedAt
+            };
+
+            var referencedMarkdownProperty = typeof(UserFeishuBotConfigEntity).GetProperty("ReferencedMarkdownDocImportEnabled");
+            referencedMarkdownProperty?.SetValue(clone, referencedMarkdownProperty.GetValue(entity));
+            return clone;
+        }
     }
 }

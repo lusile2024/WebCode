@@ -62,6 +62,48 @@ public sealed class AdminUserManagementModalStateTests
         Assert.True(GetProperty<bool>(seededFeishu, "AudioFinalReplyDocEnabled"));
     }
 
+    [Fact]
+    public void CreateDetailEditorSeed_PreservesReferencedMarkdownDocImportEnabled_WhenReloadingSameUser()
+    {
+        var editorType = GetNestedType("EditableUserModel");
+        var feishuType = GetNestedType("EditableFeishuBotConfigModel");
+        var summaryType = GetNestedType("UserSummaryDto");
+        var method = GetStaticMethod("CreateDetailEditorSeed");
+
+        var currentEditor = Activator.CreateInstance(editorType, nonPublic: true)!;
+        SetProperty(currentEditor, "Username", "alice");
+
+        var currentFeishu = Activator.CreateInstance(feishuType, nonPublic: true)!;
+        SetOptionalProperty(currentFeishu, "ReferencedMarkdownDocImportEnabled", true);
+        SetProperty(currentEditor, "FeishuBot", currentFeishu);
+
+        var selectedUser = Activator.CreateInstance(summaryType, nonPublic: true)!;
+        SetProperty(selectedUser, "Username", "alice");
+        SetProperty(selectedUser, "DisplayName", "Alice");
+        SetProperty(selectedUser, "Role", UserAccessConstants.UserRole);
+        SetProperty(selectedUser, "Status", UserAccessConstants.EnabledStatus);
+        SetProperty(selectedUser, "CreatedAt", new DateTime(2026, 6, 9, 9, 0, 0, DateTimeKind.Utc));
+
+        var seededEditor = method.Invoke(null, [selectedUser, currentEditor])!;
+        var seededFeishu = GetProperty<object>(seededEditor, "FeishuBot");
+
+        Assert.True(GetOptionalBooleanProperty(seededFeishu, "ReferencedMarkdownDocImportEnabled"));
+    }
+
+    [Fact]
+    public void HasCustomFeishuConfig_ReturnsTrue_WhenOnlyReferencedMarkdownDocImportEnabled()
+    {
+        var feishuType = GetNestedType("EditableFeishuBotConfigModel");
+        var method = GetStaticMethod("HasCustomFeishuConfig");
+        var config = Activator.CreateInstance(feishuType, nonPublic: true)!;
+
+        SetOptionalProperty(config, "ReferencedMarkdownDocImportEnabled", true);
+
+        var result = method.Invoke(null, [config]);
+
+        Assert.Equal(true, result);
+    }
+
     private static Type GetNestedType(string name)
     {
         return ModalType.GetNestedType(name, BindingFlags.NonPublic)
@@ -83,6 +125,19 @@ public sealed class AdminUserManagementModalStateTests
     private static void SetProperty(object instance, string propertyName, object? value)
     {
         GetPropertyInfo(instance.GetType(), propertyName).SetValue(instance, value);
+    }
+
+    private static void SetOptionalProperty(object instance, string propertyName, object? value)
+    {
+        instance.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            ?.SetValue(instance, value);
+    }
+
+    private static bool GetOptionalBooleanProperty(object instance, string propertyName)
+    {
+        return instance.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.GetValue(instance) as bool?
+            ?? false;
     }
 
     private static PropertyInfo GetPropertyInfo(Type type, string propertyName)

@@ -246,6 +246,13 @@
                                                     <div class="text-xs text-gray-500">@Tx("adminUserManagement.audioFinalReplyDocHint", "只写入可听的结论文档版本，只处理 final_answer 内容。", "Write only the listening-friendly conclusion doc from final_answer content.")</div>
                                                 </div>
                                             </label>
+                                            <label class="rounded-2xl border border-gray-200 bg-white px-4 py-3 flex items-start gap-3">
+                                                <input type="checkbox" @bind="_editor.FeishuBot.ReferencedMarkdownDocImportEnabled" class="mt-1 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500" />
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-medium text-gray-800">MD转在线文档</div>
+                                                    <div class="text-xs text-gray-500">Import referenced local Markdown files into Feishu online docs after reply completion.</div>
+                                                </div>
+                                            </label>
                                         </div>
                                         <div class="space-y-2">
                                             <div class="text-sm font-medium text-gray-800">@Tx("adminUserManagement.documentAdminTitle", "文档管理员 OpenID", "Document admin OpenID")</div>

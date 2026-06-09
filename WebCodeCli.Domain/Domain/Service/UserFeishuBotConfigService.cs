@@ -98,6 +98,7 @@ public class UserFeishuBotConfigService : IUserFeishuBotConfigService
         existing.FinalReplyDocEnabled = config.FinalReplyDocEnabled;
         existing.AudioFullReplyDocEnabled = config.AudioFullReplyDocEnabled;
         existing.AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled;
+        existing.ReferencedMarkdownDocImportEnabled = config.ReferencedMarkdownDocImportEnabled;
         existing.DocumentAdminOpenId = config.DocumentAdminOpenId;
         existing.LegacyReplyTtsEnabled = config.LegacyReplyTtsEnabled;
         existing.LegacyReplyTtsMode = config.LegacyReplyTtsMode;

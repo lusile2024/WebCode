@@ -103,6 +103,7 @@ internal static class AdminControllerReplyDocumentTestsAccessor
                 FinalReplyDocEnabled = entity.FinalReplyDocEnabled,
                 AudioFullReplyDocEnabled = entity.AudioFullReplyDocEnabled,
                 AudioFinalReplyDocEnabled = entity.AudioFinalReplyDocEnabled,
+                ReferencedMarkdownDocImportEnabled = entity.ReferencedMarkdownDocImportEnabled,
                 LastStartedAt = entity.LastStartedAt,
                 CreatedAt = entity.CreatedAt,
                 UpdatedAt = entity.UpdatedAt

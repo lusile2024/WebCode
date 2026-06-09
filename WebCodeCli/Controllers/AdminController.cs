@@ -149,7 +149,8 @@ public class AdminController : ControllerBase
                 FullReplyDocEnabled = false,
                 FinalReplyDocEnabled = false,
                 AudioFullReplyDocEnabled = false,
-                AudioFinalReplyDocEnabled = false
+                AudioFinalReplyDocEnabled = false,
+                ReferencedMarkdownDocImportEnabled = false
             });
         }
 
@@ -181,6 +182,7 @@ public class AdminController : ControllerBase
             FinalReplyDocEnabled = finalReplyDocEnabled,
             AudioFullReplyDocEnabled = request.AudioFullReplyDocEnabled,
             AudioFinalReplyDocEnabled = request.AudioFinalReplyDocEnabled,
+            ReferencedMarkdownDocImportEnabled = request.ReferencedMarkdownDocImportEnabled,
             DocumentAdminOpenId = request.DocumentAdminOpenId
         });
 
@@ -327,6 +329,7 @@ public class AdminController : ControllerBase
             FinalReplyDocEnabled = config.FinalReplyDocEnabled,
             AudioFullReplyDocEnabled = config.AudioFullReplyDocEnabled,
             AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled,
+            ReferencedMarkdownDocImportEnabled = config.ReferencedMarkdownDocImportEnabled,
             DocumentAdminOpenId = config.DocumentAdminOpenId
         };
     }
@@ -402,6 +405,7 @@ public sealed class UserFeishuBotConfigDto
     public bool FinalReplyDocEnabled { get; set; }
     public bool AudioFullReplyDocEnabled { get; set; }
     public bool AudioFinalReplyDocEnabled { get; set; }
+    public bool ReferencedMarkdownDocImportEnabled { get; set; }
     public string? DocumentAdminOpenId { get; set; }
 }
 

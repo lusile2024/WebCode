@@ -254,6 +254,8 @@ public class FeishuCardActionService
                     return await HandleToggleAudioFullReplyDocAsync(chatId, operatorUserId);
                 case FeishuHelpCardAction.ToggleAudioFinalReplyDocAction:
                     return await HandleToggleAudioFinalReplyDocAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.ToggleReferencedMarkdownDocImportAction:
+                    return await HandleToggleReferencedMarkdownDocImportAsync(chatId, operatorUserId);
                 case FeishuHelpCardAction.SetDocumentAdminOpenIdAction:
                     return await HandleSetDocumentAdminOpenIdAsync(chatId, operatorUserId, appId);
                 case "execute_command":
@@ -490,6 +492,17 @@ public class FeishuCardActionService
             toggleAudioFinalReplyDoc: true);
     }
 
+    private async Task<CardActionTriggerResponseDto> HandleToggleReferencedMarkdownDocImportAsync(string? chatId, string? operatorUserId)
+    {
+        return await HandleToggleReplyDocumentAsync(
+            chatId,
+            operatorUserId,
+            toggleFullReplyDoc: false,
+            modeDisplayName: "MD转在线文档",
+            defaultFailureMessage: "MD转在线文档更新失败",
+            toggleReferencedMarkdownDocImport: true);
+    }
+
     private async Task<CardActionTriggerResponseDto> HandleSetDocumentAdminOpenIdAsync(
         string? chatId,
         string? operatorUserId,
@@ -543,7 +556,8 @@ public class FeishuCardActionService
         string modeDisplayName,
         string defaultFailureMessage,
         bool toggleAudioFullReplyDoc = false,
-        bool toggleAudioFinalReplyDoc = false)
+        bool toggleAudioFinalReplyDoc = false,
+        bool toggleReferencedMarkdownDocImport = false)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -572,6 +586,10 @@ public class FeishuCardActionService
         else if (toggleAudioFinalReplyDoc)
         {
             config.AudioFinalReplyDocEnabled = !config.AudioFinalReplyDocEnabled;
+        }
+        else if (toggleReferencedMarkdownDocImport)
+        {
+            config.ReferencedMarkdownDocImportEnabled = !config.ReferencedMarkdownDocImportEnabled;
         }
         else if (toggleFullReplyDoc)
         {
@@ -603,6 +621,8 @@ public class FeishuCardActionService
             ? config.AudioFullReplyDocEnabled
             : toggleAudioFinalReplyDoc
                 ? config.AudioFinalReplyDocEnabled
+                : toggleReferencedMarkdownDocImport
+                    ? config.ReferencedMarkdownDocImportEnabled
                 : toggleFullReplyDoc
                     ? config.FullReplyDocEnabled
                     : config.FinalReplyDocEnabled;
@@ -4090,7 +4110,8 @@ public class FeishuCardActionService
             showGoalQuickActionButtons,
             showSuperpowersQuickActions,
             replyDocumentSettings.AudioFullReplyDocEnabled,
-            replyDocumentSettings.AudioFinalReplyDocEnabled);
+            replyDocumentSettings.AudioFinalReplyDocEnabled,
+            replyDocumentSettings.ReferencedMarkdownDocImportEnabled);
     }
 
     private bool ResolveShowGoalQuickActionButtons(string? chatKey, string? username, string? toolId)
@@ -4178,11 +4199,11 @@ public class FeishuCardActionService
                && !HasGoalExecutionConflict(session.SessionId);
     }
 
-    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled, bool AudioFullReplyDocEnabled, bool AudioFinalReplyDocEnabled)> GetReplyDocumentSettingsAsync(string? username)
+    private async Task<(bool FullReplyDocEnabled, bool FinalReplyDocEnabled, bool AudioFullReplyDocEnabled, bool AudioFinalReplyDocEnabled, bool ReferencedMarkdownDocImportEnabled)> GetReplyDocumentSettingsAsync(string? username)
     {
         if (string.IsNullOrWhiteSpace(username))
         {
-            return (false, false, false, false);
+            return (false, false, false, false, false);
         }
 
         using var scope = _serviceProvider.CreateScope();
@@ -4192,7 +4213,8 @@ public class FeishuCardActionService
             config?.FullReplyDocEnabled == true,
             config?.FinalReplyDocEnabled == true,
             config?.AudioFullReplyDocEnabled == true,
-            config?.AudioFinalReplyDocEnabled == true);
+            config?.AudioFinalReplyDocEnabled == true,
+            config?.ReferencedMarkdownDocImportEnabled == true);
     }
 
     private async Task<FeishuOptions> ResolveEffectiveOptionsAsync(string? username, string? appId = null)

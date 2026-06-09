@@ -613,7 +613,8 @@ public partial class AdminUserManagementModal : ComponentBase
                || config.FullReplyDocEnabled
                || config.FinalReplyDocEnabled
                || config.AudioFullReplyDocEnabled
-               || config.AudioFinalReplyDocEnabled;
+               || config.AudioFinalReplyDocEnabled
+               || config.ReferencedMarkdownDocImportEnabled;
     }
 
     private sealed class UserSummaryDto { public string Username { get; set; } = string.Empty; public string? DisplayName { get; set; } public string Role { get; set; } = UserAccessConstants.UserRole; public string Status { get; set; } = UserAccessConstants.EnabledStatus; public DateTime? LastLoginAt { get; set; } public DateTime CreatedAt { get; set; } }
@@ -637,6 +638,7 @@ public partial class AdminUserManagementModal : ComponentBase
         public bool FinalReplyDocEnabled { get; set; }
         public bool AudioFullReplyDocEnabled { get; set; }
         public bool AudioFinalReplyDocEnabled { get; set; }
+        public bool ReferencedMarkdownDocImportEnabled { get; set; }
     }
     private sealed class UserFeishuBotRuntimeStatusModel { public string Username { get; set; } = string.Empty; public string? AppId { get; set; } public string State { get; set; } = nameof(UserFeishuBotRuntimeState.NotConfigured); public bool IsConfigured { get; set; } public bool CanStart { get; set; } public bool ShouldAutoStart { get; set; } public string? Message { get; set; } public string? LastError { get; set; } public DateTime? LastStartedAt { get; set; } public DateTime UpdatedAt { get; set; } public UserFeishuBotRuntimeStatusModel Clone() => new() { Username = Username, AppId = AppId, State = State, IsConfigured = IsConfigured, CanStart = CanStart, ShouldAutoStart = ShouldAutoStart, Message = Message, LastError = LastError, LastStartedAt = LastStartedAt, UpdatedAt = UpdatedAt }; }
     private sealed class EditableFeishuBotConfigModel
@@ -655,6 +657,7 @@ public partial class AdminUserManagementModal : ComponentBase
         public bool FinalReplyDocEnabled { get; set; }
         public bool AudioFullReplyDocEnabled { get; set; }
         public bool AudioFinalReplyDocEnabled { get; set; }
+        public bool ReferencedMarkdownDocImportEnabled { get; set; }
 
         public EditableFeishuBotConfigModel Clone() => new()
         {
@@ -671,7 +674,8 @@ public partial class AdminUserManagementModal : ComponentBase
             FullReplyDocEnabled = FullReplyDocEnabled,
             FinalReplyDocEnabled = FinalReplyDocEnabled,
             AudioFullReplyDocEnabled = AudioFullReplyDocEnabled,
-            AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled
+            AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled,
+            ReferencedMarkdownDocImportEnabled = ReferencedMarkdownDocImportEnabled
         };
 
         public static EditableFeishuBotConfigModel From(UserFeishuBotConfigModel model) => new()
@@ -689,7 +693,8 @@ public partial class AdminUserManagementModal : ComponentBase
             FullReplyDocEnabled = model.FullReplyDocEnabled,
             FinalReplyDocEnabled = model.FinalReplyDocEnabled,
             AudioFullReplyDocEnabled = model.AudioFullReplyDocEnabled,
-            AudioFinalReplyDocEnabled = model.AudioFinalReplyDocEnabled
+            AudioFinalReplyDocEnabled = model.AudioFinalReplyDocEnabled,
+            ReferencedMarkdownDocImportEnabled = model.ReferencedMarkdownDocImportEnabled
         };
 
         public UserFeishuBotConfigModel ToPayload(string username) => new()
@@ -708,7 +713,8 @@ public partial class AdminUserManagementModal : ComponentBase
             FullReplyDocEnabled = FullReplyDocEnabled,
             FinalReplyDocEnabled = FinalReplyDocEnabled,
             AudioFullReplyDocEnabled = AudioFullReplyDocEnabled,
-            AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled
+            AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled,
+            ReferencedMarkdownDocImportEnabled = ReferencedMarkdownDocImportEnabled
         };
     }
     private sealed class EditableUserModel { public string Username { get; set; } = string.Empty; public string DisplayName { get; set; } = string.Empty; public string Password { get; set; } = string.Empty; public string Role { get; set; } = UserAccessConstants.UserRole; public bool Enabled { get; set; } = true; public bool IsExistingUser { get; set; } public bool HasStoredFeishuConfig { get; set; } public DateTime? LastLoginAt { get; set; } public DateTime? CreatedAt { get; set; } public HashSet<string> AllowedToolIds { get; set; } = new(StringComparer.OrdinalIgnoreCase); public string AllowedDirectoriesText { get; set; } = string.Empty; public EditableFeishuBotConfigModel FeishuBot { get; set; } = new(); public static EditableUserModel CreateNew() => new() { AllowedToolIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase) }; public static EditableUserModel FromSummary(UserSummaryDto user) => new() { Username = user.Username, DisplayName = user.DisplayName ?? string.Empty, Role = user.Role, Enabled = IsEnabled(user.Status), IsExistingUser = true, LastLoginAt = user.LastLoginAt, CreatedAt = user.CreatedAt, AllowedToolIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase) }; }

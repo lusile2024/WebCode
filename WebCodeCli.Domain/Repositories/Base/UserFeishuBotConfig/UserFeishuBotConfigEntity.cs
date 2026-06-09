@@ -54,6 +54,9 @@ public class UserFeishuBotConfigEntity
     [SugarColumn(IsNullable = false)]
     public bool AudioFinalReplyDocEnabled { get; set; }
 
+    [SugarColumn(IsNullable = false)]
+    public bool ReferencedMarkdownDocImportEnabled { get; set; }
+
     [SugarColumn(Length = 256, IsNullable = true)]
     public string? DocumentAdminOpenId { get; set; }
 
