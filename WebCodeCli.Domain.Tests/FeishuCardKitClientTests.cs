@@ -265,6 +265,199 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task ConvertMarkdownToCloudDocumentBlocksAsync_PostsMarkdownConvertRequestAndReturnsBlocks()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"first_level_block_ids":["blk-heading"],"blocks":[{"block_id":"blk-heading","block_type":3,"children":[],"heading1":{"elements":[{"text_run":{"content":"标题","text_element_style":{}}}]}}]}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var blocksData = await client.ConvertMarkdownToCloudDocumentBlocksAsync(
+            "# 标题",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/docx/v1/documents/blocks/convert"
+        ], handler.RequestPaths);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("markdown", requestDoc.RootElement.GetProperty("content_type").GetString());
+        Assert.Equal("# 标题", requestDoc.RootElement.GetProperty("content").GetString());
+
+        Assert.Equal("blk-heading", blocksData.GetProperty("first_level_block_ids")[0].GetString());
+        Assert.Equal(3, blocksData.GetProperty("blocks")[0].GetProperty("block_type").GetInt32());
+        Assert.Equal("标题", blocksData.GetProperty("blocks")[0].GetProperty("heading1").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task AppendCloudDocumentBlocksAsync_PostsProvidedBlocksToChildrenEndpoint()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"children":[{"block_id":"blk-created"}]}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var blocks = ParseJsonElementArray("""[{"block_type":2,"text":{"elements":[{"text_run":{"content":"转换后的段落","text_element_style":{}}}]}}]""");
+
+        await client.AppendCloudDocumentBlocksAsync(
+            "doccn123",
+            "root123",
+            blocks,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/docx/v1/documents/doccn123/blocks/root123/children"
+        ], handler.RequestPaths);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        var children = requestDoc.RootElement.GetProperty("children");
+        Assert.Equal(1, children.GetArrayLength());
+        Assert.Equal(2, children[0].GetProperty("block_type").GetInt32());
+        Assert.Equal("转换后的段落", children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task FindCloudDocumentInFolderByTitleAsync_WhenExactDocxTitleExists_ReturnsDocumentInfo()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"files":[{"name":"docs/guide.md","token":"file_123","type":"file"},{"name":"docs/guide.md","token":"doccn123","type":"docx","url":"https://feishu.cn/docx/doccn123"}],"has_more":false}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var document = await client.FindCloudDocumentInFolderByTitleAsync(
+            "fld-target",
+            "docs/guide.md",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(document);
+        Assert.Equal("doccn123", document!.DocumentId);
+        Assert.Equal("doccn123", document.RootBlockId);
+        Assert.Equal("https://feishu.cn/docx/doccn123", document.Url);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/files"
+        ], handler.RequestPaths);
+        Assert.Contains("folder_token=fld-target", handler.RequestQueries[1], StringComparison.Ordinal);
+        Assert.Contains("page_size=200", handler.RequestQueries[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UploadCloudFileAsync_PostsMultipartFormDataAndReturnsFileToken()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"file_token":"file_token_123"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var fileContent = global::System.Text.Encoding.UTF8.GetBytes("# 标题\r\n\r\n正文");
+
+        var fileToken = await client.UploadCloudFileAsync(
+            "notes.md",
+            fileContent,
+            "fld-target",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("file_token_123", fileToken);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/files/upload_all"
+        ], handler.RequestPaths);
+        Assert.Equal("POST", handler.RequestMethods[1]);
+        Assert.StartsWith("multipart/form-data", handler.RequestContentTypes[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("name=file_name", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("notes.md", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("name=parent_type", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("explorer", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("name=parent_node", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("fld-target", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("name=size", handler.RequestBodies[1], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ImportMarkdownFileAsCloudDocumentAsync_UploadsCreatesImportTaskPollsAndReturnsDocumentInfo()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"file_token":"file_token_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"ticket":"ticket_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"result":{"ticket":"ticket_123","job_status":1,"job_error_msg":"pending"}}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"result":{"ticket":"ticket_123","job_status":0,"job_error_msg":"success","token":"doccn123","url":"https://feishu.cn/docx/doccn123"}}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var fileContent = global::System.Text.Encoding.UTF8.GetBytes("# 标题\r\n\r\n正文");
+
+        var document = await client.ImportMarkdownFileAsCloudDocumentAsync(
+            "notes.md",
+            fileContent,
+            "docs/guide.md",
+            "fld-target",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("doccn123", document.DocumentId);
+        Assert.Equal("doccn123", document.RootBlockId);
+        Assert.Equal("https://feishu.cn/docx/doccn123", document.Url);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/files/upload_all",
+            "/open-apis/drive/v1/import_tasks",
+            "/open-apis/drive/v1/import_tasks/ticket_123",
+            "/open-apis/drive/v1/import_tasks/ticket_123"
+        ], handler.RequestPaths);
+
+        using var createImportTaskRequest = JsonDocument.Parse(handler.RequestBodies[2]);
+        Assert.Equal("md", createImportTaskRequest.RootElement.GetProperty("file_extension").GetString());
+        Assert.Equal("file_token_123", createImportTaskRequest.RootElement.GetProperty("file_token").GetString());
+        Assert.Equal("docx", createImportTaskRequest.RootElement.GetProperty("type").GetString());
+        Assert.Equal("docs/guide.md", createImportTaskRequest.RootElement.GetProperty("file_name").GetString());
+        Assert.Equal(1, createImportTaskRequest.RootElement.GetProperty("point").GetProperty("mount_type").GetInt32());
+        Assert.Equal("fld-target", createImportTaskRequest.RootElement.GetProperty("point").GetProperty("mount_key").GetString());
+    }
+
+    [Fact]
+    public async Task ImportMarkdownFileAsCloudDocumentAsync_WhenImportTaskFails_ThrowsChineseError()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"file_token":"file_token_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"ticket":"ticket_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"result":{"ticket":"ticket_123","job_status":118,"job_error_msg":"上传文件和导入任务文件后缀不一致"}}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ImportMarkdownFileAsCloudDocumentAsync(
+                "notes.md",
+                global::System.Text.Encoding.UTF8.GetBytes("# 标题"),
+                "docs/guide.md",
+                "fld-target",
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("Markdown 导入失败", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("上传文件和导入任务文件后缀不一致", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CreateCloudDocumentAsync_WhenApiReturnsBadRequest_ExceptionIncludesResponseBody()
     {
         var handler = new StubHttpMessageHandler(
@@ -1370,6 +1563,15 @@ public class FeishuCardKitClientTests
         return string.Join(
             Environment.NewLine,
             Enumerable.Range(0, 360).Select(index => $"line {index:000} {new string('x', 24)}"));
+    }
+
+    private static JsonElement[] ParseJsonElementArray(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement
+            .EnumerateArray()
+            .Select(element => element.Clone())
+            .ToArray();
     }
 
     private static FeishuCardKitClient CreateClient(HttpMessageHandler handler, FeishuOptions? optionsOverride = null)

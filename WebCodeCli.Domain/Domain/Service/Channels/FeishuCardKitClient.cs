@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -547,6 +548,295 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         var result = await ParseResponseAsync(response, cancellationToken);
         EnsureBusinessSuccess(result, "Move Feishu cloud document to folder");
+    }
+
+    public async Task<JsonElement> ConvertMarkdownToCloudDocumentBlocksAsync(
+        string markdown,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            throw new ArgumentException("Markdown 内容不能为空。", nameof(markdown));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            content_type = "markdown",
+            content = markdown
+        };
+
+        var response = await PostAsync(
+            "/open-apis/docx/v1/documents/blocks/convert",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Convert Feishu markdown to cloud document blocks");
+
+        if (result.TryGetProperty("data", out var data))
+        {
+            return data.Clone();
+        }
+
+        throw new InvalidOperationException("Markdown 转换响应缺少 data。");
+    }
+
+    public async Task AppendCloudDocumentBlocksAsync(
+        string documentId,
+        string blockId,
+        IReadOnlyCollection<JsonElement> blocks,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("文档 ID 不能为空。", nameof(documentId));
+        }
+
+        if (string.IsNullOrWhiteSpace(blockId))
+        {
+            throw new ArgumentException("块 ID 不能为空。", nameof(blockId));
+        }
+
+        ArgumentNullException.ThrowIfNull(blocks);
+
+        if (blocks.Count == 0)
+        {
+            return;
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            children = blocks.Select(block => (object)block).ToArray(),
+            index = 0
+        };
+
+        var response = await PostAsync(
+            $"/open-apis/docx/v1/documents/{Uri.EscapeDataString(documentId)}/blocks/{Uri.EscapeDataString(blockId)}/children",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Append Feishu cloud document blocks");
+    }
+
+    public async Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(
+        string folderToken,
+        string title,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(folderToken))
+        {
+            throw new ArgumentException("文件夹 Token 不能为空。", nameof(folderToken));
+        }
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            throw new ArgumentException("文档标题不能为空。", nameof(title));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        string? pageToken = null;
+
+        do
+        {
+            var queryBuilder = new StringBuilder("/open-apis/drive/v1/files?page_size=200");
+            queryBuilder.Append("&folder_token=").Append(Uri.EscapeDataString(folderToken.Trim()));
+            queryBuilder.Append("&order_by=EditedTime");
+            if (!string.IsNullOrWhiteSpace(pageToken))
+            {
+                queryBuilder.Append("&page_token=").Append(Uri.EscapeDataString(pageToken));
+            }
+
+            var response = await GetAsync(
+                queryBuilder.ToString(),
+                token,
+                effectiveOptions,
+                cancellationToken);
+
+            var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "List Feishu cloud folder items");
+
+            if (!result.TryGetProperty("data", out var data))
+            {
+                return null;
+            }
+
+            if (data.TryGetProperty("files", out var files)
+                && files.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var file in files.EnumerateArray())
+                {
+                    var currentTitle = file.TryGetProperty("name", out var nameProp)
+                        ? nameProp.GetString()
+                        : null;
+                    var type = file.TryGetProperty("type", out var typeProp)
+                        ? typeProp.GetString()
+                        : null;
+                    var documentId = file.TryGetProperty("token", out var tokenProp)
+                        ? tokenProp.GetString()
+                        : null;
+
+                    if (!string.Equals(currentTitle, title, StringComparison.Ordinal)
+                        || !string.Equals(type, "docx", StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrWhiteSpace(documentId))
+                    {
+                        continue;
+                    }
+
+                    var url = file.TryGetProperty("url", out var urlProp)
+                        ? urlProp.GetString()
+                        : null;
+
+                    return new FeishuCloudDocumentInfo
+                    {
+                        DocumentId = documentId,
+                        RootBlockId = documentId,
+                        Url = string.IsNullOrWhiteSpace(url) ? BuildCloudDocumentUrl(documentId) : url
+                    };
+                }
+            }
+
+            var hasMore = data.TryGetProperty("has_more", out var hasMoreProp)
+                && hasMoreProp.ValueKind == JsonValueKind.True;
+            pageToken = hasMore
+                && data.TryGetProperty("next_page_token", out var nextPageTokenProp)
+                ? nextPageTokenProp.GetString()
+                : null;
+        }
+        while (!string.IsNullOrWhiteSpace(pageToken));
+
+        return null;
+    }
+
+    public async Task<string> UploadCloudFileAsync(
+        string fileName,
+        byte[] content,
+        string folderToken,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            throw new ArgumentException("文件名不能为空。", nameof(fileName));
+        }
+
+        ArgumentNullException.ThrowIfNull(content);
+
+        if (content.Length == 0)
+        {
+            throw new ArgumentException("文件内容不能为空。", nameof(content));
+        }
+
+        if (string.IsNullOrWhiteSpace(folderToken))
+        {
+            throw new ArgumentException("文件夹 Token 不能为空。", nameof(folderToken));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        using var formData = new MultipartFormDataContent();
+        formData.Add(new StringContent(fileName), "file_name");
+        formData.Add(new StringContent("explorer"), "parent_type");
+        formData.Add(new StringContent(folderToken.Trim()), "parent_node");
+        formData.Add(new StringContent(content.Length.ToString()), "size");
+
+        var fileContent = new ByteArrayContent(content);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("text/markdown");
+        formData.Add(fileContent, "file", fileName);
+
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/open-apis/drive/v1/files/upload_all");
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Content = formData;
+
+        var response = await SendAsync(request, effectiveOptions, cancellationToken);
+        var result = await ParseResponseAsync(response, cancellationToken);
+        EnsureBusinessSuccess(result, "Upload Feishu cloud file");
+
+        if (result.TryGetProperty("data", out var data)
+            && data.TryGetProperty("file_token", out var fileTokenProp)
+            && !string.IsNullOrWhiteSpace(fileTokenProp.GetString()))
+        {
+            return fileTokenProp.GetString()!;
+        }
+
+        throw new InvalidOperationException("上传云空间文件响应缺少 file_token。");
+    }
+
+    public async Task<FeishuCloudDocumentInfo> ImportMarkdownFileAsCloudDocumentAsync(
+        string fileName,
+        byte[] content,
+        string title,
+        string folderToken,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            throw new ArgumentException("文档标题不能为空。", nameof(title));
+        }
+
+        var fileToken = await UploadCloudFileAsync(
+            fileName,
+            content,
+            folderToken,
+            cancellationToken,
+            optionsOverride);
+
+        var extension = Path.GetExtension(fileName);
+        var normalizedExtension = string.IsNullOrWhiteSpace(extension)
+            ? "md"
+            : extension.TrimStart('.').ToLowerInvariant();
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var payload = new
+        {
+            file_extension = normalizedExtension,
+            file_token = fileToken,
+            type = "docx",
+            file_name = title,
+            point = new
+            {
+                mount_type = 1,
+                mount_key = folderToken.Trim()
+            }
+        };
+
+        var createResponse = await PostAsync(
+            "/open-apis/drive/v1/import_tasks",
+            token,
+            payload,
+            effectiveOptions,
+            cancellationToken);
+
+        var createResult = await ParseResponseAsync(createResponse, cancellationToken);
+        EnsureBusinessSuccess(createResult, "Create Feishu markdown import task");
+
+        if (!createResult.TryGetProperty("data", out var createData)
+            || !createData.TryGetProperty("ticket", out var ticketProp)
+            || string.IsNullOrWhiteSpace(ticketProp.GetString()))
+        {
+            throw new InvalidOperationException("Markdown 导入任务响应缺少 ticket。");
+        }
+
+        var ticket = ticketProp.GetString()!;
+        return await PollImportMarkdownFileAsCloudDocumentAsync(
+            ticket,
+            token,
+            effectiveOptions,
+            cancellationToken);
     }
 
     public async Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(
@@ -1554,6 +1844,67 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         while (!string.IsNullOrWhiteSpace(pageToken));
 
         return null;
+    }
+
+    private async Task<FeishuCloudDocumentInfo> PollImportMarkdownFileAsCloudDocumentAsync(
+        string ticket,
+        string token,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var response = await GetAsync(
+                $"/open-apis/drive/v1/import_tasks/{Uri.EscapeDataString(ticket)}",
+                token,
+                options,
+                cancellationToken);
+
+            var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "Get Feishu markdown import task");
+
+            if (!result.TryGetProperty("data", out var data)
+                || !data.TryGetProperty("result", out var importResult))
+            {
+                throw new InvalidOperationException("Markdown 导入结果响应缺少 result。");
+            }
+
+            var jobStatus = importResult.TryGetProperty("job_status", out var jobStatusProp)
+                ? jobStatusProp.GetInt32()
+                : -1;
+
+            if (jobStatus == 0)
+            {
+                var documentId = importResult.TryGetProperty("token", out var tokenProp)
+                    ? tokenProp.GetString()
+                    : null;
+                var url = importResult.TryGetProperty("url", out var urlProp)
+                    ? urlProp.GetString()
+                    : null;
+
+                if (string.IsNullOrWhiteSpace(documentId))
+                {
+                    throw new InvalidOperationException("Markdown 导入成功但缺少文档 token。");
+                }
+
+                return new FeishuCloudDocumentInfo
+                {
+                    DocumentId = documentId,
+                    RootBlockId = documentId,
+                    Url = string.IsNullOrWhiteSpace(url) ? BuildCloudDocumentUrl(documentId) : url
+                };
+            }
+
+            if (jobStatus == 1 || jobStatus == 2)
+            {
+                continue;
+            }
+
+            var message = importResult.TryGetProperty("job_error_msg", out var errorProp)
+                ? errorProp.GetString()
+                : null;
+            throw new InvalidOperationException($"Markdown 导入失败：{message ?? $"任务状态 {jobStatus}"}");
+        }
     }
 
     private static string TryResolveDownloadFileName(

@@ -1,6 +1,7 @@
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using FeishuNetSdk.Im.Dtos;
+using System.Text.Json;
 
 namespace WebCodeCli.Domain.Domain.Service.Channels;
 
@@ -144,6 +145,54 @@ public interface IFeishuCardKitClient
 
     Task MoveCloudDocumentToFolderAsync(
         string documentId,
+        string folderToken,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task<JsonElement> ConvertMarkdownToCloudDocumentBlocksAsync(
+        string markdown,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task AppendCloudDocumentBlocksAsync(
+        string documentId,
+        string blockId,
+        IReadOnlyCollection<JsonElement> blocks,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(
+        string folderToken,
+        string title,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task<string> UploadCloudFileAsync(
+        string fileName,
+        byte[] content,
+        string folderToken,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task<FeishuCloudDocumentInfo> ImportMarkdownFileAsCloudDocumentAsync(
+        string fileName,
+        byte[] content,
+        string title,
         string folderToken,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
