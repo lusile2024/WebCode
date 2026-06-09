@@ -98,6 +98,7 @@ public class UserFeishuBotConfigService : IUserFeishuBotConfigService
         existing.FinalReplyDocEnabled = config.FinalReplyDocEnabled;
         existing.AudioFullReplyDocEnabled = config.AudioFullReplyDocEnabled;
         existing.AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled;
+        existing.DocumentAdminOpenId = config.DocumentAdminOpenId;
         existing.LegacyReplyTtsEnabled = config.LegacyReplyTtsEnabled;
         existing.LegacyReplyTtsMode = config.LegacyReplyTtsMode;
         existing.LegacyReplyTtsVoiceId = config.LegacyReplyTtsVoiceId;
@@ -207,6 +208,7 @@ public class UserFeishuBotConfigService : IUserFeishuBotConfigService
         config.ThinkingMessage = NormalizeValue(config.ThinkingMessage);
         config.LegacyReplyTtsMode = NormalizeValue(config.LegacyReplyTtsMode);
         config.LegacyReplyTtsVoiceId = NormalizeValue(config.LegacyReplyTtsVoiceId);
+        config.DocumentAdminOpenId = NormalizeValue(config.DocumentAdminOpenId);
         var legacyReplyTtsMode = ReplyTtsModes.Resolve(config.LegacyReplyTtsMode, config.LegacyReplyTtsEnabled == true);
         config.FullReplyDocEnabled = config.FullReplyDocEnabled
             || string.Equals(legacyReplyTtsMode, ReplyTtsModes.FullReply, StringComparison.Ordinal);

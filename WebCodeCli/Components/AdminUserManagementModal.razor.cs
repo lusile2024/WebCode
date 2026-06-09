@@ -607,6 +607,7 @@ public partial class AdminUserManagementModal : ComponentBase
                    config.VerificationToken,
                    config.DefaultCardTitle,
                    config.ThinkingMessage,
+                   config.DocumentAdminOpenId,
                    config.HttpTimeoutSeconds,
                    config.StreamingThrottleMs)
                || config.FullReplyDocEnabled
@@ -619,9 +620,97 @@ public partial class AdminUserManagementModal : ComponentBase
     private sealed class SaveUserPayload { public string Username { get; set; } = string.Empty; public string? DisplayName { get; set; } public string? Password { get; set; } public string Role { get; set; } = UserAccessConstants.UserRole; public string Status { get; set; } = UserAccessConstants.EnabledStatus; }
     private sealed class SaveToolPolicyPayload { public List<string> AllowedToolIds { get; set; } = new(); }
     private sealed class SaveWorkspacePolicyPayload { public List<string> AllowedDirectories { get; set; } = new(); }
-    private sealed class UserFeishuBotConfigModel { public string? Username { get; set; } public bool IsEnabled { get; set; } public string? AppId { get; set; } public string? AppSecret { get; set; } public string? EncryptKey { get; set; } public string? VerificationToken { get; set; } public string? DefaultCardTitle { get; set; } public string? ThinkingMessage { get; set; } public int? HttpTimeoutSeconds { get; set; } public int? StreamingThrottleMs { get; set; } public bool FullReplyDocEnabled { get; set; } public bool FinalReplyDocEnabled { get; set; } public bool AudioFullReplyDocEnabled { get; set; } public bool AudioFinalReplyDocEnabled { get; set; } }
+    private sealed class UserFeishuBotConfigModel
+    {
+        public string? Username { get; set; }
+        public bool IsEnabled { get; set; }
+        public string? AppId { get; set; }
+        public string? AppSecret { get; set; }
+        public string? EncryptKey { get; set; }
+        public string? VerificationToken { get; set; }
+        public string? DefaultCardTitle { get; set; }
+        public string? ThinkingMessage { get; set; }
+        public string? DocumentAdminOpenId { get; set; }
+        public int? HttpTimeoutSeconds { get; set; }
+        public int? StreamingThrottleMs { get; set; }
+        public bool FullReplyDocEnabled { get; set; }
+        public bool FinalReplyDocEnabled { get; set; }
+        public bool AudioFullReplyDocEnabled { get; set; }
+        public bool AudioFinalReplyDocEnabled { get; set; }
+    }
     private sealed class UserFeishuBotRuntimeStatusModel { public string Username { get; set; } = string.Empty; public string? AppId { get; set; } public string State { get; set; } = nameof(UserFeishuBotRuntimeState.NotConfigured); public bool IsConfigured { get; set; } public bool CanStart { get; set; } public bool ShouldAutoStart { get; set; } public string? Message { get; set; } public string? LastError { get; set; } public DateTime? LastStartedAt { get; set; } public DateTime UpdatedAt { get; set; } public UserFeishuBotRuntimeStatusModel Clone() => new() { Username = Username, AppId = AppId, State = State, IsConfigured = IsConfigured, CanStart = CanStart, ShouldAutoStart = ShouldAutoStart, Message = Message, LastError = LastError, LastStartedAt = LastStartedAt, UpdatedAt = UpdatedAt }; }
-    private sealed class EditableFeishuBotConfigModel { public bool IsEnabled { get; set; } public string? AppId { get; set; } public string? AppSecret { get; set; } public string? EncryptKey { get; set; } public string? VerificationToken { get; set; } public string? DefaultCardTitle { get; set; } public string? ThinkingMessage { get; set; } public int? HttpTimeoutSeconds { get; set; } public int? StreamingThrottleMs { get; set; } public bool FullReplyDocEnabled { get; set; } public bool FinalReplyDocEnabled { get; set; } public bool AudioFullReplyDocEnabled { get; set; } public bool AudioFinalReplyDocEnabled { get; set; } public EditableFeishuBotConfigModel Clone() => new() { IsEnabled = IsEnabled, AppId = AppId, AppSecret = AppSecret, EncryptKey = EncryptKey, VerificationToken = VerificationToken, DefaultCardTitle = DefaultCardTitle, ThinkingMessage = ThinkingMessage, HttpTimeoutSeconds = HttpTimeoutSeconds, StreamingThrottleMs = StreamingThrottleMs, FullReplyDocEnabled = FullReplyDocEnabled, FinalReplyDocEnabled = FinalReplyDocEnabled, AudioFullReplyDocEnabled = AudioFullReplyDocEnabled, AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled }; public static EditableFeishuBotConfigModel From(UserFeishuBotConfigModel model) => new() { IsEnabled = model.IsEnabled, AppId = model.AppId, AppSecret = model.AppSecret, EncryptKey = model.EncryptKey, VerificationToken = model.VerificationToken, DefaultCardTitle = model.DefaultCardTitle, ThinkingMessage = model.ThinkingMessage, HttpTimeoutSeconds = model.HttpTimeoutSeconds, StreamingThrottleMs = model.StreamingThrottleMs, FullReplyDocEnabled = model.FullReplyDocEnabled, FinalReplyDocEnabled = model.FinalReplyDocEnabled, AudioFullReplyDocEnabled = model.AudioFullReplyDocEnabled, AudioFinalReplyDocEnabled = model.AudioFinalReplyDocEnabled }; public UserFeishuBotConfigModel ToPayload(string username) => new() { Username = username, IsEnabled = IsEnabled, AppId = TrimToNull(AppId), AppSecret = TrimToNull(AppSecret), EncryptKey = TrimToNull(EncryptKey), VerificationToken = TrimToNull(VerificationToken), DefaultCardTitle = TrimToNull(DefaultCardTitle), ThinkingMessage = TrimToNull(ThinkingMessage), HttpTimeoutSeconds = HttpTimeoutSeconds, StreamingThrottleMs = StreamingThrottleMs, FullReplyDocEnabled = FullReplyDocEnabled, FinalReplyDocEnabled = FinalReplyDocEnabled, AudioFullReplyDocEnabled = AudioFullReplyDocEnabled, AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled }; }
+    private sealed class EditableFeishuBotConfigModel
+    {
+        public bool IsEnabled { get; set; }
+        public string? AppId { get; set; }
+        public string? AppSecret { get; set; }
+        public string? EncryptKey { get; set; }
+        public string? VerificationToken { get; set; }
+        public string? DefaultCardTitle { get; set; }
+        public string? ThinkingMessage { get; set; }
+        public string? DocumentAdminOpenId { get; set; }
+        public int? HttpTimeoutSeconds { get; set; }
+        public int? StreamingThrottleMs { get; set; }
+        public bool FullReplyDocEnabled { get; set; }
+        public bool FinalReplyDocEnabled { get; set; }
+        public bool AudioFullReplyDocEnabled { get; set; }
+        public bool AudioFinalReplyDocEnabled { get; set; }
+
+        public EditableFeishuBotConfigModel Clone() => new()
+        {
+            IsEnabled = IsEnabled,
+            AppId = AppId,
+            AppSecret = AppSecret,
+            EncryptKey = EncryptKey,
+            VerificationToken = VerificationToken,
+            DefaultCardTitle = DefaultCardTitle,
+            ThinkingMessage = ThinkingMessage,
+            DocumentAdminOpenId = DocumentAdminOpenId,
+            HttpTimeoutSeconds = HttpTimeoutSeconds,
+            StreamingThrottleMs = StreamingThrottleMs,
+            FullReplyDocEnabled = FullReplyDocEnabled,
+            FinalReplyDocEnabled = FinalReplyDocEnabled,
+            AudioFullReplyDocEnabled = AudioFullReplyDocEnabled,
+            AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled
+        };
+
+        public static EditableFeishuBotConfigModel From(UserFeishuBotConfigModel model) => new()
+        {
+            IsEnabled = model.IsEnabled,
+            AppId = model.AppId,
+            AppSecret = model.AppSecret,
+            EncryptKey = model.EncryptKey,
+            VerificationToken = model.VerificationToken,
+            DefaultCardTitle = model.DefaultCardTitle,
+            ThinkingMessage = model.ThinkingMessage,
+            DocumentAdminOpenId = model.DocumentAdminOpenId,
+            HttpTimeoutSeconds = model.HttpTimeoutSeconds,
+            StreamingThrottleMs = model.StreamingThrottleMs,
+            FullReplyDocEnabled = model.FullReplyDocEnabled,
+            FinalReplyDocEnabled = model.FinalReplyDocEnabled,
+            AudioFullReplyDocEnabled = model.AudioFullReplyDocEnabled,
+            AudioFinalReplyDocEnabled = model.AudioFinalReplyDocEnabled
+        };
+
+        public UserFeishuBotConfigModel ToPayload(string username) => new()
+        {
+            Username = username,
+            IsEnabled = IsEnabled,
+            AppId = TrimToNull(AppId),
+            AppSecret = TrimToNull(AppSecret),
+            EncryptKey = TrimToNull(EncryptKey),
+            VerificationToken = TrimToNull(VerificationToken),
+            DefaultCardTitle = TrimToNull(DefaultCardTitle),
+            ThinkingMessage = TrimToNull(ThinkingMessage),
+            DocumentAdminOpenId = TrimToNull(DocumentAdminOpenId),
+            HttpTimeoutSeconds = HttpTimeoutSeconds,
+            StreamingThrottleMs = StreamingThrottleMs,
+            FullReplyDocEnabled = FullReplyDocEnabled,
+            FinalReplyDocEnabled = FinalReplyDocEnabled,
+            AudioFullReplyDocEnabled = AudioFullReplyDocEnabled,
+            AudioFinalReplyDocEnabled = AudioFinalReplyDocEnabled
+        };
+    }
     private sealed class EditableUserModel { public string Username { get; set; } = string.Empty; public string DisplayName { get; set; } = string.Empty; public string Password { get; set; } = string.Empty; public string Role { get; set; } = UserAccessConstants.UserRole; public bool Enabled { get; set; } = true; public bool IsExistingUser { get; set; } public bool HasStoredFeishuConfig { get; set; } public DateTime? LastLoginAt { get; set; } public DateTime? CreatedAt { get; set; } public HashSet<string> AllowedToolIds { get; set; } = new(StringComparer.OrdinalIgnoreCase); public string AllowedDirectoriesText { get; set; } = string.Empty; public EditableFeishuBotConfigModel FeishuBot { get; set; } = new(); public static EditableUserModel CreateNew() => new() { AllowedToolIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase) }; public static EditableUserModel FromSummary(UserSummaryDto user) => new() { Username = user.Username, DisplayName = user.DisplayName ?? string.Empty, Role = user.Role, Enabled = IsEnabled(user.Status), IsExistingUser = true, LastLoginAt = user.LastLoginAt, CreatedAt = user.CreatedAt, AllowedToolIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase) }; }
     private static string? TrimToNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

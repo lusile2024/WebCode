@@ -79,7 +79,108 @@ public static partial class ListeningReplyDocumentFormatter
             return placeholder;
         });
 
+        rewritten = ExtractStandaloneCommandLines(rewritten, commandMapping, orderedCommands);
+
         return new CommandExtractionResult(rewritten, orderedCommands, maskedCodeBlocks);
+    }
+
+    private static string ExtractStandaloneCommandLines(
+        string input,
+        IDictionary<string, string> commandMapping,
+        ICollection<string> orderedCommands)
+    {
+        var builder = new StringBuilder(input.Length);
+        var index = 0;
+        while (index < input.Length)
+        {
+            var lineStart = index;
+            while (index < input.Length && input[index] is not '\r' and not '\n')
+            {
+                index++;
+            }
+
+            var line = input[lineStart..index];
+            if (TryExtractStandaloneCommandLine(line, out var commandText, out var replacement))
+            {
+                if (!commandMapping.TryGetValue(commandText, out var placeholder))
+                {
+                    placeholder = $"[{CommandPlaceholderPrefix}{commandMapping.Count + 1}]";
+                    commandMapping[commandText] = placeholder;
+                    orderedCommands.Add(commandText);
+                }
+
+                builder.Append(replacement(placeholder));
+            }
+            else
+            {
+                builder.Append(line);
+            }
+
+            if (index >= input.Length)
+            {
+                continue;
+            }
+
+            if (input[index] == '\r' && index + 1 < input.Length && input[index + 1] == '\n')
+            {
+                builder.Append("\r\n");
+                index += 2;
+                continue;
+            }
+
+            builder.Append(input[index]);
+            index++;
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryExtractStandaloneCommandLine(
+        string line,
+        out string commandText,
+        out Func<string, string> replacement)
+    {
+        commandText = string.Empty;
+        replacement = static _ => string.Empty;
+
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return false;
+        }
+
+        var listMatch = MarkdownListCommandRegex().Match(line);
+        if (listMatch.Success)
+        {
+            commandText = NormalizeCommandContent(listMatch.Groups["command"].Value);
+            if (!IsLikelyCommandLine(commandText))
+            {
+                commandText = string.Empty;
+                return false;
+            }
+
+            var prefix = listMatch.Groups["prefix"].Value;
+            var suffix = listMatch.Groups["suffix"].Value;
+            replacement = placeholder => $"{prefix}{placeholder}{suffix}";
+            return true;
+        }
+
+        var standaloneMatch = StandaloneCommandLineRegex().Match(line);
+        if (!standaloneMatch.Success)
+        {
+            return false;
+        }
+
+        commandText = NormalizeCommandContent(standaloneMatch.Groups["command"].Value);
+        if (!IsLikelyCommandLine(commandText))
+        {
+            commandText = string.Empty;
+            return false;
+        }
+
+        var standalonePrefix = standaloneMatch.Groups["prefix"].Value;
+        var standaloneSuffix = standaloneMatch.Groups["suffix"].Value;
+        replacement = placeholder => $"{standalonePrefix}{placeholder}{standaloneSuffix}";
+        return true;
     }
 
     private static void AppendFileAppendix(StringBuilder builder, IReadOnlyList<string> orderedReferences)
@@ -205,6 +306,12 @@ public static partial class ListeningReplyDocumentFormatter
 
     [GeneratedRegex("```(?<language>[A-Za-z0-9_-]+)?[ \\t]*\\r?\\n(?<content>.*?)\\r?\\n```", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Singleline)]
     private static partial Regex FencedCodeBlockRegex();
+
+    [GeneratedRegex(@"^(?<prefix>\s*[-*]\s*)(?:`(?<command>[^`]+)`|(?<command>.+?))(?<suffix>\s*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex MarkdownListCommandRegex();
+
+    [GeneratedRegex(@"^(?<prefix>\s*)(?:`(?<command>[^`]+)`|(?<command>(?:powershell|pwsh|dotnet|git|npm|pnpm|yarn|npx|node|python|bash|sh|cmd|curl|wget)\b.+?))(?<suffix>\s*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex StandaloneCommandLineRegex();
 
     private sealed record CommandExtractionResult(
         string RewrittenText,

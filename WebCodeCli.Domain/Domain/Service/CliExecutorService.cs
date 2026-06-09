@@ -25,6 +25,7 @@ public class CliExecutorService : ICliExecutorService
 {
     private const string CodexLaunchBaseConfigFileName = "config.webcode.base.toml";
     private const string GoalRuntimeContinuationPromptPrefix = "Continue working toward the current active goal";
+    private static readonly Encoding CodexTransportEncoding = new UTF8Encoding(false);
 
     private readonly ILogger<CliExecutorService> _logger;
     private readonly CliToolsOption _options;
@@ -1559,6 +1560,7 @@ public class CliExecutorService : ICliExecutorService
             RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            StandardInputEncoding = IsCodexExecution(tool, adapter) ? GetCodexTransportEncoding() : Encoding.UTF8,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
@@ -3779,6 +3781,11 @@ public class CliExecutorService : ICliExecutorService
                || adapter is CodexAdapter
                || (adapter?.SupportedToolIds.Any(static id =>
                    string.Equals(id, "codex", StringComparison.OrdinalIgnoreCase)) ?? false);
+    }
+
+    internal static Encoding GetCodexTransportEncoding()
+    {
+        return CodexTransportEncoding;
     }
 
     private static void WriteStandardInput(Process process, string? standardInput)

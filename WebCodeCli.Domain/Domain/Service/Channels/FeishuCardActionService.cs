@@ -10,6 +10,7 @@ using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Service;
 using WebCodeCli.Domain.Domain.Service.Adapters;
 using WebCodeCli.Domain.Repositories.Base.ChatSession;
+using WebCodeCli.Domain.Repositories.Base.UserFeishuBotConfig;
 using System.Text.Json.Nodes;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -68,6 +69,7 @@ public class FeishuCardActionService
     private const int SessionFilePreviewLineLimit = 80;
     private const int SessionFilePreviewCharacterLimit = 4000;
     private const int SessionManagerDefaultVisibleCount = 3;
+    private const int SessionManagerPageSize = 3;
     private const int ProjectBranchPageSize = 12;
     private const int StreamingStatusPulseIntervalMs = 900;
     private static readonly TimeSpan StreamingStatusPulseQuietWindow = TimeSpan.FromSeconds(3);
@@ -252,6 +254,8 @@ public class FeishuCardActionService
                     return await HandleToggleAudioFullReplyDocAsync(chatId, operatorUserId);
                 case FeishuHelpCardAction.ToggleAudioFinalReplyDocAction:
                     return await HandleToggleAudioFinalReplyDocAsync(chatId, operatorUserId);
+                case FeishuHelpCardAction.SetDocumentAdminOpenIdAction:
+                    return await HandleSetDocumentAdminOpenIdAsync(chatId, operatorUserId, appId);
                 case "execute_command":
                     return await HandleExecuteCommandAsync(formValueElement, action.Command, chatId, operatorUserId, inputValues, appId);
                 case FeishuHelpCardAction.SubmitAttachmentPromptAction:
@@ -276,39 +280,39 @@ public class FeishuCardActionService
                 case FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction:
                     return await HandleGoalQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
                 case FeishuHelpCardAction.TemporarilyExitGoalRuntimeAction:
-                    return await HandleTemporarilyExitGoalRuntimeAsync(action.SessionId, action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions);
+                    return await HandleTemporarilyExitGoalRuntimeAsync(action.SessionId, action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions, action.SessionPage);
                 case FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction:
                     return await HandleRetrySuperpowersCapabilityDetectionAsync(action, chatId);
                 case LowInterruptionContinueHelper.ActionName:
                     return await HandleLowInterruptionContinueAsync(action.SessionId, action.ChatKey ?? chatId, action.ToolId, formValueElement, operatorUserId, appId);
                 case "switch_session":
-                    return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId, appId, action.ShowAllSessions == true);
+                    return await HandleSwitchSessionAsync(action.SessionId, action.ChatKey, operatorUserId, appId, action.ShowAllSessions == true, action.SessionPage);
                 case "sync_session_provider":
-                    return await HandleSyncSessionProviderAsync(action.SessionId, action.ChatKey, operatorUserId, appId, action.ShowAllSessions == true);
+                    return await HandleSyncSessionProviderAsync(action.SessionId, action.ChatKey, operatorUserId, appId, action.ShowAllSessions == true, action.SessionPage);
                 case FeishuHelpCardAction.ConfirmSyncSessionProviderAction:
                     return await HandleConfirmSyncSessionProviderAsync(action.SessionId, action.ChatKey, operatorUserId, appId, action.ShowAllSessions == true);
                 case "show_rename_session_form":
-                    return await HandleShowRenameSessionFormAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true);
+                    return await HandleShowRenameSessionFormAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "rename_session":
-                    return await HandleRenameSessionAsync(action.SessionId, action.ChatKey, formValueElement, operatorUserId, action.ShowAllSessions == true);
+                    return await HandleRenameSessionAsync(action.SessionId, action.ChatKey, formValueElement, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "close_session":
-                    return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true);
+                    return await HandleCloseSessionAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "show_session_launch_settings_form":
-                    return await HandleShowSessionLaunchSettingsFormAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true);
+                    return await HandleShowSessionLaunchSettingsFormAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "save_session_launch_settings":
-                    return await HandleSaveSessionLaunchSettingsAsync(action.SessionId, action.ChatKey, formValueElement, operatorUserId, action.ShowAllSessions == true);
+                    return await HandleSaveSessionLaunchSettingsAsync(action.SessionId, action.ChatKey, formValueElement, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "clear_session_launch_settings":
-                    return await HandleClearSessionLaunchSettingsAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true);
+                    return await HandleClearSessionLaunchSettingsAsync(action.SessionId, action.ChatKey, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "switch_streaming_card_model":
                     return await HandleSwitchStreamingCardModelAsync(action.SessionId, action.ChatKey, action.Model, operatorUserId);
                 case "switch_streaming_card_reasoning_effort":
                     return await HandleSwitchStreamingCardReasoningEffortAsync(action.SessionId, action.ChatKey, action.ReasoningEffort, operatorUserId);
                 case "show_create_session_form":
-                    return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId, action.ToolId);
+                    return await HandleShowCreateSessionFormAsync(action.ChatKey, chatId, operatorUserId, action.ToolId, action.ShowAllSessions == true, action.SessionPage);
                 case "create_session":
                     return await HandleCreateSessionAsync(action.ChatKey, chatId, formValueElement, operatorUserId, action.CreateMode, action.WorkspacePath, action.ToolId, inputValues);
                 case "browse_allowed_directory":
-                    return await HandleBrowseAllowedDirectoryAsync(action.ChatKey, chatId, action.WorkspacePath, action.Page, operatorUserId, action.ToolId);
+                    return await HandleBrowseAllowedDirectoryAsync(action.ChatKey, chatId, action.WorkspacePath, action.Page, operatorUserId, action.ToolId, action.ShowAllSessions == true, action.SessionPage);
                 case "copy_path_to_chat":
                     return await HandleCopyPathToChatAsync(action.ChatKey ?? chatId, action.CopyPath ?? action.WorkspacePath, operatorUserId);
                 case "switch_tool":
@@ -317,10 +321,10 @@ public class FeishuCardActionService
                     return await HandleBindWebUserAsync(formValueElement, chatId, operatorUserId, appId);
                 case "open_session_manager":
                     return action.SendAsNewCard
-                        ? await HandleOpenSessionManagerAsNewCardAsync(action.ChatKey ?? chatId, operatorUserId, appId, action.ShowAllSessions == true)
-                        : await HandleOpenSessionManagerAsync(action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions == true);
+                        ? await HandleOpenSessionManagerAsNewCardAsync(action.ChatKey ?? chatId, operatorUserId, appId, action.ShowAllSessions == true, action.SessionPage)
+                        : await HandleOpenSessionManagerAsync(action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "discover_external_cli_sessions":
-                    return await HandleDiscoverExternalCliSessionsAsync(action.ChatKey ?? chatId, chatId, action.ToolId, action.Page, operatorUserId);
+                    return await HandleDiscoverExternalCliSessionsAsync(action.ChatKey ?? chatId, chatId, action.ToolId, action.Page, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "import_external_cli_session":
                     return await HandleImportExternalCliSessionAsync(
                         action.ChatKey ?? chatId,
@@ -330,37 +334,39 @@ public class FeishuCardActionService
                         action.Title,
                         action.WorkspacePath,
                         operatorUserId,
-                        appId);
+                        appId,
+                        action.ShowAllSessions == true,
+                        action.SessionPage);
                 case "open_project_manager":
-                    return await HandleOpenProjectManagerAsync(action.ChatKey ?? chatId, operatorUserId);
+                    return await HandleOpenProjectManagerAsync(action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "show_create_project_form":
-                    return await HandleShowCreateProjectFormAsync(action.ChatKey ?? chatId);
+                    return await HandleShowCreateProjectFormAsync(action.ChatKey ?? chatId, action.ShowAllSessions == true, action.SessionPage);
                 case "show_edit_project_form":
-                    return await HandleShowEditProjectFormAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
+                    return await HandleShowEditProjectFormAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "create_project":
-                    return await HandleCreateProjectAsync(action.ChatKey ?? chatId, formValueElement, operatorUserId);
+                    return await HandleCreateProjectAsync(action.ChatKey ?? chatId, formValueElement, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "update_project":
-                    return await HandleUpdateProjectAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId);
+                    return await HandleUpdateProjectAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "clone_project":
                     return await HandleCloneProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, appId);
                 case "pull_project":
                     return await HandlePullProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, appId);
                 case "show_project_branch_switcher":
-                    return await HandleShowProjectBranchSwitcherAsync(action.ChatKey ?? chatId, action.ProjectId, action.Page, operatorUserId, appId);
+                    return await HandleShowProjectBranchSwitcherAsync(action.ChatKey ?? chatId, action.ProjectId, action.Page, operatorUserId, appId, action.ShowAllSessions == true, action.SessionPage);
                 case "switch_project_branch":
-                    return await HandleSwitchProjectBranchAsync(action.ChatKey ?? chatId, action.ProjectId, action.Branch, action.Page, operatorUserId, appId);
+                    return await HandleSwitchProjectBranchAsync(action.ChatKey ?? chatId, action.ProjectId, action.Branch, action.Page, operatorUserId, appId, action.ShowAllSessions == true, action.SessionPage);
                 case "delete_project":
                     return await HandleDeleteProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId, appId);
                 case "fetch_project_branches":
-                    return await HandleFetchProjectBranchesAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId);
+                    return await HandleFetchProjectBranchesAsync(action.ChatKey ?? chatId, action.ProjectId, formValueElement, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "create_session_from_project":
                     return await HandleCreateSessionFromProjectAsync(action.ChatKey ?? chatId, action.ProjectId, operatorUserId);
                 case "browse_current_session_directory":
-                    return await HandleBrowseCurrentSessionDirectoryAsync(action.ChatKey, chatId, operatorUserId);
+                    return await HandleBrowseCurrentSessionDirectoryAsync(action.ChatKey, chatId, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "browse_session_directory":
-                    return await HandleBrowseSessionDirectoryAsync(action.SessionId, action.ChatKey, action.DirectoryPath, action.Page, operatorUserId);
+                    return await HandleBrowseSessionDirectoryAsync(action.SessionId, action.ChatKey, action.DirectoryPath, action.Page, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 case "preview_session_file":
-                    return await HandlePreviewSessionFileAsync(action.SessionId, action.ChatKey, action.FilePath, action.DirectoryPath, action.Page, operatorUserId);
+                    return await HandlePreviewSessionFileAsync(action.SessionId, action.ChatKey, action.FilePath, action.DirectoryPath, action.Page, operatorUserId, action.ShowAllSessions == true, action.SessionPage);
                 default:
                     return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未知动作", "error");
             }
@@ -482,6 +488,52 @@ public class FeishuCardActionService
             modeDisplayName: "飞书听结论文档",
             defaultFailureMessage: "飞书听结论文档更新失败",
             toggleAudioFinalReplyDoc: true);
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleSetDocumentAdminOpenIdAsync(
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        if (string.IsNullOrWhiteSpace(operatorUserId))
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 无法识别当前飞书用户，保存文档管理员失败", "error");
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var userFeishuBotConfigService = scope.ServiceProvider.GetRequiredService<IUserFeishuBotConfigService>();
+
+        UserFeishuBotConfigEntity? config = null;
+        if (!string.IsNullOrWhiteSpace(appId))
+        {
+            config = await userFeishuBotConfigService.GetByAppIdAsync(appId.Trim());
+        }
+
+        if (config == null && !string.IsNullOrWhiteSpace(chatId))
+        {
+            var actualChatKey = NormalizeChatKey(chatId);
+            var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+            if (!string.IsNullOrWhiteSpace(username))
+            {
+                config = await userFeishuBotConfigService.GetByUsernameAsync(username);
+            }
+        }
+
+        if (config == null)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 未找到当前飞书机器人配置", "error");
+        }
+
+        config.DocumentAdminOpenId = operatorUserId.Trim();
+        var saveResult = await userFeishuBotConfigService.SaveAsync(config);
+        if (!saveResult.Success)
+        {
+            return _cardBuilder.BuildCardActionToastOnlyResponse(
+                $"❌ {(string.IsNullOrWhiteSpace(saveResult.ErrorMessage) ? "保存文档管理员失败" : saveResult.ErrorMessage)}",
+                "error");
+        }
+
+        return _cardBuilder.BuildCardActionToastOnlyResponse("✅ 已将当前操作者保存为文档管理员", "success");
     }
 
     private async Task<CardActionTriggerResponseDto> HandleToggleReplyDocumentAsync(
@@ -1025,6 +1077,8 @@ public class FeishuCardActionService
             await _cliExecutor.StopSessionExecutionAsync(activeSessionId, effectiveToolId);
         }
 
+        await EnsureGoalRuntimeOverrideEnabledAsync(activeSessionId, targetChatKey, effectiveToolId, operatorUserId);
+
         return await HandleExecuteCommandAsync(
             formValue: null,
             commandFromAction: prompt,
@@ -1052,10 +1106,11 @@ public class FeishuCardActionService
         string sessionId,
         string chatKey,
         string? toolId,
-        bool showAllSessions)
+        bool showAllSessions,
+        int? sessionPage = null)
     {
         return _cardBuilder.BuildCardActionResponseV2(
-            _cardBuilder.BuildSyncSessionProviderConfirmCardV2(sessionId, chatKey, toolId, showAllSessions),
+            _cardBuilder.BuildSyncSessionProviderConfirmCardV2(sessionId, chatKey, toolId, showAllSessions, sessionPage),
             "⚠️ 当前 goal 正在执行，同步 Provider 需要先中断并重启当前运行时，请确认是否继续",
             "warning");
     }
@@ -1112,11 +1167,71 @@ public class FeishuCardActionService
         return appServerSessionManager?.HasActiveTurn(sessionId) == true;
     }
 
+    private async Task EnsureGoalRuntimeOverrideEnabledAsync(
+        string sessionId,
+        string chatKey,
+        string? toolId,
+        string? operatorUserId)
+    {
+        var normalizedToolId = SessionLaunchOverrideHelper.NormalizeToolId(toolId);
+        if (string.IsNullOrWhiteSpace(sessionId)
+            || !string.Equals(normalizedToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var actualChatKey = NormalizeChatKey(chatKey);
+        var username = ResolveFeishuUsername(actualChatKey, operatorUserId);
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            return;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var repo = scope.ServiceProvider.GetService<IChatSessionRepository>();
+        if (repo == null)
+        {
+            return;
+        }
+
+        var session = await repo.GetByIdAndUsernameAsync(sessionId, username);
+        if (session == null)
+        {
+            return;
+        }
+
+        var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(session.ToolId, session.CcSwitchSnapshotToolId);
+        if (!string.Equals(effectiveToolId, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var currentOverrides = SessionLaunchOverrideHelper.Deserialize(session.ToolLaunchOverridesJson);
+        var currentOverride = SessionLaunchOverrideHelper.GetEffectiveOverride(
+            currentOverrides,
+            effectiveToolId,
+            session.ToolId,
+            session.CcSwitchSnapshotToolId);
+        if (currentOverride?.UseGoalRuntime == true)
+        {
+            return;
+        }
+
+        var updatedOverrides = SessionLaunchOverrideHelper.ApplyGoalRuntimeOverride(
+            currentOverrides,
+            effectiveToolId,
+            true);
+        session.ToolLaunchOverridesJson = SessionLaunchOverrideHelper.Serialize(updatedOverrides);
+        session.UpdatedAt = DateTime.Now;
+        await repo.UpdateAsync(session);
+    }
+
     private async Task<CardActionTriggerResponseDto> HandleTemporarilyExitGoalRuntimeAsync(
         string? sessionId,
         string? chatKey,
         string? operatorUserId,
-        bool? showAllSessions)
+        bool? showAllSessions,
+        int? sessionPage)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
         {
@@ -1146,7 +1261,15 @@ public class FeishuCardActionService
 
         if (HasGoalExecutionConflict(sessionId))
         {
-            return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前 goal 正在执行，暂时不能临时退出", "warning");
+            var autoPauseResult = await TryAutoPauseGoalRuntimeBeforeTemporaryExitAsync(
+                sessionId,
+                actualChatKey,
+                operatorUserId,
+                effectiveToolId);
+            if (!autoPauseResult.Success)
+            {
+                return _cardBuilder.BuildCardActionToastOnlyResponse(autoPauseResult.Message, "warning");
+            }
         }
 
         try
@@ -1168,7 +1291,7 @@ public class FeishuCardActionService
             const string successMessage = "✅ 已临时退出 goal 持续会话，后续补充消息将按一次性进程执行";
             if (showAllSessions.HasValue)
             {
-                var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions.Value);
+                var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions.Value, sessionPage);
                 return _cardBuilder.BuildCardActionResponseV2(card, successMessage, "success");
             }
 
@@ -1182,6 +1305,48 @@ public class FeishuCardActionService
         {
             _logger.LogError(ex, "临时退出 goal 持续会话失败: SessionId={SessionId}", sessionId);
             return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 临时退出 goal 持续会话失败: {ex.Message}", "error");
+        }
+    }
+
+    private async Task<(bool Success, string Message)> TryAutoPauseGoalRuntimeBeforeTemporaryExitAsync(
+        string sessionId,
+        string chatKey,
+        string? operatorUserId,
+        string? preferredToolId)
+    {
+        if (_feishuChannel.IsSessionExecutionActive(sessionId))
+        {
+            return (false, "⚠️ 当前会话还有任务在执行，无法自动暂停后临时退出");
+        }
+
+        try
+        {
+            var pauseResponse = await HandleExecuteCommandAsync(
+                formValue: null,
+                commandFromAction: GoalQuickActionDefaults.PausePrompt,
+                chatId: chatKey,
+                operatorUserId: operatorUserId,
+                inputValues: null,
+                appId: null,
+                preferredSessionId: sessionId,
+                preferredToolId: preferredToolId);
+
+            var toastType = pauseResponse.Toast?.Type;
+            if (toastType == CardActionTriggerResponseDto.ToastSuffix.ToastType.Error
+                || toastType == CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning)
+            {
+                var message = string.IsNullOrWhiteSpace(pauseResponse.Toast?.Content)
+                    ? "⚠️ 当前 goal 无法自动暂停，暂时不能临时退出"
+                    : $"⚠️ 当前 goal 无法自动暂停，暂时不能临时退出：{pauseResponse.Toast!.Content}";
+                return (false, message);
+            }
+
+            return (true, string.Empty);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "自动暂停 goal runtime 失败: SessionId={SessionId}", sessionId);
+            return (false, $"⚠️ 当前 goal 无法自动暂停，暂时不能临时退出：{ex.Message}");
         }
     }
 
@@ -3118,7 +3283,7 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理切换会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleSwitchSessionAsync(string? sessionId, string? chatKey, string? operatorUserId, string? appId, bool showAllSessions = false)
+    private async Task<CardActionTriggerResponseDto> HandleSwitchSessionAsync(string? sessionId, string? chatKey, string? operatorUserId, string? appId, bool showAllSessions = false, int? sessionPage = null)
     {
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(chatKey))
         {
@@ -3197,7 +3362,7 @@ public class FeishuCardActionService
                 toolLabel,
                 lastActiveTime);
 
-            var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions);
+            var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions, sessionPage);
 
             // 后台异步发送会话历史卡片
             _ = Task.Run(async () =>
@@ -3275,7 +3440,8 @@ public class FeishuCardActionService
         string? chatKey,
         string? operatorUserId,
         string? appId,
-        bool showAllSessions = false)
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
         {
@@ -3304,7 +3470,7 @@ public class FeishuCardActionService
 
         if (IsGoalRuntimeSession(session, effectiveToolId) && HasGoalExecutionConflict(sessionId))
         {
-            return BuildSyncSessionProviderConfirmResponse(sessionId, actualChatKey, effectiveToolId, showAllSessions);
+            return BuildSyncSessionProviderConfirmResponse(sessionId, actualChatKey, effectiveToolId, showAllSessions, sessionPage);
         }
 
         StartSyncSessionProviderInBackground(
@@ -3554,7 +3720,7 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理关闭会话动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleCloseSessionAsync(string? sessionId, string? chatKey, string? operatorUserId, bool showAllSessions = false)
+    private async Task<CardActionTriggerResponseDto> HandleCloseSessionAsync(string? sessionId, string? chatKey, string? operatorUserId, bool showAllSessions = false, int? sessionPage = null)
     {
         if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(chatKey))
         {
@@ -3635,7 +3801,13 @@ public class FeishuCardActionService
     /// <summary>
     /// 显示新建会话表单
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleShowCreateSessionFormAsync(string? chatKey, string? chatId, string? operatorUserId, string? selectedToolId)
+    private async Task<CardActionTriggerResponseDto> HandleShowCreateSessionFormAsync(
+        string? chatKey,
+        string? chatId,
+        string? operatorUserId,
+        string? selectedToolId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrEmpty(chatKey) || string.IsNullOrEmpty(chatId))
         {
@@ -3660,7 +3832,7 @@ public class FeishuCardActionService
         }
 
         _logger.LogInformation("[Feishu] 新建会话卡片加载可访问目录: User={User}, Count={Count}", username, directories.Count);
-        var card = BuildCreateSessionFormCard(actualChatKey, directories, availableTools, effectiveToolId);
+        var card = BuildCreateSessionFormCard(actualChatKey, directories, availableTools, effectiveToolId, showAllSessions, sessionPage);
         return _cardBuilder.BuildCardActionResponseV2(card, $"请选择工作区和 CLI 工具（当前选择：{GetToolDisplayName(effectiveToolId)}）");
     }
 
@@ -3759,7 +3931,9 @@ public class FeishuCardActionService
         string? workspacePath,
         int? page,
         string? operatorUserId,
-        string? selectedToolId)
+        string? selectedToolId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var actualChatKey = !string.IsNullOrWhiteSpace(chatKey)
             ? NormalizeChatKey(chatKey)
@@ -3783,7 +3957,7 @@ public class FeishuCardActionService
         {
             var browseResult = await sessionDirectoryService.BrowseAllowedDirectoriesAsync(workspacePath, username);
             var effectiveToolId = NormalizeToolId(selectedToolId) ?? ResolveToolIdForChat(actualChatKey, username);
-            var card = BuildAllowedDirectoryCard(actualChatKey, effectiveToolId, browseResult, Math.Max(page ?? 0, 0));
+            var card = BuildAllowedDirectoryCard(actualChatKey, effectiveToolId, browseResult, Math.Max(page ?? 0, 0), showAllSessions, sessionPage);
             return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
         }
         catch (UnauthorizedAccessException ex)
@@ -4149,7 +4323,13 @@ public class FeishuCardActionService
         };
     }
 
-    private ElementsCardV2Dto BuildCreateSessionFormCard(string chatKey, List<object> directories, List<CliToolConfig> availableTools, string? selectedToolId)
+    private ElementsCardV2Dto BuildCreateSessionFormCard(
+        string chatKey,
+        List<object> directories,
+        List<CliToolConfig> availableTools,
+        string? selectedToolId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var effectiveToolId = NormalizeToolId(selectedToolId) ?? ResolveDefaultToolId();
         var ownedDirectories = directories
@@ -4207,7 +4387,9 @@ public class FeishuCardActionService
                         {
                             action = "show_create_session_form",
                             chat_key = chatKey,
-                            tool_id = availableTool.Id
+                            tool_id = availableTool.Id,
+                            show_all_sessions = showAllSessions,
+                            session_page = sessionPage ?? 0
                         }
                     }
                 }
@@ -4328,7 +4510,9 @@ public class FeishuCardActionService
                     {
                         action = "browse_allowed_directory",
                         chat_key = chatKey,
-                        tool_id = effectiveToolId
+                        tool_id = effectiveToolId,
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage ?? 0
                     }
                 }
             }
@@ -4377,7 +4561,10 @@ public class FeishuCardActionService
                     type = "callback",
                     value = new
                     {
-                        action = "open_session_manager"
+                        action = "open_session_manager",
+                        chat_key = chatKey,
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage ?? 0
                     }
                 }
             }
@@ -4998,7 +5185,7 @@ public class FeishuCardActionService
     /// <summary>
     /// 处理打开会话管理器动作
     /// </summary>
-    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsync(string? chatId, string? operatorUserId, bool showAllSessions = false)
+    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsync(string? chatId, string? operatorUserId, bool showAllSessions = false, int? sessionPage = null)
     {
         if (string.IsNullOrEmpty(chatId))
         {
@@ -5007,7 +5194,7 @@ public class FeishuCardActionService
 
         try
         {
-            var card = await BuildSessionManagerCardAsync(chatId, operatorUserId, showAllSessions: showAllSessions);
+            var card = await BuildSessionManagerCardAsync(chatId, operatorUserId, showAllSessions: showAllSessions, sessionPage: sessionPage);
             return _cardBuilder.BuildCardActionResponseV2(card, "");
         }
         catch (Exception ex)
@@ -5017,7 +5204,7 @@ public class FeishuCardActionService
         }
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsNewCardAsync(string? chatId, string? operatorUserId, string? appId, bool showAllSessions = false)
+    private async Task<CardActionTriggerResponseDto> HandleOpenSessionManagerAsNewCardAsync(string? chatId, string? operatorUserId, string? appId, bool showAllSessions = false, int? sessionPage = null)
     {
         if (string.IsNullOrEmpty(chatId))
         {
@@ -5033,7 +5220,7 @@ public class FeishuCardActionService
                 return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 请先绑定 Web 用户，再管理会话", "error");
             }
 
-            var card = await BuildSessionManagerCardAsync(normalizedChatId, operatorUserId, showAllSessions: showAllSessions);
+            var card = await BuildSessionManagerCardAsync(normalizedChatId, operatorUserId, showAllSessions: showAllSessions, sessionPage: sessionPage);
             await SendElementsCardToChatAsync(
                 normalizedChatId,
                 card,
@@ -5050,7 +5237,7 @@ public class FeishuCardActionService
         }
     }
 
-    public async Task<ElementsCardV2Dto> BuildSessionManagerCardAsync(string chatId, string? operatorUserId, string? fallbackUsername = null, bool showAllSessions = false)
+    public async Task<ElementsCardV2Dto> BuildSessionManagerCardAsync(string chatId, string? operatorUserId, string? fallbackUsername = null, bool showAllSessions = false, int? sessionPage = null)
     {
         var chatKey = chatId.ToLowerInvariant();
         var username = string.IsNullOrWhiteSpace(fallbackUsername)
@@ -5065,14 +5252,21 @@ public class FeishuCardActionService
         var sessions = sessionEntities.Select(s => s.SessionId).ToList();
         var currentSessionId = _feishuChannel.GetCurrentSession(chatKey, username);
         var goalRuntimeSessionCount = sessionEntities.Count(IsGoalRuntimeSession);
+        var totalPages = Math.Max(1, (int)Math.Ceiling(sessionEntities.Count / (double)SessionManagerPageSize));
+        var normalizedSessionPage = showAllSessions
+            ? Math.Clamp(sessionPage ?? 0, 0, totalPages - 1)
+            : 0;
         var visibleSessions = showAllSessions
             ? sessionEntities
+                .Skip(normalizedSessionPage * SessionManagerPageSize)
+                .Take(SessionManagerPageSize)
+                .ToList()
             : sessionEntities.Take(SessionManagerDefaultVisibleCount).ToList();
 
         var elements = new List<object>();
         var foldHint = sessionEntities.Count > SessionManagerDefaultVisibleCount
             ? showAllSessions
-                ? $"当前展示全部 **{sessionEntities.Count}** 个会话。"
+                ? $"当前展示第 **{normalizedSessionPage + 1}/{totalPages}** 页，共 **{sessionEntities.Count}** 个会话。"
                 : $"当前默认展示最近 **{SessionManagerDefaultVisibleCount}** 个会话，可点击“更多会话”展开。"
             : string.Empty;
 
@@ -5108,7 +5302,9 @@ public class FeishuCardActionService
                         value = new
                         {
                             action = "browse_current_session_directory",
-                            chat_key = chatKey
+                            chat_key = chatKey,
+                            show_all_sessions = showAllSessions,
+                            session_page = normalizedSessionPage
                         }
                     }
                 }
@@ -5150,7 +5346,8 @@ public class FeishuCardActionService
                         action = "switch_session",
                         session_id = sessionId,
                         chat_key = chatKey,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     }),
                 BuildActionButton(
                     "重命名",
@@ -5160,7 +5357,8 @@ public class FeishuCardActionService
                         action = "show_rename_session_form",
                         session_id = sessionId,
                         chat_key = chatKey,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     })
             };
 
@@ -5174,7 +5372,8 @@ public class FeishuCardActionService
                         action = "show_session_launch_settings_form",
                         session_id = sessionId,
                         chat_key = chatKey,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     }));
                 actions.Add(BuildActionButton(
                     "同步 Provider",
@@ -5184,7 +5383,8 @@ public class FeishuCardActionService
                         action = "sync_session_provider",
                         session_id = sessionId,
                         chat_key = chatKey,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     }));
             }
 
@@ -5223,7 +5423,8 @@ public class FeishuCardActionService
                                 action = "close_session",
                                 session_id = sessionId,
                                 chat_key = chatKey,
-                                show_all_sessions = showAllSessions
+                                show_all_sessions = showAllSessions,
+                                session_page = normalizedSessionPage
                             })).ToArray()
                     }
                 }
@@ -5236,6 +5437,7 @@ public class FeishuCardActionService
                     chatKey,
                     effectiveToolId,
                     showAllSessions,
+                    normalizedSessionPage,
                     showTemporaryExitGoalRuntimeAction));
             }
 
@@ -5253,6 +5455,70 @@ public class FeishuCardActionService
 
         if (sessionEntities.Count > SessionManagerDefaultVisibleCount)
         {
+            if (showAllSessions && totalPages > 1)
+            {
+                var paginationColumns = new List<object>();
+
+                if (normalizedSessionPage > 0)
+                {
+                    paginationColumns.Add(new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new object[]
+                        {
+                            BuildActionButton(
+                                "上一页",
+                                "default",
+                                new
+                                {
+                                    action = "open_session_manager",
+                                    chat_key = chatKey,
+                                    show_all_sessions = true,
+                                    session_page = normalizedSessionPage - 1
+                                })
+                        }
+                    });
+                }
+
+                if (normalizedSessionPage < totalPages - 1)
+                {
+                    paginationColumns.Add(new
+                    {
+                        tag = "column",
+                        width = "weighted",
+                        weight = 1,
+                        vertical_align = "top",
+                        elements = new object[]
+                        {
+                            BuildActionButton(
+                                "下一页",
+                                "default",
+                                new
+                                {
+                                    action = "open_session_manager",
+                                    chat_key = chatKey,
+                                    show_all_sessions = true,
+                                    session_page = normalizedSessionPage + 1
+                                })
+                        }
+                    });
+                }
+
+                if (paginationColumns.Count > 0)
+                {
+                    elements.Add(new
+                    {
+                        tag = "column_set",
+                        flex_mode = "none",
+                        background_style = "default",
+                        columns = paginationColumns.ToArray()
+                    });
+                }
+            }
+
             elements.Add(BuildActionButton(
                 showAllSessions ? "收起" : "更多会话",
                 "default",
@@ -5260,7 +5526,8 @@ public class FeishuCardActionService
                 {
                     action = "open_session_manager",
                     chat_key = chatKey,
-                    show_all_sessions = !showAllSessions
+                    show_all_sessions = !showAllSessions,
+                    session_page = showAllSessions ? 0 : normalizedSessionPage
                 }));
             elements.Add(new { tag = "hr" });
         }
@@ -5280,7 +5547,9 @@ public class FeishuCardActionService
                     value = new
                     {
                         action = "open_project_manager",
-                        chat_key = chatKey
+                        chat_key = chatKey,
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     }
                 }
             }
@@ -5299,7 +5568,9 @@ public class FeishuCardActionService
                     value = new
                     {
                         action = "discover_external_cli_sessions",
-                        chat_key = chatKey
+                        chat_key = chatKey,
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     }
                 }
             }
@@ -5318,7 +5589,9 @@ public class FeishuCardActionService
                     value = new
                     {
                         action = "show_create_session_form",
-                        chat_key = chatKey
+                        chat_key = chatKey,
+                        show_all_sessions = showAllSessions,
+                        session_page = normalizedSessionPage
                     }
                 }
             }
@@ -5361,7 +5634,7 @@ public class FeishuCardActionService
         };
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleShowRenameSessionFormAsync(string? sessionId, string? chatKey, string? operatorUserId, bool showAllSessions = false)
+    private async Task<CardActionTriggerResponseDto> HandleShowRenameSessionFormAsync(string? sessionId, string? chatKey, string? operatorUserId, bool showAllSessions = false, int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
         {
@@ -5383,7 +5656,7 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 会话不存在或已失效，请重新打开会话管理", "error");
         }
 
-        return _cardBuilder.BuildCardActionResponseV2(BuildRenameSessionFormCard(actualChatKey, session, showAllSessions), string.Empty);
+        return _cardBuilder.BuildCardActionResponseV2(BuildRenameSessionFormCard(actualChatKey, session, showAllSessions, sessionPage), string.Empty);
     }
 
     private async Task<CardActionTriggerResponseDto> HandleRenameSessionAsync(
@@ -5391,7 +5664,8 @@ public class FeishuCardActionService
         string? chatKey,
         JsonElement? formValue,
         string? operatorUserId,
-        bool showAllSessions = false)
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
         {
@@ -5431,11 +5705,11 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 重命名会话失败，请稍后重试", "error");
         }
 
-        var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions);
+        var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions, sessionPage);
         return _cardBuilder.BuildCardActionResponseV2(card, $"✅ 已将会话重命名为 {newTitle}", "success");
     }
 
-    private ElementsCardV2Dto BuildRenameSessionFormCard(string chatKey, ChatSessionEntity session, bool showAllSessions)
+    private ElementsCardV2Dto BuildRenameSessionFormCard(string chatKey, ChatSessionEntity session, bool showAllSessions, int? sessionPage)
     {
         var currentTitle = GetSessionDisplayTitle(session);
         var elements = new List<object>
@@ -5491,7 +5765,8 @@ public class FeishuCardActionService
                                             action = "rename_session",
                                             session_id = session.SessionId,
                                             chat_key = chatKey,
-                                            show_all_sessions = showAllSessions
+                                            show_all_sessions = showAllSessions,
+                                            session_page = sessionPage ?? 0
                                         }
                                     }
                                 }
@@ -5510,7 +5785,8 @@ public class FeishuCardActionService
                                         {
                                             action = "open_session_manager",
                                             chat_key = chatKey,
-                                            show_all_sessions = showAllSessions
+                                            show_all_sessions = showAllSessions,
+                                            session_page = sessionPage ?? 0
                                         })
                                 }
                             }
@@ -5543,7 +5819,8 @@ public class FeishuCardActionService
         string? sessionId,
         string? chatKey,
         string? operatorUserId,
-        bool showAllSessions = false)
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
         {
@@ -5573,7 +5850,7 @@ public class FeishuCardActionService
 
         var ccSwitchService = scope.ServiceProvider.GetService<ICcSwitchService>();
         return _cardBuilder.BuildCardActionResponseV2(
-            await BuildSessionLaunchSettingsFormCardAsync(actualChatKey, session, showAllSessions, ccSwitchService),
+            await BuildSessionLaunchSettingsFormCardAsync(actualChatKey, session, showAllSessions, sessionPage, ccSwitchService),
             string.Empty);
     }
 
@@ -5582,7 +5859,8 @@ public class FeishuCardActionService
         string? chatKey,
         JsonElement? formValue,
         string? operatorUserId,
-        bool showAllSessions = false)
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         return await PersistSessionLaunchSettingsAsync(
             sessionId,
@@ -5590,6 +5868,7 @@ public class FeishuCardActionService
             formValue,
             operatorUserId,
             showAllSessions,
+            sessionPage,
             clearOverride: false);
     }
 
@@ -5597,7 +5876,8 @@ public class FeishuCardActionService
         string? sessionId,
         string? chatKey,
         string? operatorUserId,
-        bool showAllSessions = false)
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         return await PersistSessionLaunchSettingsAsync(
             sessionId,
@@ -5605,6 +5885,7 @@ public class FeishuCardActionService
             formValue: null,
             operatorUserId,
             showAllSessions,
+            sessionPage,
             clearOverride: true);
     }
 
@@ -5614,6 +5895,7 @@ public class FeishuCardActionService
         JsonElement? formValue,
         string? operatorUserId,
         bool showAllSessions,
+        int? sessionPage,
         bool clearOverride)
     {
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(chatKey))
@@ -5668,7 +5950,7 @@ public class FeishuCardActionService
 
             await _cliExecutor.ResetSessionRuntimeAsync(sessionId, clearCliThreadId: false);
 
-            var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions);
+            var card = await BuildSessionManagerCardAsync(actualChatKey, operatorUserId, username, showAllSessions, sessionPage);
             return _cardBuilder.BuildCardActionResponseV2(
                 card,
                 clearOverride
@@ -5828,6 +6110,7 @@ public class FeishuCardActionService
         string chatKey,
         ChatSessionEntity session,
         bool showAllSessions,
+        int? sessionPage,
         ICcSwitchService? ccSwitchService)
     {
         var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(session.ToolId, session.CcSwitchSnapshotToolId);
@@ -5884,7 +6167,8 @@ public class FeishuCardActionService
                                 action = "save_session_launch_settings",
                                 session_id = session.SessionId,
                                 chat_key = chatKey,
-                                show_all_sessions = showAllSessions
+                                show_all_sessions = showAllSessions,
+                                session_page = sessionPage ?? 0
                             }
                         }
                     }
@@ -5904,7 +6188,8 @@ public class FeishuCardActionService
                                 action = "clear_session_launch_settings",
                                 session_id = session.SessionId,
                                 chat_key = chatKey,
-                                show_all_sessions = showAllSessions
+                                show_all_sessions = showAllSessions,
+                                session_page = sessionPage ?? 0
                             })
                     }
                 },
@@ -5922,7 +6207,8 @@ public class FeishuCardActionService
                             {
                                 action = "open_session_manager",
                                 chat_key = chatKey,
-                                show_all_sessions = showAllSessions
+                                show_all_sessions = showAllSessions,
+                                session_page = sessionPage ?? 0
                             })
                     }
                 }
@@ -6196,6 +6482,7 @@ public class FeishuCardActionService
         string chatKey,
         string? toolId,
         bool showAllSessions,
+        int sessionPage,
         bool showTemporaryExitAction)
     {
         yield return BuildGoalRuntimeSessionActionRow(
@@ -6209,7 +6496,8 @@ public class FeishuCardActionService
                         session_id = sessionId,
                         chat_key = chatKey,
                         tool_id = toolId,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage
                     })),
             BuildGoalRuntimeSessionActionColumn(
                 BuildActionButton(
@@ -6221,7 +6509,8 @@ public class FeishuCardActionService
                         session_id = sessionId,
                         chat_key = chatKey,
                         tool_id = toolId,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage
                     })));
 
         yield return BuildGoalRuntimeSessionActionRow(
@@ -6235,7 +6524,8 @@ public class FeishuCardActionService
                         session_id = sessionId,
                         chat_key = chatKey,
                         tool_id = toolId,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage
                     })),
             BuildGoalRuntimeSessionActionColumn(
                 BuildActionButton(
@@ -6247,7 +6537,8 @@ public class FeishuCardActionService
                         session_id = sessionId,
                         chat_key = chatKey,
                         tool_id = toolId,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage
                     })));
 
         if (!showTemporaryExitAction)
@@ -6266,7 +6557,8 @@ public class FeishuCardActionService
                         session_id = sessionId,
                         chat_key = chatKey,
                         tool_id = toolId,
-                        show_all_sessions = showAllSessions
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage
                     })));
     }
 
@@ -6298,7 +6590,9 @@ public class FeishuCardActionService
         string? chatId,
         string? toolId,
         int? page,
-        string? operatorUserId)
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatKey) && string.IsNullOrWhiteSpace(chatId))
         {
@@ -6376,7 +6670,9 @@ public class FeishuCardActionService
                                 action = "discover_external_cli_sessions",
                                 chat_key = actualChatKey,
                                 tool_id = value,
-                                page = 0
+                                page = 0,
+                                show_all_sessions = showAllSessions,
+                                session_page = sessionPage ?? 0
                             }
                         }
                     }
@@ -6426,7 +6722,9 @@ public class FeishuCardActionService
                                     {
                                         action = "switch_session",
                                         session_id = item.ImportedSessionId,
-                                        chat_key = actualChatKey
+                                        chat_key = actualChatKey,
+                                        show_all_sessions = showAllSessions,
+                                        session_page = sessionPage ?? 0
                                     }
                                 }
                             }
@@ -6451,7 +6749,9 @@ public class FeishuCardActionService
                                         tool_id = item.ToolId,
                                         cli_thread_id = item.CliThreadId,
                                         title = item.Title,
-                                        workspace_path = item.WorkspacePath
+                                        workspace_path = item.WorkspacePath,
+                                        show_all_sessions = showAllSessions,
+                                        session_page = sessionPage ?? 0
                                     }
                                 }
                             }
@@ -6491,7 +6791,9 @@ public class FeishuCardActionService
                                     action = "discover_external_cli_sessions",
                                     chat_key = actualChatKey,
                                     tool_id = normalizedToolId,
-                                    page = safePageIndex - 1
+                                    page = safePageIndex - 1,
+                                    show_all_sessions = showAllSessions,
+                                    session_page = sessionPage ?? 0
                                 }
                             }
                         }
@@ -6515,7 +6817,9 @@ public class FeishuCardActionService
                                     action = "discover_external_cli_sessions",
                                     chat_key = actualChatKey,
                                     tool_id = normalizedToolId,
-                                    page = safePageIndex + 1
+                                    page = safePageIndex + 1,
+                                    show_all_sessions = showAllSessions,
+                                    session_page = sessionPage ?? 0
                                 }
                             }
                         }
@@ -6536,7 +6840,9 @@ public class FeishuCardActionService
                         value = new
                         {
                             action = "open_session_manager",
-                            chat_key = actualChatKey
+                            chat_key = actualChatKey,
+                            show_all_sessions = showAllSessions,
+                            session_page = sessionPage ?? 0
                         }
                     }
                 }
@@ -6577,7 +6883,9 @@ public class FeishuCardActionService
         string? title,
         string? workspacePath,
         string? operatorUserId,
-        string? appId)
+        string? appId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatKey) && string.IsNullOrWhiteSpace(chatId))
         {
@@ -6631,7 +6939,7 @@ public class FeishuCardActionService
                 _logger.LogDebug(sendEx, "[Feishu] 发送导入完成提示失败(可忽略)");
             }
 
-            var response = await HandleOpenSessionManagerAsync(actualChatKey, operatorUserId);
+            var response = await HandleOpenSessionManagerAsync(actualChatKey, operatorUserId, showAllSessions, sessionPage);
             response.Toast = new CardActionTriggerResponseDto.ToastSuffix
             {
                 Content = "✅ 已导入本地会话，并切换为当前会话",
@@ -6646,16 +6954,24 @@ public class FeishuCardActionService
         }
     }
 
-    public async Task<ElementsCardV2Dto> BuildProjectManagerCardAsync(string chatId, string? operatorUserId)
+    public async Task<ElementsCardV2Dto> BuildProjectManagerCardAsync(
+        string chatId,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var actualChatKey = NormalizeChatKey(chatId);
         using var projectScope = CreateProjectScopeContext(actualChatKey, operatorUserId)
             ?? throw new InvalidOperationException("请先绑定 Web 用户，再管理项目");
         var projects = await projectScope.ProjectService.GetProjectsAsync();
-        return BuildProjectManagerCard(actualChatKey, projects);
+        return BuildProjectManagerCard(actualChatKey, projects, showAllSessions, sessionPage);
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleOpenProjectManagerAsync(string? chatId, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleOpenProjectManagerAsync(
+        string? chatId,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -6664,7 +6980,7 @@ public class FeishuCardActionService
 
         try
         {
-            var card = await BuildProjectManagerCardAsync(chatId, operatorUserId);
+            var card = await BuildProjectManagerCardAsync(chatId, operatorUserId, showAllSessions, sessionPage);
             return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
         }
         catch (InvalidOperationException ex)
@@ -6678,7 +6994,10 @@ public class FeishuCardActionService
         }
     }
 
-    private Task<CardActionTriggerResponseDto> HandleShowCreateProjectFormAsync(string? chatId)
+    private Task<CardActionTriggerResponseDto> HandleShowCreateProjectFormAsync(
+        string? chatId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -6686,11 +7005,16 @@ public class FeishuCardActionService
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        var card = BuildProjectFormCard(actualChatKey, null, null, null, null);
+        var card = BuildProjectFormCard(actualChatKey, null, null, null, null, showAllSessions, sessionPage);
         return Task.FromResult(_cardBuilder.BuildCardActionResponseV2(card, string.Empty));
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleShowEditProjectFormAsync(string? chatId, string? projectId, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleShowEditProjectFormAsync(
+        string? chatId,
+        string? projectId,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -6710,11 +7034,16 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("❌ 项目不存在或已被删除", "error");
         }
 
-        var card = BuildProjectFormCard(actualChatKey, project, null, null, "密码或 Token 留空则保持现有值。");
+        var card = BuildProjectFormCard(actualChatKey, project, null, null, "密码或 Token 留空则保持现有值。", showAllSessions, sessionPage);
         return _cardBuilder.BuildCardActionResponseV2(card, string.Empty);
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleCreateProjectAsync(string? chatId, JsonElement? formValue, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleCreateProjectAsync(
+        string? chatId,
+        JsonElement? formValue,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -6737,15 +7066,21 @@ public class FeishuCardActionService
         var (project, errorMessage) = await projectScope.ProjectService.CreateProjectAsync(request);
         if (project == null)
         {
-            var card = BuildProjectFormCard(actualChatKey, null, request, null, errorMessage);
+            var card = BuildProjectFormCard(actualChatKey, null, request, null, errorMessage, showAllSessions, sessionPage);
             return _cardBuilder.BuildCardActionResponseV2(card, errorMessage ?? "创建项目失败", "error");
         }
 
-        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
+        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId, showAllSessions, sessionPage);
         return _cardBuilder.BuildCardActionResponseV2(managerCard, "✅ 项目已保存，可继续克隆或创建会话", "success");
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleUpdateProjectAsync(string? chatId, string? projectId, JsonElement? formValue, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleUpdateProjectAsync(
+        string? chatId,
+        string? projectId,
+        JsonElement? formValue,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -6770,11 +7105,11 @@ public class FeishuCardActionService
         if (!success)
         {
             var requestState = BuildProjectRequestFromForm(formValue);
-            var card = BuildProjectFormCard(actualChatKey, existingProject, requestState, null, errorMessage ?? "更新项目失败");
+            var card = BuildProjectFormCard(actualChatKey, existingProject, requestState, null, errorMessage ?? "更新项目失败", showAllSessions, sessionPage);
             return _cardBuilder.BuildCardActionResponseV2(card, errorMessage ?? "更新项目失败", "error");
         }
 
-        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId);
+        var managerCard = await BuildProjectManagerCardAsync(actualChatKey, operatorUserId, showAllSessions, sessionPage);
         return _cardBuilder.BuildCardActionResponseV2(managerCard, "✅ 项目配置已更新", "success");
     }
 
@@ -6790,7 +7125,13 @@ public class FeishuCardActionService
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台删除项目，完成后会发送结果", "info"));
     }
 
-    private async Task<CardActionTriggerResponseDto> HandleFetchProjectBranchesAsync(string? chatId, string? projectId, JsonElement? formValue, string? operatorUserId)
+    private async Task<CardActionTriggerResponseDto> HandleFetchProjectBranchesAsync(
+        string? chatId,
+        string? projectId,
+        JsonElement? formValue,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId))
         {
@@ -6829,7 +7170,7 @@ public class FeishuCardActionService
                 : $"已获取 {branches.Count} 个分支，可从下方列表复制后填写到分支字段。";
         }
 
-        var card = BuildProjectFormCard(actualChatKey, project, formState, branches, helperText);
+        var card = BuildProjectFormCard(actualChatKey, project, formState, branches, helperText, showAllSessions, sessionPage);
         var toastType = string.IsNullOrWhiteSpace(errorMessage) ? "info" : "warning";
         var toastMessage = string.IsNullOrWhiteSpace(errorMessage) ? "🔄 已刷新远程分支列表" : $"⚠️ {errorMessage}";
         return _cardBuilder.BuildCardActionResponseV2(card, toastMessage, toastType);
@@ -6918,7 +7259,9 @@ public class FeishuCardActionService
         string? projectId,
         int? page,
         string? operatorUserId,
-        string? appId)
+        string? appId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId))
         {
@@ -6926,7 +7269,7 @@ public class FeishuCardActionService
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        _ = Task.Run(() => SendProjectBranchSwitcherCardAsync(actualChatKey, projectId, page, operatorUserId, appId));
+        _ = Task.Run(() => SendProjectBranchSwitcherCardAsync(actualChatKey, projectId, page, operatorUserId, appId, showAllSessions, sessionPage));
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("🚀 已开始后台加载分支列表，完成后会发送卡片", "info"));
     }
 
@@ -6936,7 +7279,9 @@ public class FeishuCardActionService
         string? branch,
         int? page,
         string? operatorUserId,
-        string? appId)
+        string? appId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (string.IsNullOrWhiteSpace(chatId) || string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(branch))
         {
@@ -6944,11 +7289,18 @@ public class FeishuCardActionService
         }
 
         var actualChatKey = NormalizeChatKey(chatId);
-        _ = Task.Run(() => SwitchProjectBranchInBackgroundAsync(actualChatKey, projectId, branch, page, operatorUserId, appId));
+        _ = Task.Run(() => SwitchProjectBranchInBackgroundAsync(actualChatKey, projectId, branch, page, operatorUserId, appId, showAllSessions, sessionPage));
         return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse($"🚀 已开始后台切换到分支 {branch}", "info"));
     }
 
-    private async Task SendProjectBranchSwitcherCardAsync(string chatKey, string projectId, int? page, string? operatorUserId, string? appId)
+    private async Task SendProjectBranchSwitcherCardAsync(
+        string chatKey,
+        string projectId,
+        int? page,
+        string? operatorUserId,
+        string? appId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         string? notificationUsername = null;
         try
@@ -6969,7 +7321,7 @@ public class FeishuCardActionService
             }
 
             var (branches, errorMessage) = await projectScope.ProjectService.GetProjectBranchesAsync(projectId);
-            var card = BuildProjectBranchSwitcherCard(chatKey, project, branches, errorMessage, page ?? 0);
+            var card = BuildProjectBranchSwitcherCard(chatKey, project, branches, errorMessage, page ?? 0, showAllSessions, sessionPage);
             await SendElementsCardToChatAsync(chatKey, card, "❌ 分支列表加载完成，但发送卡片失败", notificationUsername, appId);
         }
         catch (Exception ex)
@@ -6985,7 +7337,9 @@ public class FeishuCardActionService
         string branch,
         int? page,
         string? operatorUserId,
-        string? appId)
+        string? appId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         string? notificationUsername = null;
         try
@@ -7018,12 +7372,12 @@ public class FeishuCardActionService
                         : $"{helperText}；{branchErrorMessage}";
                 }
 
-                var retryCard = BuildProjectBranchSwitcherCard(chatKey, latestProject, branches, helperText, page ?? 0);
+                var retryCard = BuildProjectBranchSwitcherCard(chatKey, latestProject, branches, helperText, page ?? 0, showAllSessions, sessionPage);
                 await SendElementsCardToChatAsync(chatKey, retryCard, $"❌ 切换分支失败：{errorMessage ?? "未知错误"}", notificationUsername, appId);
                 return;
             }
 
-            var managerCard = await BuildProjectManagerCardAsync(chatKey, operatorUserId);
+            var managerCard = await BuildProjectManagerCardAsync(chatKey, operatorUserId, showAllSessions, sessionPage);
             await SendElementsCardToChatAsync(chatKey, managerCard, $"✅ 已切换到分支 {branch}", notificationUsername, appId);
         }
         catch (Exception ex)
@@ -7105,7 +7459,11 @@ public class FeishuCardActionService
             "success");
     }
 
-    private ElementsCardV2Dto BuildProjectManagerCard(string chatKey, List<ProjectInfo> projects)
+    private ElementsCardV2Dto BuildProjectManagerCard(
+        string chatKey,
+        List<ProjectInfo> projects,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var elements = new List<object>
         {
@@ -7125,7 +7483,9 @@ public class FeishuCardActionService
                 new
                 {
                     action = "show_create_project_form",
-                    chat_key = chatKey
+                    chat_key = chatKey,
+                    show_all_sessions = showAllSessions,
+                    session_page = sessionPage ?? 0
                 })
         };
 
@@ -7238,7 +7598,10 @@ public class FeishuCardActionService
             "default",
             new
             {
-                action = "open_session_manager"
+                action = "open_session_manager",
+                chat_key = chatKey,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }));
 
         return new ElementsCardV2Dto
@@ -7265,7 +7628,9 @@ public class FeishuCardActionService
         ProjectInfo project,
         List<string> branches,
         string? helperText,
-        int pageIndex)
+        int pageIndex,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var normalizedBranches = branches
             .Where(branch => !string.IsNullOrWhiteSpace(branch))
@@ -7378,7 +7743,9 @@ public class FeishuCardActionService
                                             chat_key = chatKey,
                                             project_id = project.ProjectId,
                                             branch,
-                                            page = safePageIndex
+                                            page = safePageIndex,
+                                            show_all_sessions = showAllSessions,
+                                            session_page = sessionPage ?? 0
                                         })
                                 }
                         }
@@ -7414,7 +7781,9 @@ public class FeishuCardActionService
                                         action = "show_project_branch_switcher",
                                         chat_key = chatKey,
                                         project_id = project.ProjectId,
-                                        page = safePageIndex - 1
+                                        page = safePageIndex - 1,
+                                        show_all_sessions = showAllSessions,
+                                        session_page = sessionPage ?? 0
                                     })
                             }
                             : new object[]
@@ -7462,7 +7831,9 @@ public class FeishuCardActionService
                                         action = "show_project_branch_switcher",
                                         chat_key = chatKey,
                                         project_id = project.ProjectId,
-                                        page = safePageIndex + 1
+                                        page = safePageIndex + 1,
+                                        show_all_sessions = showAllSessions,
+                                        session_page = sessionPage ?? 0
                                     })
                             }
                             : new object[]
@@ -7485,7 +7856,9 @@ public class FeishuCardActionService
             new
             {
                 action = "open_project_manager",
-                chat_key = chatKey
+                chat_key = chatKey,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }));
 
         return new ElementsCardV2Dto
@@ -7512,7 +7885,9 @@ public class FeishuCardActionService
         ProjectInfo? project,
         CreateProjectRequest? formState,
         List<string>? branchSuggestions,
-        string? helperText)
+        string? helperText,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var effectiveState = formState ?? new CreateProjectRequest
         {
@@ -7644,7 +8019,9 @@ public class FeishuCardActionService
                                         {
                                             action = "fetch_project_branches",
                                             chat_key = chatKey,
-                                            project_id = project?.ProjectId
+                                            project_id = project?.ProjectId,
+                                            show_all_sessions = showAllSessions,
+                                            session_page = sessionPage ?? 0
                                         }
                                     }
                                 }
@@ -7667,7 +8044,9 @@ public class FeishuCardActionService
                                         {
                                             action = actionName,
                                             chat_key = chatKey,
-                                            project_id = project?.ProjectId
+                                            project_id = project?.ProjectId,
+                                            show_all_sessions = showAllSessions,
+                                            session_page = sessionPage ?? 0
                                         }
                                     }
                                 }
@@ -7692,7 +8071,9 @@ public class FeishuCardActionService
                                                 value = new
                                                 {
                                                     action = "open_project_manager",
-                                                    chat_key = chatKey
+                                                    chat_key = chatKey,
+                                                    show_all_sessions = showAllSessions,
+                                                    session_page = sessionPage ?? 0
                                                 }
                                             }
                                         }
@@ -7738,7 +8119,12 @@ public class FeishuCardActionService
         };
     }
 
-    private Task<CardActionTriggerResponseDto> HandleBrowseCurrentSessionDirectoryAsync(string? chatKey, string? chatId, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandleBrowseCurrentSessionDirectoryAsync(
+        string? chatKey,
+        string? chatId,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var actualChatKey = !string.IsNullOrWhiteSpace(chatKey)
             ? NormalizeChatKey(chatKey)
@@ -7761,10 +8147,17 @@ public class FeishuCardActionService
             return Task.FromResult(_cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 当前没有活跃会话，请先切换或创建会话", "warning"));
         }
 
-        return HandleBrowseSessionDirectoryAsync(currentSessionId, actualChatKey, null, 0, operatorUserId);
+        return HandleBrowseSessionDirectoryAsync(currentSessionId, actualChatKey, null, 0, operatorUserId, showAllSessions, sessionPage);
     }
 
-    private Task<CardActionTriggerResponseDto> HandleBrowseSessionDirectoryAsync(string? sessionId, string? chatKey, string? directoryPath, int? page, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandleBrowseSessionDirectoryAsync(
+        string? sessionId,
+        string? chatKey,
+        string? directoryPath,
+        int? page,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (!TryResolveActiveSessionContext(sessionId, chatKey, operatorUserId, out var actualChatKey, out var activeSessionId, out var errorResponse))
         {
@@ -7802,7 +8195,9 @@ public class FeishuCardActionService
                 pageIndex,
                 totalPages,
                 entries.Count,
-                pagedEntries);
+                pagedEntries,
+                showAllSessions,
+                sessionPage);
 
             return Task.FromResult(_cardBuilder.BuildCardActionResponseV2(card, string.Empty));
         }
@@ -7818,7 +8213,15 @@ public class FeishuCardActionService
         }
     }
 
-    private Task<CardActionTriggerResponseDto> HandlePreviewSessionFileAsync(string? sessionId, string? chatKey, string? filePath, string? directoryPath, int? page, string? operatorUserId)
+    private Task<CardActionTriggerResponseDto> HandlePreviewSessionFileAsync(
+        string? sessionId,
+        string? chatKey,
+        string? filePath,
+        string? directoryPath,
+        int? page,
+        string? operatorUserId,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         if (!TryResolveActiveSessionContext(sessionId, chatKey, operatorUserId, out var actualChatKey, out var activeSessionId, out var errorResponse))
         {
@@ -7858,7 +8261,9 @@ public class FeishuCardActionService
                 normalizedFilePath,
                 NormalizeWorkspaceRelativePath(directoryPath),
                 Math.Max(page ?? 0, 0),
-                fileBytes);
+                fileBytes,
+                showAllSessions,
+                sessionPage);
 
             return Task.FromResult(_cardBuilder.BuildCardActionResponseV2(card, string.Empty));
         }
@@ -7921,7 +8326,9 @@ public class FeishuCardActionService
         string chatKey,
         string toolId,
         AllowedDirectoryBrowseResult browseResult,
-        int pageIndex)
+        int pageIndex,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var elements = new List<object>
         {
@@ -8044,7 +8451,9 @@ public class FeishuCardActionService
                         action = "browse_allowed_directory",
                         chat_key = chatKey,
                         workspace_path = browseResult.ParentPath,
-                        tool_id = toolId
+                        tool_id = toolId,
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage ?? 0
                     }));
             }
             else
@@ -8056,7 +8465,9 @@ public class FeishuCardActionService
                     {
                         action = "browse_allowed_directory",
                         chat_key = chatKey,
-                        tool_id = toolId
+                        tool_id = toolId,
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage ?? 0
                     }));
             }
 
@@ -8071,7 +8482,9 @@ public class FeishuCardActionService
                         chat_key = chatKey,
                         workspace_path = browseResult.CurrentPath,
                         page = clampedPageIndex - 1,
-                        tool_id = toolId
+                        tool_id = toolId,
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage ?? 0
                     }));
             }
 
@@ -8086,7 +8499,9 @@ public class FeishuCardActionService
                         chat_key = chatKey,
                         workspace_path = browseResult.CurrentPath,
                         page = clampedPageIndex + 1,
-                        tool_id = toolId
+                        tool_id = toolId,
+                        show_all_sessions = showAllSessions,
+                        session_page = sessionPage ?? 0
                     }));
             }
         }
@@ -8099,7 +8514,9 @@ public class FeishuCardActionService
             {
                 action = "show_create_session_form",
                 chat_key = chatKey,
-                tool_id = toolId
+                tool_id = toolId,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }));
 
         return new ElementsCardV2Dto
@@ -8129,7 +8546,9 @@ public class FeishuCardActionService
         int pageIndex,
         int totalPages,
         int totalEntries,
-        List<SessionDirectoryEntry> entries)
+        List<SessionDirectoryEntry> entries,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var displayPath = GetDirectoryDisplayPath(directoryPath);
         var currentDirectoryFullPath = BuildWorkspaceEntryFullPath(workspacePath, directoryPath);
@@ -8168,7 +8587,7 @@ public class FeishuCardActionService
         {
             foreach (var entry in entries)
             {
-                elements.Add(BuildSessionDirectoryEntryRow(entry, chatKey, sessionId, directoryPath, pageIndex));
+                elements.Add(BuildSessionDirectoryEntryRow(entry, chatKey, sessionId, directoryPath, pageIndex, showAllSessions, sessionPage));
             }
         }
 
@@ -8184,7 +8603,9 @@ public class FeishuCardActionService
                     chat_key = chatKey,
                     session_id = sessionId,
                     directory_path = parentDirectoryPath,
-                    page = 0
+                    page = 0,
+                    show_all_sessions = showAllSessions,
+                    session_page = sessionPage ?? 0
                 }));
         }
 
@@ -8199,7 +8620,9 @@ public class FeishuCardActionService
                     chat_key = chatKey,
                     session_id = sessionId,
                     directory_path = directoryPath,
-                    page = pageIndex - 1
+                    page = pageIndex - 1,
+                    show_all_sessions = showAllSessions,
+                    session_page = sessionPage ?? 0
                 }));
         }
 
@@ -8214,7 +8637,9 @@ public class FeishuCardActionService
                     chat_key = chatKey,
                     session_id = sessionId,
                     directory_path = directoryPath,
-                    page = pageIndex + 1
+                    page = pageIndex + 1,
+                    show_all_sessions = showAllSessions,
+                    session_page = sessionPage ?? 0
                 }));
         }
 
@@ -8223,7 +8648,10 @@ public class FeishuCardActionService
             "primary",
             new
             {
-                action = "open_session_manager"
+                action = "open_session_manager",
+                chat_key = chatKey,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }));
 
         return new ElementsCardV2Dto
@@ -8252,7 +8680,9 @@ public class FeishuCardActionService
         string filePath,
         string directoryPath,
         int pageIndex,
-        byte[] fileBytes)
+        byte[] fileBytes,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var fileName = Path.GetFileName(filePath);
         var elements = new List<object>
@@ -8315,7 +8745,9 @@ public class FeishuCardActionService
                 chat_key = chatKey,
                 session_id = sessionId,
                 directory_path = directoryPath,
-                page = pageIndex
+                page = pageIndex,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }));
 
         elements.Add(BuildActionButton(
@@ -8323,7 +8755,10 @@ public class FeishuCardActionService
             "primary",
             new
             {
-                action = "open_session_manager"
+                action = "open_session_manager",
+                chat_key = chatKey,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }));
 
         return new ElementsCardV2Dto
@@ -8408,7 +8843,9 @@ public class FeishuCardActionService
         string chatKey,
         string sessionId,
         string directoryPath,
-        int pageIndex)
+        int pageIndex,
+        bool showAllSessions = false,
+        int? sessionPage = null)
     {
         var icon = entry.IsDirectory ? "📁" : "📄";
         var meta = entry.IsDirectory
@@ -8422,7 +8859,9 @@ public class FeishuCardActionService
                 chat_key = chatKey,
                 session_id = sessionId,
                 directory_path = entry.RelativePath,
-                page = 0
+                page = 0,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             }
             : new
             {
@@ -8431,7 +8870,9 @@ public class FeishuCardActionService
                 session_id = sessionId,
                 file_path = entry.RelativePath,
                 directory_path = directoryPath,
-                page = pageIndex
+                page = pageIndex,
+                show_all_sessions = showAllSessions,
+                session_page = sessionPage ?? 0
             };
 
         return new

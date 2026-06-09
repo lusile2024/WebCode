@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
 using WebCodeCli.Domain.Domain.Model.Channels;
 using WebCodeCli.Domain.Domain.Service;
@@ -19,6 +20,7 @@ public class AdminController : ControllerBase
     private readonly IUserFeishuBotConfigService _userFeishuBotConfigService;
     private readonly IUserFeishuBotRuntimeService _userFeishuBotRuntimeService;
     private readonly ICliExecutorService _cliExecutorService;
+    private readonly IFeishuDocumentAdminGrantService _feishuDocumentAdminGrantService;
 
     public AdminController(
         IUserAccountService userAccountService,
@@ -26,7 +28,8 @@ public class AdminController : ControllerBase
         IUserWorkspacePolicyService userWorkspacePolicyService,
         IUserFeishuBotConfigService userFeishuBotConfigService,
         IUserFeishuBotRuntimeService userFeishuBotRuntimeService,
-        ICliExecutorService cliExecutorService)
+        ICliExecutorService cliExecutorService,
+        IFeishuDocumentAdminGrantService feishuDocumentAdminGrantService)
     {
         _userAccountService = userAccountService;
         _userToolPolicyService = userToolPolicyService;
@@ -34,6 +37,7 @@ public class AdminController : ControllerBase
         _userFeishuBotConfigService = userFeishuBotConfigService;
         _userFeishuBotRuntimeService = userFeishuBotRuntimeService;
         _cliExecutorService = cliExecutorService;
+        _feishuDocumentAdminGrantService = feishuDocumentAdminGrantService;
     }
 
     [HttpGet("users")]
@@ -176,7 +180,8 @@ public class AdminController : ControllerBase
             FullReplyDocEnabled = fullReplyDocEnabled,
             FinalReplyDocEnabled = finalReplyDocEnabled,
             AudioFullReplyDocEnabled = request.AudioFullReplyDocEnabled,
-            AudioFinalReplyDocEnabled = request.AudioFinalReplyDocEnabled
+            AudioFinalReplyDocEnabled = request.AudioFinalReplyDocEnabled,
+            DocumentAdminOpenId = request.DocumentAdminOpenId
         });
 
         if (!result.Success)
@@ -238,6 +243,58 @@ public class AdminController : ControllerBase
         var status = await _userFeishuBotRuntimeService.StopAsync(username);
         return Ok(MapFeishuRuntimeStatus(status));
     }
+
+    [HttpPost("users/{username}/feishu-bot/grant-document-admin")]
+    public async Task<ActionResult> GrantFeishuDocumentAdmin(string username, [FromBody] GrantFeishuDocumentAdminRequestDto request)
+    {
+        var result = await _feishuDocumentAdminGrantService.GrantConfiguredAdminAsync(username, request.DocumentId);
+        return ToGrantResponse(result);
+    }
+
+    [HttpPost("users/{username}/feishu-bot/grant-document-admin/batch")]
+    public async Task<ActionResult> GrantFeishuDocumentAdminBatch(string username, [FromBody] GrantFeishuDocumentAdminBatchRequestDto request)
+    {
+        if (request.DocumentIds == null || request.DocumentIds.Count == 0)
+        {
+            return BadRequest(new { error = "文档 ID 列表不能为空。" });
+        }
+
+        var result = await _feishuDocumentAdminGrantService.GrantConfiguredAdminBatchAsync(username, request.DocumentIds);
+        return Ok(new
+        {
+            success = result.FailureCount == 0,
+            successCount = result.SuccessCount,
+            failureCount = result.FailureCount,
+            results = result.Results
+        });
+    }
+
+    private ActionResult ToGrantResponse(FeishuDocumentAdminGrantResult result)
+    {
+        if (result.Success)
+        {
+            return Ok(new
+            {
+                success = true,
+                username = result.Username,
+                documentId = result.DocumentId,
+                openId = result.OpenId
+            });
+        }
+
+        if (result.StatusCode == 404)
+        {
+            return NotFound(new { error = result.ErrorMessage });
+        }
+
+        if (result.StatusCode == 400)
+        {
+            return BadRequest(new { error = result.ErrorMessage });
+        }
+
+        return StatusCode(500, new { error = result.ErrorMessage ?? "授予文档管理员权限失败。" });
+    }
+
     private static UserAccountResponseDto MapUser(UserAccountEntity account)
     {
         return new UserAccountResponseDto
@@ -269,7 +326,8 @@ public class AdminController : ControllerBase
             FullReplyDocEnabled = config.FullReplyDocEnabled,
             FinalReplyDocEnabled = config.FinalReplyDocEnabled,
             AudioFullReplyDocEnabled = config.AudioFullReplyDocEnabled,
-            AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled
+            AudioFinalReplyDocEnabled = config.AudioFinalReplyDocEnabled,
+            DocumentAdminOpenId = config.DocumentAdminOpenId
         };
     }
 
@@ -344,6 +402,7 @@ public sealed class UserFeishuBotConfigDto
     public bool FinalReplyDocEnabled { get; set; }
     public bool AudioFullReplyDocEnabled { get; set; }
     public bool AudioFinalReplyDocEnabled { get; set; }
+    public string? DocumentAdminOpenId { get; set; }
 }
 
 public sealed class UserFeishuBotRuntimeStatusDto
@@ -358,4 +417,14 @@ public sealed class UserFeishuBotRuntimeStatusDto
     public string? LastError { get; set; }
     public DateTime? LastStartedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+}
+
+public sealed class GrantFeishuDocumentAdminRequestDto
+{
+    public string DocumentId { get; set; } = string.Empty;
+}
+
+public sealed class GrantFeishuDocumentAdminBatchRequestDto
+{
+    public List<string> DocumentIds { get; set; } = new();
 }

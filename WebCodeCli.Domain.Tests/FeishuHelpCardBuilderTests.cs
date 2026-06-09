@@ -95,6 +95,48 @@ public class FeishuHelpCardBuilderTests
     }
 
     [Fact]
+    public void BuildCommandListCardV2_IncludesSetDocumentAdminButton()
+    {
+        var card = _builder.BuildCommandListCardV2(
+            CreateCategories(),
+            showRefreshButton: true);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsAction(bodyDoc.RootElement, "set_document_admin_openid"));
+        Assert.True(ContainsStringFragment(bodyDoc.RootElement, "OpenID"));
+    }
+
+    [Fact]
+    public void BuildCommandListCardV2_WhenRefreshButtonHidden_StillIncludesSetDocumentAdminButton()
+    {
+        var card = _builder.BuildCommandListCardV2(
+            CreateCategories(),
+            showRefreshButton: false);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsAction(bodyDoc.RootElement, "set_document_admin_openid"));
+        Assert.True(ContainsStringFragment(bodyDoc.RootElement, "OpenID"));
+    }
+
+    [Fact]
+    public void BuildCommandListCardV2_WhenRefreshButtonHidden_StillIncludesReplyDocumentButtons()
+    {
+        var card = _builder.BuildCommandListCardV2(
+            CreateCategories(),
+            showRefreshButton: false,
+            fullReplyDocEnabled: true,
+            finalReplyDocEnabled: false,
+            audioFullReplyDocEnabled: true,
+            audioFinalReplyDocEnabled: false);
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFullReplyDocAction));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleFinalReplyDocAction));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleAudioFullReplyDocAction));
+        Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleAudioFinalReplyDocAction));
+    }
+
+    [Fact]
     public void BuildFilteredCardV2_IncludesListeningReplyDocumentButtons_WhenOnlyListeningFinalReplyDocumentEnabled()
     {
         var card = _builder.BuildFilteredCardV2(
@@ -110,6 +152,18 @@ public class FeishuHelpCardBuilderTests
         Assert.True(ContainsStringValue(bodyDoc.RootElement, "听结论文档：开"));
         Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleAudioFullReplyDocAction));
         Assert.True(ContainsAction(bodyDoc.RootElement, FeishuHelpCardAction.ToggleAudioFinalReplyDocAction));
+    }
+
+    [Fact]
+    public void BuildFilteredCardV2_IncludesSetDocumentAdminButton()
+    {
+        var card = _builder.BuildFilteredCardV2(
+            CreateCategories(),
+            "help");
+        using var bodyDoc = JsonDocument.Parse(JsonSerializer.Serialize(card.Body!.Elements));
+
+        Assert.True(ContainsAction(bodyDoc.RootElement, "set_document_admin_openid"));
+        Assert.True(ContainsStringFragment(bodyDoc.RootElement, "OpenID"));
     }
 
     [Fact]
@@ -471,6 +525,17 @@ public class FeishuHelpCardBuilderTests
             JsonValueKind.String => string.Equals(element.GetString(), expected, StringComparison.Ordinal),
             JsonValueKind.Object => element.EnumerateObject().Any(property => ContainsStringValue(property.Value, expected)),
             JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsStringValue(item, expected)),
+            _ => false
+        };
+    }
+
+    private static bool ContainsStringFragment(JsonElement element, string expectedFragment)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString()?.Contains(expectedFragment, StringComparison.Ordinal) == true,
+            JsonValueKind.Object => element.EnumerateObject().Any(property => ContainsStringFragment(property.Value, expectedFragment)),
+            JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsStringFragment(item, expectedFragment)),
             _ => false
         };
     }

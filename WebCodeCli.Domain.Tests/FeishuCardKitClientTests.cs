@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json;
 using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -23,7 +23,7 @@ public class FeishuCardKitClientTests
 
         var client = CreateClient(handler);
 
-        var document = await client.CreateCloudDocumentAsync("thread-1 继续 - 完整回复", TestContext.Current.CancellationToken);
+        var document = await client.CreateCloudDocumentAsync("thread-1 缁х画 - 瀹屾暣鍥炲", TestContext.Current.CancellationToken);
 
         Assert.Equal("doccn123", document.DocumentId);
         Assert.Equal("root123", document.RootBlockId);
@@ -35,7 +35,32 @@ public class FeishuCardKitClientTests
         ], handler.RequestPaths);
 
         using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
-        Assert.Equal("thread-1 继续 - 完整回复", requestDoc.RootElement.GetProperty("title").GetString());
+        Assert.Equal("thread-1 缁х画 - 瀹屾暣鍥炲", requestDoc.RootElement.GetProperty("title").GetString());
+        Assert.False(requestDoc.RootElement.TryGetProperty("folder_token", out _));
+    }
+
+    [Fact]
+    public async Task CreateCloudDocumentAsync_WhenFolderTokenProvided_PostsFolderTokenInDocxCreateRequest()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"document":{"document_id":"doccn123","root_block_id":"root123"}}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var document = await client.CreateCloudDocumentAsync(
+            "thread-1 缁х画 - 瀹屾暣鍥炲",
+            TestContext.Current.CancellationToken,
+            folderToken: "fld-target");
+
+        Assert.Equal("doccn123", document.DocumentId);
+        Assert.Equal("root123", document.RootBlockId);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("thread-1 缁х画 - 瀹屾暣鍥炲", requestDoc.RootElement.GetProperty("title").GetString());
+        Assert.Equal("fld-target", requestDoc.RootElement.GetProperty("folder_token").GetString());
     }
 
     [Fact]
@@ -52,7 +77,7 @@ public class FeishuCardKitClientTests
         await client.AppendCloudDocumentTextAsync(
             "doccn123",
             "root123",
-            "结论正文",
+            "缁撹姝ｆ枃",
             TestContext.Current.CancellationToken);
 
         Assert.Equal(
@@ -65,7 +90,7 @@ public class FeishuCardKitClientTests
         var children = requestDoc.RootElement.GetProperty("children");
         Assert.Equal(1, children.GetArrayLength());
         Assert.Equal(2, children[0].GetProperty("block_type").GetInt32());
-        Assert.Equal("结论正文", children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+        Assert.Equal("缁撹姝ｆ枃", children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
         Assert.Equal(JsonValueKind.Object, children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("text_element_style").ValueKind);
     }
 
@@ -96,6 +121,150 @@ public class FeishuCardKitClientTests
     }
 
     [Fact]
+    public async Task GrantCloudDocumentMemberFullAccessAsync_PostsPermissionMemberRequest()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"member_id":"ou_doc_admin"}}""")
+        ]);
+
+        dynamic client = CreateClient(handler);
+
+        await client.GrantCloudDocumentMemberFullAccessAsync(
+            "doccn123",
+            "ou_doc_admin",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/permissions/doccn123/members"
+        ], handler.RequestPaths);
+        Assert.Equal("type=docx", handler.RequestQueries[1]);
+        Assert.Equal("POST", handler.RequestMethods[1]);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("ou_doc_admin", requestDoc.RootElement.GetProperty("member_id").GetString());
+        Assert.Equal("openid", requestDoc.RootElement.GetProperty("member_type").GetString());
+        Assert.Equal("full_access", requestDoc.RootElement.GetProperty("perm").GetString());
+        Assert.Equal("container", requestDoc.RootElement.GetProperty("perm_type").GetString());
+        Assert.Equal("user", requestDoc.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task GrantCloudFolderMemberFullAccessAsync_PostsPermissionMemberRequest()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"member_id":"ou_doc_admin"}}""")
+        ]);
+
+        dynamic client = CreateClient(handler);
+
+        await client.GrantCloudFolderMemberFullAccessAsync(
+            "fld_123",
+            "ou_doc_admin",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/permissions/fld_123/members"
+        ], handler.RequestPaths);
+        Assert.Equal("type=folder", handler.RequestQueries[1]);
+        Assert.Equal("POST", handler.RequestMethods[1]);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("ou_doc_admin", requestDoc.RootElement.GetProperty("member_id").GetString());
+        Assert.Equal("openid", requestDoc.RootElement.GetProperty("member_type").GetString());
+        Assert.Equal("full_access", requestDoc.RootElement.GetProperty("perm").GetString());
+        Assert.Equal("container", requestDoc.RootElement.GetProperty("perm_type").GetString());
+        Assert.Equal("user", requestDoc.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task EnsureCloudFolderAsync_WhenFolderExists_ReturnsExistingFolderToken()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"token":"fld-root"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"files":[{"name":"session-folder","token":"fld-existing","type":"folder"}],"has_more":false}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var folderToken = await client.EnsureCloudFolderAsync("session-folder", TestContext.Current.CancellationToken);
+
+        Assert.Equal("fld-existing", folderToken);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/explorer/v2/root_folder/meta",
+            "/open-apis/drive/v1/files"
+        ], handler.RequestPaths);
+        Assert.Equal("GET", handler.RequestMethods[1]);
+        Assert.Equal("GET", handler.RequestMethods[2]);
+        Assert.Contains("folder_token=fld-root", handler.RequestQueries[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EnsureCloudFolderAsync_WhenFolderMissing_CreatesFolderUnderRoot()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"token":"fld-root"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"files":[],"has_more":false}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"token":"fld-created","url":"https://feishu.cn/drive/folder/fld-created"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var folderToken = await client.EnsureCloudFolderAsync("session-folder", TestContext.Current.CancellationToken);
+
+        Assert.Equal("fld-created", folderToken);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/explorer/v2/root_folder/meta",
+            "/open-apis/drive/v1/files",
+            "/open-apis/drive/v1/files/create_folder"
+        ], handler.RequestPaths);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[3]);
+        Assert.Equal("fld-root", requestDoc.RootElement.GetProperty("folder_token").GetString());
+        Assert.Equal("session-folder", requestDoc.RootElement.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task MoveCloudDocumentToFolderAsync_PostsDriveMoveRequest()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"task_id":"7360595374803812356"}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        await client.MoveCloudDocumentToFolderAsync("doccn123", "fld-target", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/v1/files/doccn123/move"
+        ], handler.RequestPaths);
+        Assert.Equal("POST", handler.RequestMethods[1]);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal("fld-target", requestDoc.RootElement.GetProperty("folder_token").GetString());
+        Assert.Equal("docx", requestDoc.RootElement.GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task CreateCloudDocumentAsync_WhenApiReturnsBadRequest_ExceptionIncludesResponseBody()
     {
         var handler = new StubHttpMessageHandler(
@@ -110,7 +279,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.CreateCloudDocumentAsync("thread-1 continue - 完整回复", TestContext.Current.CancellationToken));
+            client.CreateCloudDocumentAsync("thread-1 continue - 瀹屾暣鍥炲", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("BadRequest", exception.Message, StringComparison.Ordinal);
         Assert.Contains("99991672", exception.Message, StringComparison.Ordinal);
@@ -321,7 +490,7 @@ public class FeishuCardKitClientTests
         });
         chrome.OverflowOptions.Add(new FeishuStreamingCardOverflowOption
         {
-            Text = "模型/会话管理...",
+            Text = "妯″瀷/浼氳瘽绠＄悊...",
             Value = new { action = "open_session_manager" }
         });
 
@@ -329,7 +498,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -340,7 +509,7 @@ public class FeishuCardKitClientTests
         var statusModule = elements[0];
         var overflow = statusModule.GetProperty("extra");
 
-        Assert.Equal("当前会话", statusModule.GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("褰撳墠浼氳瘽", statusModule.GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("overflow", overflow.GetProperty("tag").GetString());
         Assert.Equal("Backend API", overflow.GetProperty("options")[0].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("{\"action\":\"switch_session\",\"session_id\":\"session-2\",\"chat_key\":\"oc_stream_chat\"}", overflow.GetProperty("options")[0].GetProperty("value").GetString());
@@ -359,12 +528,12 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话"
+            StatusMarkdown = "褰撳墠浼氳瘽"
         };
         chrome.BottomPrompt = new FeishuStreamingCardBottomPrompt
         {
             InputName = LowInterruptionContinueDefaults.PromptFieldName,
-            InputLabel = "少打断提示词",
+            InputLabel = "灏戞墦鏂彁绀鸿瘝",
             Placeholder = LowInterruptionContinueDefaults.PromptPlaceholder,
             DefaultValue = LowInterruptionContinueDefaults.DefaultPrompt,
             ButtonText = "Continue",
@@ -382,15 +551,15 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
         using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
-        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作�?Goal不间断执�?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
         var bottomActionModule = elements.EnumerateArray().Last();
 
         Assert.Equal("form", bottomActionModule.GetProperty("tag").GetString());
@@ -424,7 +593,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话",
+            StatusMarkdown = "褰撳墠浼氳瘽",
             BottomPrompt = new FeishuStreamingCardBottomPrompt
             {
                 FormName = "superpowers_quick_action_form",
@@ -432,7 +601,7 @@ public class FeishuCardKitClientTests
                 InputLabel = "Use superpowers workflow",
                 Placeholder = "Enter text and submit",
                 DefaultValue = string.Empty,
-                ButtonText = "提交",
+                ButtonText = "鎻愪氦",
                 ButtonType = "primary",
                 Value = new { action = "submit_superpowers_quick_input" }
             },
@@ -445,7 +614,7 @@ public class FeishuCardKitClientTests
                     InputLabel = "Use /goal workflow",
                     Placeholder = "Enter text and submit",
                     DefaultValue = string.Empty,
-                    ButtonText = "提交",
+                    ButtonText = "鎻愪氦",
                     ButtonType = "primary",
                     Value = new { action = "submit_goal_quick_input" }
                 }
@@ -456,7 +625,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -484,13 +653,13 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "褰撳墠浼氳瘽"
+            StatusMarkdown = "瑜版挸澧犳导姘崇樈"
         };
         chrome.TopChipGroups.Add(new FeishuStreamingCardTopChipGroup
         {
             Kind = "model",
             IsEnabled = true,
-            SummaryMarkdown = "🤖 模型：`gpt-5.3-codex-spark`",
+            SummaryMarkdown = "馃 妯″瀷锛歚gpt-5.3-codex-spark`",
             OverflowOptions =
             [
                 new FeishuStreamingCardOverflowOption
@@ -519,11 +688,11 @@ public class FeishuCardKitClientTests
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
         Assert.Equal("div", elements[0].GetProperty("tag").GetString());
-        Assert.Equal("🟥🟥🟥 **思考等�?*", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鎬濊€冪瓑绾?*", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("div", elements[2].GetProperty("tag").GetString());
-        Assert.Equal("🟥🟥🟥 **回复内容**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[4].GetProperty("tag").GetString());
-        Assert.Equal("🤖 模型：`gpt-5.3-codex-spark`", elements[2].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃 妯″瀷锛歚gpt-5.3-codex-spark`", elements[2].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("overflow", elements[2].GetProperty("extra").GetProperty("tag").GetString());
         var options = elements[2].GetProperty("extra").GetProperty("options");
         Assert.Equal(2, options.GetArrayLength());
@@ -544,7 +713,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话"
+            StatusMarkdown = "褰撳墠浼氳瘽"
         };
 
         var items = Enumerable.Range(1, 7)
@@ -573,7 +742,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -581,14 +750,14 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **思考等�?*", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鎬濊€冪瓑绾?*", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[2].GetProperty("tag").GetString());
         Assert.Equal("column_set", elements[3].GetProperty("tag").GetString());
         Assert.Equal(6, elements[2].GetProperty("columns").GetArrayLength());
         Assert.Equal(1, elements[3].GetProperty("columns").GetArrayLength());
         Assert.Equal("gpt-5.1", elements[2].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("gpt-5.7", elements[3].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("🟥🟥🟥 **回复内容**", elements[4].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[4].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[5].GetProperty("tag").GetString());
     }
 
@@ -605,11 +774,11 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话"
+            StatusMarkdown = "褰撳墠浼氳瘽"
         };
         chrome.BottomActions.Add(new FeishuStreamingCardBottomAction
         {
-            Text = "执行 plan",
+            Text = "鎵ц plan",
             Type = "primary",
             Value = new { action = "execute_superpowers_plan", session_id = "session-1" }
         });
@@ -618,7 +787,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -626,9 +795,9 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[2].GetProperty("tag").GetString());
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作�?Goal不间断执�?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
     }
 
@@ -645,7 +814,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话"
+            StatusMarkdown = "褰撳墠浼氳瘽"
         };
         chrome.BottomActions.AddRange(
         [
@@ -663,13 +832,13 @@ public class FeishuCardKitClientTests
             },
             new FeishuStreamingCardBottomAction
             {
-                Text = "继续",
+                Text = "缁х画",
                 RowKey = "execution_control_row",
                 Value = new { action = "continue_superpowers", session_id = "session-1" }
             },
             new FeishuStreamingCardBottomAction
             {
-                Text = "停止",
+                Text = "鍋滄",
                 RowKey = "execution_control_row",
                 Value = new { action = "stop_streaming_execution", session_id = "session-1" }
             }
@@ -679,7 +848,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -687,15 +856,15 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作�?Goal不间断执�?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
         Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
         Assert.Equal(2, elements[4].GetProperty("columns").GetArrayLength());
         Assert.Equal(2, elements[5].GetProperty("columns").GetArrayLength());
         Assert.Equal("/goal", elements[4].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("/goal pause", elements[4].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("继续", elements[5].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("停止", elements[5].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("缁х画", elements[5].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("鍋滄", elements[5].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
     }
 
     [Fact]
@@ -711,15 +880,15 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话",
-            LatestToolCallMarkdown = "**调用工具�?* `Bash · git status --short`"
+            StatusMarkdown = "褰撳墠浼氳瘽",
+            LatestToolCallMarkdown = "**璋冪敤宸ュ叿锛?* `Bash 路 git status --short`"
         };
 
         await client.CreateStreamingHandleAsync(
             "oc_stream_chat",
             null,
             "assistant output",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -727,11 +896,11 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[2].GetProperty("tag").GetString());
         Assert.Equal("assistant output", elements[2].GetProperty("content").GetString());
         Assert.Equal("div", elements[3].GetProperty("tag").GetString());
-        Assert.Equal("**调用工具�?* `Bash · git status --short`", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("**璋冪敤宸ュ叿锛?* `Bash 路 git status --short`", elements[3].GetProperty("text").GetProperty("content").GetString());
     }
 
     [Fact]
@@ -747,7 +916,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话"
+            StatusMarkdown = "褰撳墠浼氳瘽"
         };
         chrome.BottomNoticeMarkdowns.Add("Session binding changed");
         chrome.BottomActions.Add(new FeishuStreamingCardBottomAction
@@ -761,7 +930,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -769,7 +938,7 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("🟥🟥🟥 **Superpowers 工作�?Goal不间断执�?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("div", elements[4].GetProperty("tag").GetString());
         Assert.Equal("Session binding changed", elements[4].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
@@ -788,14 +957,14 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "当前会话"
+            StatusMarkdown = "褰撳墠浼氳瘽"
         };
 
         await client.CreateStreamingHandleAsync(
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -893,7 +1062,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "initial",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken);
 
         await handle.UpdateAsync("first update");
@@ -979,7 +1148,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "initial",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken);
 
         await handle.UpdateAsync("first update");
@@ -1047,7 +1216,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "initial",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: CreateVerboseStreamingChrome());
 
@@ -1077,7 +1246,7 @@ public class FeishuCardKitClientTests
             .GetProperty("content")
             .GetString();
 
-        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("鍗＄墖宸茬簿绠€", reducedContent);
         Assert.Contains("only latest content", reducedContent);
         Assert.Contains("line 359", reducedContent);
         Assert.DoesNotContain("line 000", reducedContent);
@@ -1099,7 +1268,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             BuildLargeStreamingContent(),
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: CreateVerboseStreamingChrome());
 
@@ -1125,7 +1294,7 @@ public class FeishuCardKitClientTests
             .GetProperty("content")
             .GetString();
 
-        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("鍗＄墖宸茬簿绠€", reducedContent);
         Assert.Contains("only latest content", reducedContent);
         Assert.Contains("line 359", reducedContent);
         Assert.DoesNotContain("line 000", reducedContent);
@@ -1147,7 +1316,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "initial",
-            "AI 助手",
+            "AI 鍔╂墜",
             TestContext.Current.CancellationToken,
             chrome: CreateVerboseStreamingChrome());
 
@@ -1173,7 +1342,7 @@ public class FeishuCardKitClientTests
             .GetProperty("content")
             .GetString();
 
-        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("鍗＄墖宸茬簿绠€", reducedContent);
         Assert.Contains("tail next", reducedContent);
     }
 
@@ -1182,13 +1351,13 @@ public class FeishuCardKitClientTests
         var chrome = new FeishuStreamingCardChrome
         {
             StatusMarkdown = "Current session / processing",
-            LatestToolCallMarkdown = "**调用工具�?* `powershell.exe -Command ...`"
+            LatestToolCallMarkdown = "**璋冪敤宸ュ叿锛?* `powershell.exe -Command ...`"
         };
 
         chrome.BottomNoticeMarkdowns.Add("This is a long tool output card and should shrink on overflow.");
         chrome.BottomActions.Add(new FeishuStreamingCardBottomAction
         {
-            Text = "继续",
+            Text = "缁х画",
             Type = "primary",
             Value = new { action = "continue" }
         });
@@ -1576,7 +1745,7 @@ public class FeishuCardKitClientTests
                 using var cardDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("card").GetProperty("data").GetString()!);
                 var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
                 var isReducedPayload = elements.GetArrayLength() == 1
-                    && elements[0].GetProperty("content").GetString()!.Contains("卡片已精简", StringComparison.Ordinal);
+                    && elements[0].GetProperty("content").GetString()!.Contains("鍗＄墖宸茬簿绠€", StringComparison.Ordinal);
 
                 return isReducedPayload
                     ? CreateJsonResponse("""{"code":0}""")
@@ -1587,7 +1756,3 @@ public class FeishuCardKitClientTests
         }
     }
 }
-
-
-
-

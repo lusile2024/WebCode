@@ -40,6 +40,33 @@ public sealed class AdminControllerReplyDocumentTests
     }
 
     [Fact]
+    public async Task GetFeishuBotConfig_ReturnsDocumentAdminOpenId()
+    {
+        var config = new UserFeishuBotConfigEntity
+        {
+            Username = "alice",
+            IsEnabled = true
+        };
+        SetStringProperty(config, "DocumentAdminOpenId", "ou_admin_alice");
+
+        var configService = new AdminControllerReplyDocumentTestsAccessor.StubUserFeishuBotConfigService
+        {
+            ConfigsByUsername =
+            {
+                ["alice"] = config
+            }
+        };
+
+        var controller = AdminControllerReplyDocumentTestsAccessor.CreateController(configService: configService);
+
+        var result = await controller.GetFeishuBotConfig("alice");
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<UserFeishuBotConfigDto>(ok.Value);
+        Assert.Equal("ou_admin_alice", GetStringProperty(dto, "DocumentAdminOpenId"));
+    }
+
+    [Fact]
     public async Task GetFeishuBotConfig_WithoutConfig_ReturnsDefaultReplyDocumentFields()
     {
         var controller = AdminControllerReplyDocumentTestsAccessor.CreateController();
@@ -77,6 +104,24 @@ public sealed class AdminControllerReplyDocumentTests
         Assert.True(configService.LastSavedConfig.FinalReplyDocEnabled);
         Assert.True(configService.LastSavedConfig.AudioFullReplyDocEnabled);
         Assert.True(configService.LastSavedConfig.AudioFinalReplyDocEnabled);
+    }
+
+    [Fact]
+    public async Task SaveFeishuBotConfig_ForwardsDocumentAdminOpenIdIntoEntity()
+    {
+        var configService = new AdminControllerReplyDocumentTestsAccessor.StubUserFeishuBotConfigService();
+        var controller = AdminControllerReplyDocumentTestsAccessor.CreateController(configService: configService);
+        var request = new UserFeishuBotConfigDto
+        {
+            IsEnabled = true
+        };
+        SetStringProperty(request, "DocumentAdminOpenId", "ou_admin_alice");
+
+        var result = await controller.SaveFeishuBotConfig("alice", request);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.NotNull(configService.LastSavedConfig);
+        Assert.Equal("ou_admin_alice", GetStringProperty(configService.LastSavedConfig!, "DocumentAdminOpenId"));
     }
 
     [Fact]
@@ -131,5 +176,18 @@ public sealed class AdminControllerReplyDocumentTests
         Assert.NotNull(configService.LastSavedConfig);
         Assert.True(configService.LastSavedConfig!.FullReplyDocEnabled);
         Assert.False(configService.LastSavedConfig.FinalReplyDocEnabled);
+    }
+
+    private static string? GetStringProperty(object target, string propertyName)
+    {
+        return target
+            .GetType()
+            .GetProperty(propertyName)?
+            .GetValue(target) as string;
+    }
+
+    private static void SetStringProperty(object target, string propertyName, string value)
+    {
+        target.GetType().GetProperty(propertyName)?.SetValue(target, value);
     }
 }

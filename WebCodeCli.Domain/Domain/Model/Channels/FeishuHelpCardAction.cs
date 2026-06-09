@@ -31,6 +31,7 @@ public class FeishuHelpCardAction
     public const string ToggleFinalReplyDocAction = "toggle_final_reply_doc";
     public const string ToggleAudioFullReplyDocAction = "toggle_audio_full_reply_doc";
     public const string ToggleAudioFinalReplyDocAction = "toggle_audio_final_reply_doc";
+    public const string SetDocumentAdminOpenIdAction = "set_document_admin_openid";
     public const string ToggleReplyTtsAction = ToggleFullReplyDocAction;
     public const string ToggleFinalOnlyReplyTtsAction = ToggleFinalReplyDocAction;
 
@@ -142,6 +143,12 @@ public class FeishuHelpCardAction
     /// </summary>
     [JsonPropertyName("show_all_sessions")]
     public bool? ShowAllSessions { get; set; }
+
+    /// <summary>
+    /// 会话管理分页页码（从 0 开始）
+    /// </summary>
+    [JsonPropertyName("session_page")]
+    public int? SessionPage { get; set; }
 
     /// <summary>
     /// 表单中的模型值（会话启动设置时使用）

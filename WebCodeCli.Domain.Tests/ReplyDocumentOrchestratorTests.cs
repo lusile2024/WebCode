@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using SqlSugar;
@@ -15,6 +15,14 @@ namespace WebCodeCli.Domain.Tests;
 
 public sealed class ReplyDocumentOrchestratorTests
 {
+    private const string ContinueQuestion = "继续";
+    private const string FullReplyText = "完整回复";
+    private const string FullReplyBody = "完整回复正文";
+    private const string FinalReplyText = "结论";
+    private const string FinalReplyBody = "结论正文";
+    private const string NamedSessionTitle = "商业基础盘";
+    private const string UnnamedSessionTitle = "未命名";
+
     [Fact]
     public async Task QueueCompletedReplyAsync_SkipsWhenBothReplyDocumentsDisabled()
     {
@@ -30,8 +38,8 @@ public sealed class ReplyDocumentOrchestratorTests
         {
             ChatId = "oc-disabled-chat",
             Username = "luhaiyan",
-            Output = "完整回复",
-            FinalAnswerOutput = "结论"
+            Output = FullReplyText,
+            FinalAnswerOutput = FinalReplyText
         });
 
         await WaitUntilAsync(() => harness.ConfigService.UsernameLookupCount == 1);
@@ -58,15 +66,15 @@ public sealed class ReplyDocumentOrchestratorTests
             CliThreadId = "thread-1",
             OriginalUserQuestion = "question",
             Username = "luhaiyan",
-            Output = "完整回复正文",
-            FinalAnswerOutput = "结论正文"
+            Output = FullReplyBody,
+            FinalAnswerOutput = FinalReplyBody
         });
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
         Assert.Equal("thread-1 question - 完整回复", document.Title);
-        Assert.Equal("完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        Assert.Equal(FullReplyBody, Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Single(harness.CardKit.PermissionUpdates);
         Assert.Single(harness.CardKit.TextMessages);
         Assert.Contains("已生成完整回复文档：", harness.CardKit.TextMessages.Single(), StringComparison.Ordinal);
@@ -89,17 +97,17 @@ public sealed class ReplyDocumentOrchestratorTests
             ChatId = "oc-final-chat",
             SessionId = "session-1",
             CliThreadId = "thread-2",
-            OriginalUserQuestion = "继续",
+            OriginalUserQuestion = ContinueQuestion,
             Username = "luhaiyan",
             Output = "过程说明",
-            FinalAnswerOutput = "结论正文"
+            FinalAnswerOutput = FinalReplyBody
         });
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
-        Assert.Equal("thread-2 继续 - 结论回复", document.Title);
-        Assert.Equal("结论正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        Assert.Equal($"thread-2 {ContinueQuestion} - 结论回复", document.Title);
+        Assert.Equal(FinalReplyBody, Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Equal(0, harness.HistoryService.FinalAnswerLookupCount);
         Assert.Contains("已生成结论回复文档：", Assert.Single(harness.CardKit.TextMessages), StringComparison.Ordinal);
     }
@@ -129,7 +137,7 @@ public sealed class ReplyDocumentOrchestratorTests
         {
             ChatId = "oc-fallback-chat",
             SessionId = "session-fallback",
-            OriginalUserQuestion = "继续",
+            OriginalUserQuestion = ContinueQuestion,
             Username = "luhaiyan",
             Output = "过程说明",
             FinalAnswerOutput = ""
@@ -161,8 +169,8 @@ public sealed class ReplyDocumentOrchestratorTests
             CliThreadId = "thread-both",
             OriginalUserQuestion = "question",
             Username = "luhaiyan",
-            Output = "完整回复正文",
-            FinalAnswerOutput = "结论正文"
+            Output = FullReplyBody,
+            FinalAnswerOutput = FinalReplyBody
         });
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 2);
@@ -173,6 +181,147 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(2, harness.CardKit.TextMessages.Count);
         Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both question - 完整回复");
         Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both question - 结论回复");
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenDocumentAdminOpenIdConfigured_GrantsAdminPermissionToCreatedDocument()
+    {
+        var config = new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            FullReplyDocEnabled = true
+        };
+        SetStringProperty(config, "DocumentAdminOpenId", "ou_doc_admin");
+
+        using var harness = new ReplyDocumentOrchestratorHarness(config);
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-admin-grant-chat",
+            SessionId = "session-admin-grant",
+            CliThreadId = "thread-admin-grant",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        var grant = Assert.Single(harness.CardKit.DocumentAdminGrants);
+        Assert.Equal(harness.CardKit.CreatedDocuments.Single().DocumentId, grant.DocumentId);
+        Assert.Equal("ou_doc_admin", grant.OpenId);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenDocumentAdminOpenIdConfigured_GrantsAdminPermissionToReplyDocumentFolder()
+    {
+        var config = new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            FullReplyDocEnabled = true
+        };
+        SetStringProperty(config, "DocumentAdminOpenId", "ou_doc_admin");
+
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            config,
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-admin-grant",
+                Username = "luhaiyan",
+                CliThreadId = "thread-folder-admin-grant",
+                Title = NamedSessionTitle
+            });
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-admin-grant-chat",
+            SessionId = "session-folder-admin-grant",
+            CliThreadId = "thread-folder-admin-grant",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        var folderGrant = Assert.Single(harness.CardKit.FolderAdminGrants);
+        Assert.Equal("folder-1", folderGrant.FolderToken);
+        Assert.Equal("ou_doc_admin", folderGrant.OpenId);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenGrantingDocumentAdminFails_SendsWarningWithoutBlockingDocumentLink()
+    {
+        var config = new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            FullReplyDocEnabled = true
+        };
+        SetStringProperty(config, "DocumentAdminOpenId", "ou_doc_admin");
+
+        using var harness = new ReplyDocumentOrchestratorHarness(config);
+        harness.CardKit.GrantDocumentAdminException = new HttpRequestException(
+            "API request failed: Status=BadRequest, Content={\"code\":99991672,\"msg\":\"Access denied. One of the following scopes is required: [drive:drive].应用尚未开通所需的应用身份权限：[drive:drive]，点击链接申请并开通任一权限即可：https://open.feishu.cn/app/test/auth?q=drive:drive\"}");
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-admin-grant-warning-chat",
+            SessionId = "session-admin-grant-warning",
+            CliThreadId = "thread-admin-grant-warning",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 2);
+
+        Assert.Contains("已生成完整回复文档：", harness.CardKit.TextMessages[0], StringComparison.Ordinal);
+        Assert.Contains("文档管理员权限授予失败", harness.CardKit.TextMessages[1], StringComparison.Ordinal);
+        Assert.Contains("drive:drive", harness.CardKit.TextMessages[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenGrantingFolderAdminFails_SendsWarningWithoutBlockingDocumentLink()
+    {
+        var config = new UserFeishuBotConfigEntity
+        {
+            Username = "luhaiyan",
+            FullReplyDocEnabled = true
+        };
+        SetStringProperty(config, "DocumentAdminOpenId", "ou_doc_admin");
+
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            config,
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-admin-warning",
+                Username = "luhaiyan",
+                CliThreadId = "thread-folder-admin-warning",
+                Title = NamedSessionTitle
+            });
+
+        harness.CardKit.GrantFolderAdminException = new HttpRequestException(
+            "API request failed: Status=BadRequest, Content={\"code\":99991672,\"msg\":\"Access denied. One of the following scopes is required: [drive:drive].应用尚未开通所需的应用身份权限：[drive:drive]，点击链接申请并开通任一权限即可：https://open.feishu.cn/app/test/auth?q=drive:drive\"}");
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-admin-warning-chat",
+            SessionId = "session-folder-admin-warning",
+            CliThreadId = "thread-folder-admin-warning",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 2);
+
+        Assert.Contains("已生成完整回复文档：", harness.CardKit.TextMessages[0], StringComparison.Ordinal);
+        Assert.Contains("会话文档文件夹管理员权限授予失败", harness.CardKit.TextMessages[1], StringComparison.Ordinal);
+        Assert.Contains("drive:drive", harness.CardKit.TextMessages[1], StringComparison.Ordinal);
+        Assert.Equal("folder-1", Assert.Single(harness.CardKit.CreatedDocuments).FolderToken);
+        Assert.Empty(harness.CardKit.MovedDocuments);
+        Assert.Single(harness.CardKit.DocumentAdminGrants);
+        Assert.Empty(harness.CardKit.FolderAdminGrants);
     }
 
     [Fact]
@@ -190,13 +339,112 @@ public sealed class ReplyDocumentOrchestratorTests
             ChatId = "oc-session-fallback-chat",
             SessionId = "session-fallback-id",
             Username = "luhaiyan",
-            OriginalUserQuestion = "继续",
-            Output = "完整回复正文"
+            OriginalUserQuestion = ContinueQuestion,
+            Output = FullReplyBody
         });
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Equal("session-fallback-id 继续 - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.Equal($"session-fallback-id {ContinueQuestion} - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenSessionTitlePresent_UsesSessionTitleAsFolderName()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-title",
+                Username = "luhaiyan",
+                CliThreadId = "thread-folder-title",
+                Title = NamedSessionTitle
+            });
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-title-chat",
+            SessionId = "session-folder-title",
+            CliThreadId = "thread-folder-title",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "补充内容",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        Assert.Equal([NamedSessionTitle], harness.CardKit.EnsuredFolderNames);
+        var document = Assert.Single(harness.CardKit.CreatedDocuments);
+        Assert.Equal("folder-1", document.FolderToken);
+        Assert.Empty(harness.CardKit.MovedDocuments);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenSessionTitleIsUnnamed_FallsBackToCliThreadIdForFolder()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-unnamed",
+                Username = "luhaiyan",
+                CliThreadId = "thread-fallback-folder",
+                Title = UnnamedSessionTitle
+            });
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-unnamed-chat",
+            SessionId = "session-folder-unnamed",
+            CliThreadId = "thread-fallback-folder",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "补充内容",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        Assert.Equal(["thread-fallback-folder"], harness.CardKit.EnsuredFolderNames);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenTitleAndThreadMissing_FallsBackToSessionIdForFolder()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-id-fallback",
+                Username = "luhaiyan",
+                CliThreadId = "",
+                Title = " "
+            });
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-sessionid-chat",
+            SessionId = "session-folder-id-fallback",
+            CliThreadId = "",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "补充内容",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        Assert.Equal(["session-folder-id-fallback"], harness.CardKit.EnsuredFolderNames);
     }
 
     [Fact]
@@ -230,6 +478,184 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Contains("docx:document:create", failureMessage, StringComparison.Ordinal);
         Assert.Empty(harness.CardKit.AppendedTexts);
         Assert.Empty(harness.CardKit.PermissionUpdates);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenFolderPermissionMissing_CreatesDocumentAndSendsWarningToChat()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-permission-failed",
+                Username = "luhaiyan",
+                CliThreadId = "thread-folder-permission-failed",
+                Title = "Need Folder"
+            });
+
+        harness.CardKit.EnsureFolderException = new HttpRequestException(
+            "API request failed: Status=BadRequest, Content={\"code\":99991672,\"msg\":\"Access denied. One of the following scopes is required: [drive:drive, drive:drive.metadata:readonly].应用尚未开通所需的应用身份权限：[drive:drive, drive:drive.metadata:readonly]，点击链接申请并开通任一权限即可：https://open.feishu.cn/app/cli_a929ada764389cd4/auth?q=drive:drive,drive:drive.metadata:readonly&op_from=openapi&token_type=tenant\"}");
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-failed-chat",
+            SessionId = "session-folder-permission-failed",
+            CliThreadId = "thread-folder-permission-failed",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 2);
+
+        var document = Assert.Single(harness.CardKit.CreatedDocuments);
+        var linkMessage = harness.CardKit.TextMessages[0];
+        var warningMessage = harness.CardKit.TextMessages[1];
+        Assert.Contains("已生成完整回复文档：", linkMessage, StringComparison.Ordinal);
+        Assert.Contains(document.Url, linkMessage, StringComparison.Ordinal);
+        Assert.Contains("已生成，但归档到会话文档文件夹失败", warningMessage, StringComparison.Ordinal);
+        Assert.Contains("drive:drive", warningMessage, StringComparison.Ordinal);
+        Assert.Contains("drive:drive.metadata:readonly", warningMessage, StringComparison.Ordinal);
+        Assert.Contains("应用尚未开通所需的应用身份权限", warningMessage, StringComparison.Ordinal);
+        Assert.Contains("点击链接申请并开通任一权限即可", warningMessage, StringComparison.Ordinal);
+        Assert.Contains("https://open.feishu.cn/app/cli_a929ada764389cd4/auth?q=drive:drive,drive:drive.metadata:readonly&op_from=openapi&token_type=tenant", warningMessage, StringComparison.Ordinal);
+        Assert.Single(harness.CardKit.AppendedTexts);
+        Assert.Single(harness.CardKit.PermissionUpdates);
+        Assert.Null(document.FolderToken);
+        Assert.Empty(harness.CardKit.MovedDocuments);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenReplyDocumentFolderNotFound_CreatesDocumentAndSendsFolderWarningToChat()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-not-found",
+                Username = "luhaiyan",
+                CliThreadId = "thread-folder-not-found",
+                Title = "Need Folder"
+            });
+
+        harness.CardKit.EnsureFolderException = new HttpRequestException(
+            "API request failed: Status=NotFound, Content={\"code\":1061003,\"msg\":\"not found.\",\"error\":{\"log_id\":\"2026060216084302B6962999D06CE4F8A4\"}}");
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-not-found-chat",
+            SessionId = "session-folder-not-found",
+            CliThreadId = "thread-folder-not-found",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 2);
+
+        var document = Assert.Single(harness.CardKit.CreatedDocuments);
+        var linkMessage = harness.CardKit.TextMessages[0];
+        var warningMessage = harness.CardKit.TextMessages[1];
+        Assert.Contains("已生成完整回复文档：", linkMessage, StringComparison.Ordinal);
+        Assert.Contains(document.Url, linkMessage, StringComparison.Ordinal);
+        Assert.Contains("已生成，但在定位会话文档文件夹时", warningMessage, StringComparison.Ordinal);
+        Assert.Contains("会话文档文件夹", warningMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("Status=NotFound", warningMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"code\":1061003", warningMessage, StringComparison.Ordinal);
+        Assert.Single(harness.CardKit.AppendedTexts);
+        Assert.Single(harness.CardKit.PermissionUpdates);
+        Assert.Null(document.FolderToken);
+        Assert.Empty(harness.CardKit.MovedDocuments);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenCreateInReplyDocumentFolderFailsWithNotFound_CreatesDocumentAndSendsPlacementWarningToChat()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-folder-move-not-found",
+                Username = "luhaiyan",
+                CliThreadId = "thread-folder-move-not-found",
+                Title = "Need Folder"
+            });
+
+        harness.CardKit.CreateDocumentInFolderException = new HttpRequestException(
+            "API request failed: Status=NotFound, Content={\"code\":1061003,\"msg\":\"not found.\",\"error\":{\"log_id\":\"202606021724410B11BFB987DE9BFA819F\"}}");
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-folder-create-not-found-chat",
+            SessionId = "session-folder-move-not-found",
+            CliThreadId = "thread-folder-move-not-found",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 2);
+
+        var document = Assert.Single(harness.CardKit.CreatedDocuments);
+        var linkMessage = harness.CardKit.TextMessages[0];
+        var warningMessage = harness.CardKit.TextMessages[1];
+        Assert.Contains("已生成完整回复文档：", linkMessage, StringComparison.Ordinal);
+        Assert.Contains(document.Url, linkMessage, StringComparison.Ordinal);
+        Assert.Contains("已生成，但在归档到会话文档文件夹时", warningMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("Status=NotFound", warningMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"code\":1061003", warningMessage, StringComparison.Ordinal);
+        Assert.Single(harness.CardKit.AppendedTexts);
+        Assert.Single(harness.CardKit.PermissionUpdates);
+        Assert.Single(harness.CardKit.EnsuredFolders);
+        Assert.Empty(harness.CardKit.MovedDocuments);
+        Assert.Null(document.FolderToken);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenSessionFolderResolved_CreatesDocumentDirectlyInsideFolder()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-direct-folder-create",
+                Username = "luhaiyan",
+                CliThreadId = "thread-direct-folder-create",
+                Title = "Need Folder"
+            });
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-direct-folder-create-chat",
+            SessionId = "session-direct-folder-create",
+            CliThreadId = "thread-direct-folder-create",
+            Username = "luhaiyan",
+            OriginalUserQuestion = "continue",
+            Output = "full reply body"
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        Assert.Single(harness.CardKit.EnsuredFolders);
+        var document = Assert.Single(harness.CardKit.CreatedDocuments);
+        Assert.Equal("folder-1", document.FolderToken);
+        Assert.Empty(harness.CardKit.MovedDocuments);
     }
 
     [Fact]
@@ -269,7 +695,7 @@ public sealed class ReplyDocumentOrchestratorTests
 
         harness.CardKit.ReleaseFirstCreate();
 
-        await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 2);
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 2);
 
         Assert.Collection(
             harness.CardKit.CreatedDocuments,
@@ -291,6 +717,11 @@ public sealed class ReplyDocumentOrchestratorTests
         }
 
         Assert.True(condition(), "Timed out waiting for the expected condition.");
+    }
+
+    private static void SetStringProperty(object target, string propertyName, string value)
+    {
+        target.GetType().GetProperty(propertyName)?.SetValue(target, value);
     }
 
     private sealed class ReplyDocumentOrchestratorHarness : IDisposable
@@ -387,6 +818,7 @@ public sealed class ReplyDocumentOrchestratorTests
                 {
                     SessionId = session.SessionId,
                     Username = session.Username,
+                    Title = session.Title,
                     ToolId = session.ToolId,
                     CliThreadId = session.CliThreadId,
                     WorkspacePath = session.WorkspacePath,
@@ -490,22 +922,37 @@ public sealed class ReplyDocumentOrchestratorTests
 
         public bool BlockFirstCreate { get; set; }
         public Exception? CreateDocumentException { get; set; }
+        public Exception? EnsureFolderException { get; set; }
+        public Exception? MoveDocumentException { get; set; }
+        public Exception? CreateDocumentInFolderException { get; set; }
+        public Exception? GrantDocumentAdminException { get; set; }
+        public Exception? GrantFolderAdminException { get; set; }
         public TaskCompletionSource<bool> FirstCreateStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public List<(string Title, string DocumentId, string RootBlockId, string Url)> CreatedDocuments { get; } = [];
+        public List<(string Title, string DocumentId, string RootBlockId, string Url, string? FolderToken)> CreatedDocuments { get; } = [];
         public List<(string DocumentId, string BlockId, string Text)> AppendedTexts { get; } = [];
         public List<string> PermissionUpdates { get; } = [];
         public List<string> TextMessages { get; } = [];
+        public List<string> EnsuredFolderNames { get; } = [];
+        public List<(string FolderName, string FolderToken)> EnsuredFolders { get; } = [];
+        public List<(string DocumentId, string FolderToken)> MovedDocuments { get; } = [];
+        public List<(string DocumentId, string OpenId)> DocumentAdminGrants { get; } = [];
+        public List<(string FolderToken, string OpenId)> FolderAdminGrants { get; } = [];
 
         public void ReleaseFirstCreate() => _releaseFirstCreate.TrySetResult(true);
 
-        public async Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        public async Task<FeishuCloudDocumentInfo> CreateCloudDocumentAsync(string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, string? folderToken = null)
         {
+            if (!string.IsNullOrWhiteSpace(folderToken) && CreateDocumentInFolderException != null)
+            {
+                throw CreateDocumentInFolderException;
+            }
+
             if (CreateDocumentException != null)
             {
                 throw CreateDocumentException;
             }
 
-            CreatedDocuments.Add((title, $"doc-{CreatedDocuments.Count + 1}", $"root-{CreatedDocuments.Count + 1}", $"https://feishu.cn/docx/doc-{CreatedDocuments.Count + 1}"));
+            CreatedDocuments.Add((title, $"doc-{CreatedDocuments.Count + 1}", $"root-{CreatedDocuments.Count + 1}", $"https://feishu.cn/docx/doc-{CreatedDocuments.Count + 1}", folderToken));
             FirstCreateStarted.TrySetResult(true);
             if (BlockFirstCreate && CreatedDocuments.Count == 1)
             {
@@ -530,6 +977,52 @@ public sealed class ReplyDocumentOrchestratorTests
         public Task SetCloudDocumentTenantReadableAsync(string documentId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
         {
             PermissionUpdates.Add(documentId);
+            return Task.CompletedTask;
+        }
+
+        public Task<string> EnsureCloudFolderAsync(string folderName, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            if (EnsureFolderException != null)
+            {
+                throw EnsureFolderException;
+            }
+
+            EnsuredFolderNames.Add(folderName);
+            var folderToken = $"folder-{EnsuredFolders.Count + 1}";
+            EnsuredFolders.Add((folderName, folderToken));
+            return Task.FromResult(folderToken);
+        }
+
+        public Task MoveCloudDocumentToFolderAsync(string documentId, string folderToken, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            if (MoveDocumentException != null)
+            {
+                throw MoveDocumentException;
+            }
+
+            MovedDocuments.Add((documentId, folderToken));
+            return Task.CompletedTask;
+        }
+
+        public Task GrantCloudDocumentMemberFullAccessAsync(string documentId, string openId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            if (GrantDocumentAdminException != null)
+            {
+                throw GrantDocumentAdminException;
+            }
+
+            DocumentAdminGrants.Add((documentId, openId));
+            return Task.CompletedTask;
+        }
+
+        public Task GrantCloudFolderMemberFullAccessAsync(string folderToken, string openId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            if (GrantFolderAdminException != null)
+            {
+                throw GrantFolderAdminException;
+            }
+
+            FolderAdminGrants.Add((folderToken, openId));
             return Task.CompletedTask;
         }
 
@@ -558,9 +1051,8 @@ public sealed class ReplyDocumentOrchestratorTests
         public string Username { get; set; } = string.Empty;
         public string ToolId { get; set; } = string.Empty;
         public string? CliThreadId { get; set; }
+        public string? Title { get; set; }
         public string? WorkspacePath { get; set; }
         public string? SnapshotToolId { get; set; }
     }
 }
-
-

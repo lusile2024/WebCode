@@ -223,9 +223,44 @@ public class UserFeishuBotConfigServiceTests
         Assert.Null(stored.LegacyReplyTtsVoiceId);
     }
 
+    [Fact]
+    public async Task SaveAsync_PersistsDocumentAdminOpenId()
+    {
+        var repository = new InMemoryUserFeishuBotConfigRepository();
+        var service = CreateService(repository);
+        var config = new UserFeishuBotConfigEntity
+        {
+            Username = "alice",
+            IsEnabled = true,
+            AppId = "cli_alice",
+            AppSecret = "secret"
+        };
+        SetStringProperty(config, "DocumentAdminOpenId", " ou_admin_alice ");
+
+        var result = await service.SaveAsync(config);
+
+        var stored = await service.GetByUsernameAsync("alice");
+        Assert.True(result.Success);
+        Assert.NotNull(stored);
+        Assert.Equal("ou_admin_alice", GetStringProperty(stored!, "DocumentAdminOpenId"));
+    }
+
     private static UserFeishuBotConfigService CreateService(InMemoryUserFeishuBotConfigRepository repository)
     {
         return new UserFeishuBotConfigService(repository, Options.Create(new FeishuOptions()));
+    }
+
+    private static string? GetStringProperty(object target, string propertyName)
+    {
+        return target
+            .GetType()
+            .GetProperty(propertyName)?
+            .GetValue(target) as string;
+    }
+
+    private static void SetStringProperty(object target, string propertyName, string value)
+    {
+        target.GetType().GetProperty(propertyName)?.SetValue(target, value);
     }
 
     private sealed class InMemoryUserFeishuBotConfigRepository : IUserFeishuBotConfigRepository
@@ -324,7 +359,7 @@ public class UserFeishuBotConfigServiceTests
 
         private static UserFeishuBotConfigEntity Clone(UserFeishuBotConfigEntity entity)
         {
-            return new UserFeishuBotConfigEntity
+            var clone = new UserFeishuBotConfigEntity
             {
                 Id = entity.Id,
                 Username = entity.Username,
@@ -347,6 +382,10 @@ public class UserFeishuBotConfigServiceTests
                 CreatedAt = entity.CreatedAt,
                 UpdatedAt = entity.UpdatedAt
             };
+
+            var documentAdminProperty = typeof(UserFeishuBotConfigEntity).GetProperty("DocumentAdminOpenId");
+            documentAdminProperty?.SetValue(clone, documentAdminProperty.GetValue(entity));
+            return clone;
         }
     }
 }
