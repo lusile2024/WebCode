@@ -723,7 +723,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     public async Task<string> UploadCloudFileAsync(
         string fileName,
         byte[] content,
-        string folderToken,
+        string? folderToken,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
@@ -739,17 +739,15 @@ public class FeishuCardKitClient : IFeishuCardKitClient
             throw new ArgumentException("文件内容不能为空。", nameof(content));
         }
 
-        if (string.IsNullOrWhiteSpace(folderToken))
-        {
-            throw new ArgumentException("文件夹 Token 不能为空。", nameof(folderToken));
-        }
-
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var targetFolderToken = string.IsNullOrWhiteSpace(folderToken)
+            ? await GetRootFolderTokenAsync(token, effectiveOptions, cancellationToken)
+            : folderToken.Trim();
         using var formData = new MultipartFormDataContent();
         formData.Add(new StringContent(fileName), "file_name");
         formData.Add(new StringContent("explorer"), "parent_type");
-        formData.Add(new StringContent(folderToken.Trim()), "parent_node");
+        formData.Add(new StringContent(targetFolderToken), "parent_node");
         formData.Add(new StringContent(content.Length.ToString()), "size");
 
         var fileContent = new ByteArrayContent(content);
@@ -778,7 +776,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         string fileName,
         byte[] content,
         string title,
-        string folderToken,
+        string? folderToken,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
@@ -801,18 +799,26 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
-        var payload = new
-        {
-            file_extension = normalizedExtension,
-            file_token = fileToken,
-            type = "docx",
-            file_name = title,
-            point = new
+        object payload = string.IsNullOrWhiteSpace(folderToken)
+            ? new
             {
-                mount_type = 1,
-                mount_key = folderToken.Trim()
+                file_extension = normalizedExtension,
+                file_token = fileToken,
+                type = "docx",
+                file_name = title
             }
-        };
+            : new
+            {
+                file_extension = normalizedExtension,
+                file_token = fileToken,
+                type = "docx",
+                file_name = title,
+                point = new
+                {
+                    mount_type = 1,
+                    mount_key = folderToken.Trim()
+                }
+            };
 
         var createResponse = await PostAsync(
             "/open-apis/drive/v1/import_tasks",
@@ -1852,8 +1858,15 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         FeishuOptions options,
         CancellationToken cancellationToken)
     {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+
         while (true)
         {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException("Markdown 导入超时，请稍后重试。");
+            }
+
             var response = await GetAsync(
                 $"/open-apis/drive/v1/import_tasks/{Uri.EscapeDataString(ticket)}",
                 token,
@@ -1897,6 +1910,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
             if (jobStatus == 1 || jobStatus == 2)
             {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
                 continue;
             }
 

@@ -430,6 +430,53 @@ public class FeishuCardKitClientTests
         Assert.Equal("docs/guide.md", createImportTaskRequest.RootElement.GetProperty("file_name").GetString());
         Assert.Equal(1, createImportTaskRequest.RootElement.GetProperty("point").GetProperty("mount_type").GetInt32());
         Assert.Equal("fld-target", createImportTaskRequest.RootElement.GetProperty("point").GetProperty("mount_key").GetString());
+
+        var pollInterval = handler.RequestTimestamps[4] - handler.RequestTimestamps[3];
+        Assert.True(
+            pollInterval >= TimeSpan.FromMilliseconds(150),
+            $"Expected markdown import polling to back off before retrying, but observed only {pollInterval.TotalMilliseconds:F0} ms between polls.");
+    }
+
+    [Fact]
+    public async Task ImportMarkdownFileAsCloudDocumentAsync_WhenFolderTokenMissing_UsesRootFolderAndOmitsPoint()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"token":"fld-root","url":"https://feishu.cn/drive/folder/fld-root"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"file_token":"file_token_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"ticket":"ticket_123"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"result":{"ticket":"ticket_123","job_status":0,"job_error_msg":"success","token":"doccn123","url":"https://feishu.cn/docx/doccn123"}}}""")
+        ]);
+
+        var client = CreateClient(handler);
+        var fileContent = global::System.Text.Encoding.UTF8.GetBytes("# 标题\r\n\r\n正文");
+
+        var document = await client.ImportMarkdownFileAsCloudDocumentAsync(
+            "notes.md",
+            fileContent,
+            "docs/guide.md",
+            null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("doccn123", document.DocumentId);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/drive/explorer/v2/root_folder/meta",
+            "/open-apis/drive/v1/files/upload_all",
+            "/open-apis/drive/v1/import_tasks",
+            "/open-apis/drive/v1/import_tasks/ticket_123"
+        ], handler.RequestPaths);
+
+        Assert.Contains("fld-root", handler.RequestBodies[2], StringComparison.Ordinal);
+
+        using var createImportTaskRequest = JsonDocument.Parse(handler.RequestBodies[3]);
+        Assert.Equal("md", createImportTaskRequest.RootElement.GetProperty("file_extension").GetString());
+        Assert.Equal("file_token_123", createImportTaskRequest.RootElement.GetProperty("file_token").GetString());
+        Assert.Equal("docx", createImportTaskRequest.RootElement.GetProperty("type").GetString());
+        Assert.Equal("docs/guide.md", createImportTaskRequest.RootElement.GetProperty("file_name").GetString());
+        Assert.False(createImportTaskRequest.RootElement.TryGetProperty("point", out _));
     }
 
     [Fact]
@@ -702,7 +749,7 @@ public class FeishuCardKitClientTests
         var statusModule = elements[0];
         var overflow = statusModule.GetProperty("extra");
 
-        Assert.Equal("褰撳墠浼氳瘽", statusModule.GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("当前会话", statusModule.GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("overflow", overflow.GetProperty("tag").GetString());
         Assert.Equal("Backend API", overflow.GetProperty("options")[0].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("{\"action\":\"switch_session\",\"session_id\":\"session-2\",\"chat_key\":\"oc_stream_chat\"}", overflow.GetProperty("options")[0].GetProperty("value").GetString());
@@ -751,8 +798,8 @@ public class FeishuCardKitClientTests
         using var createDoc = JsonDocument.Parse(handler.RequestBodies[1]);
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
-        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[1].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         var bottomActionModule = elements.EnumerateArray().Last();
 
         Assert.Equal("form", bottomActionModule.GetProperty("tag").GetString());
@@ -846,13 +893,13 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "瑜版挸澧犳导姘崇樈"
+            StatusMarkdown = "当前会话"
         };
         chrome.TopChipGroups.Add(new FeishuStreamingCardTopChipGroup
         {
             Kind = "model",
             IsEnabled = true,
-            SummaryMarkdown = "馃 妯″瀷锛歚gpt-5.3-codex-spark`",
+            SummaryMarkdown = "🤖 模型：`gpt-5.3-codex-spark`",
             OverflowOptions =
             [
                 new FeishuStreamingCardOverflowOption
@@ -881,11 +928,11 @@ public class FeishuCardKitClientTests
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
         Assert.Equal("div", elements[0].GetProperty("tag").GetString());
-        Assert.Equal("馃煡馃煡馃煡 **鎬濊€冪瓑绾?*", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **思考等级**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("div", elements[2].GetProperty("tag").GetString());
-        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **回复内容**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[4].GetProperty("tag").GetString());
-        Assert.Equal("馃 妯″瀷锛歚gpt-5.3-codex-spark`", elements[2].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🤖 模型：`gpt-5.3-codex-spark`", elements[2].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("overflow", elements[2].GetProperty("extra").GetProperty("tag").GetString());
         var options = elements[2].GetProperty("extra").GetProperty("options");
         Assert.Equal(2, options.GetArrayLength());
@@ -906,7 +953,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "褰撳墠浼氳瘽"
+            StatusMarkdown = "当前会话"
         };
 
         var items = Enumerable.Range(1, 7)
@@ -935,7 +982,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 鍔╂墜",
+            "AI 助手",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -943,14 +990,14 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("馃煡馃煡馃煡 **鎬濊€冪瓑绾?*", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **思考等级**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[2].GetProperty("tag").GetString());
         Assert.Equal("column_set", elements[3].GetProperty("tag").GetString());
         Assert.Equal(6, elements[2].GetProperty("columns").GetArrayLength());
         Assert.Equal(1, elements[3].GetProperty("columns").GetArrayLength());
         Assert.Equal("gpt-5.1", elements[2].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("gpt-5.7", elements[3].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[4].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **回复内容**", elements[4].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[5].GetProperty("tag").GetString());
     }
 
@@ -988,9 +1035,9 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[2].GetProperty("tag").GetString());
-        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
     }
 
@@ -1007,7 +1054,7 @@ public class FeishuCardKitClientTests
         var client = CreateClient(handler);
         var chrome = new FeishuStreamingCardChrome
         {
-            StatusMarkdown = "褰撳墠浼氳瘽"
+            StatusMarkdown = "当前会话"
         };
         chrome.BottomActions.AddRange(
         [
@@ -1025,13 +1072,13 @@ public class FeishuCardKitClientTests
             },
             new FeishuStreamingCardBottomAction
             {
-                Text = "缁х画",
+                Text = "继续",
                 RowKey = "execution_control_row",
                 Value = new { action = "continue_superpowers", session_id = "session-1" }
             },
             new FeishuStreamingCardBottomAction
             {
-                Text = "鍋滄",
+                Text = "停止",
                 RowKey = "execution_control_row",
                 Value = new { action = "stop_streaming_execution", session_id = "session-1" }
             }
@@ -1041,7 +1088,7 @@ public class FeishuCardKitClientTests
             "oc_stream_chat",
             null,
             "still have backlog",
-            "AI 鍔╂墜",
+            "AI 助手",
             TestContext.Current.CancellationToken,
             chrome: chrome);
 
@@ -1049,15 +1096,15 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[4].GetProperty("tag").GetString());
         Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
         Assert.Equal(2, elements[4].GetProperty("columns").GetArrayLength());
         Assert.Equal(2, elements[5].GetProperty("columns").GetArrayLength());
         Assert.Equal("/goal", elements[4].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("/goal pause", elements[4].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("缁х画", elements[5].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
-        Assert.Equal("鍋滄", elements[5].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("继续", elements[5].GetProperty("columns")[0].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("停止", elements[5].GetProperty("columns")[1].GetProperty("elements")[0].GetProperty("text").GetProperty("content").GetString());
     }
 
     [Fact]
@@ -1089,7 +1136,7 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("馃煡馃煡馃煡 **鍥炲鍐呭**", elements[1].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **回复内容**", elements[1].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("markdown", elements[2].GetProperty("tag").GetString());
         Assert.Equal("assistant output", elements[2].GetProperty("content").GetString());
         Assert.Equal("div", elements[3].GetProperty("tag").GetString());
@@ -1131,7 +1178,7 @@ public class FeishuCardKitClientTests
         using var cardDoc = JsonDocument.Parse(createDoc.RootElement.GetProperty("data").GetString()!);
         var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
 
-        Assert.Equal("馃煡馃煡馃煡 **Superpowers 宸ヤ綔娴?Goal涓嶉棿鏂墽琛?*", elements[3].GetProperty("text").GetProperty("content").GetString());
+        Assert.Equal("🟥🟥🟥 **Superpowers 工作流/Goal不间断执行**", elements[3].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("div", elements[4].GetProperty("tag").GetString());
         Assert.Equal("Session binding changed", elements[4].GetProperty("text").GetProperty("content").GetString());
         Assert.Equal("column_set", elements[5].GetProperty("tag").GetString());
@@ -1439,8 +1486,8 @@ public class FeishuCardKitClientTests
             .GetProperty("content")
             .GetString();
 
-        Assert.Contains("鍗＄墖宸茬簿绠€", reducedContent);
-        Assert.Contains("only latest content", reducedContent);
+        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("仅显示最新内容", reducedContent);
         Assert.Contains("line 359", reducedContent);
         Assert.DoesNotContain("line 000", reducedContent);
     }
@@ -1487,8 +1534,8 @@ public class FeishuCardKitClientTests
             .GetProperty("content")
             .GetString();
 
-        Assert.Contains("鍗＄墖宸茬簿绠€", reducedContent);
-        Assert.Contains("only latest content", reducedContent);
+        Assert.Contains("卡片已精简", reducedContent);
+        Assert.Contains("仅显示最新内容", reducedContent);
         Assert.Contains("line 359", reducedContent);
         Assert.DoesNotContain("line 000", reducedContent);
     }
@@ -1535,7 +1582,7 @@ public class FeishuCardKitClientTests
             .GetProperty("content")
             .GetString();
 
-        Assert.Contains("鍗＄墖宸茬簿绠€", reducedContent);
+        Assert.Contains("卡片已精简", reducedContent);
         Assert.Contains("tail next", reducedContent);
     }
 
@@ -1611,6 +1658,7 @@ public class FeishuCardKitClientTests
         public List<string> RequestMethods { get; } = [];
         public List<string> RequestBodies { get; } = [];
         public List<string?> RequestContentTypes { get; } = [];
+        public List<DateTimeOffset> RequestTimestamps { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -1618,6 +1666,7 @@ public class FeishuCardKitClientTests
             RequestQueries.Add(request.RequestUri.Query.TrimStart('?'));
             RequestMethods.Add(request.Method.Method);
             RequestContentTypes.Add(request.Content?.Headers.ContentType?.MediaType);
+            RequestTimestamps.Add(DateTimeOffset.UtcNow);
             RequestBodies.Add(request.Content == null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken));
@@ -1947,7 +1996,7 @@ public class FeishuCardKitClientTests
                 using var cardDoc = JsonDocument.Parse(requestDoc.RootElement.GetProperty("card").GetProperty("data").GetString()!);
                 var elements = cardDoc.RootElement.GetProperty("body").GetProperty("elements");
                 var isReducedPayload = elements.GetArrayLength() == 1
-                    && elements[0].GetProperty("content").GetString()!.Contains("鍗＄墖宸茬簿绠€", StringComparison.Ordinal);
+                    && elements[0].GetProperty("content").GetString()!.Contains("卡片已精简", StringComparison.Ordinal);
 
                 return isReducedPayload
                     ? CreateJsonResponse("""{"code":0}""")

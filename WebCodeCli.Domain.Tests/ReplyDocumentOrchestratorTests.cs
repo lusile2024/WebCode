@@ -70,7 +70,7 @@ public sealed class ReplyDocumentOrchestratorTests
             FinalAnswerOutput = FinalReplyBody
         });
 
-        await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
         Assert.Equal("thread-1 question - 完整回复", document.Title);
@@ -103,7 +103,7 @@ public sealed class ReplyDocumentOrchestratorTests
             FinalAnswerOutput = FinalReplyBody
         });
 
-        await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
         Assert.Equal($"thread-2 {ContinueQuestion} - 结论回复", document.Title);

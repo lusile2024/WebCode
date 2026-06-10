@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WebCodeCli.Domain.Common.Extensions;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model.Channels;
@@ -27,10 +28,13 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     private const string AudioFinalReplySuffix = " - 听结论回复";
     private const string AudioFullReplyLinkPrefix = "已生成听完整回复文档：";
     private const string AudioFinalReplyLinkPrefix = "已生成听结论回复文档：";
+    private const string MarkdownImportLinkPrefix = "已生成Markdown在线文档：";
 
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ReplyDocumentOrchestrator> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _chatLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ReplyDocumentMarkdownRenderer _markdownRenderer;
+    private readonly ReferencedMarkdownDocumentImporter _markdownDocumentImporter;
 
     public ReplyDocumentOrchestrator(
         IServiceProvider serviceProvider,
@@ -38,6 +42,12 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
     {
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _markdownRenderer = new ReplyDocumentMarkdownRenderer(
+            serviceProvider.GetService<ILogger<ReplyDocumentMarkdownRenderer>>()
+            ?? NullLogger<ReplyDocumentMarkdownRenderer>.Instance);
+        _markdownDocumentImporter = new ReferencedMarkdownDocumentImporter(
+            serviceProvider.GetService<ILogger<ReferencedMarkdownDocumentImporter>>()
+            ?? NullLogger<ReferencedMarkdownDocumentImporter>.Instance);
     }
 
     public Task QueueCompletedReplyAsync(FeishuCompletedReplyDocumentRequest request)
@@ -139,6 +149,18 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 ListeningReplyDocumentFormatter.Format(finalReplyContent),
                 AudioFinalReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
+        }
+
+        if (userConfig.ReferencedMarkdownDocImportEnabled)
+        {
+            await TryImportReferencedMarkdownDocumentsAsync(
+                cardKitClient,
+                scope.ServiceProvider,
+                configService,
+                userConfig,
+                request,
+                fullReplyContent,
+                finalReplyContent);
         }
     }
 
@@ -268,11 +290,13 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                     optionsOverride: effectiveOptions);
             }
 
-            await cardKitClient.AppendCloudDocumentTextAsync(
+            await _markdownRenderer.RenderAsync(
+                cardKitClient,
                 document.DocumentId,
                 document.RootBlockId,
                 body,
-                optionsOverride: effectiveOptions);
+                effectiveOptions,
+                CancellationToken.None);
 
             await cardKitClient.SetCloudDocumentTenantReadableAsync(
                 document.DocumentId,
@@ -590,6 +614,11 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         if (string.Equals(messagePrefix, AudioFinalReplyLinkPrefix, StringComparison.Ordinal))
         {
             return "听结论回复文档";
+        }
+
+        if (string.Equals(messagePrefix, MarkdownImportLinkPrefix, StringComparison.Ordinal))
+        {
+            return "Markdown在线文档";
         }
 
         return "完整回复文档";
@@ -916,6 +945,68 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         return sessionRepository == null
             ? null
             : await sessionRepository.GetByIdAsync(sessionId.Trim());
+    }
+
+    private async Task TryImportReferencedMarkdownDocumentsAsync(
+        IFeishuCardKitClient cardKitClient,
+        IServiceProvider serviceProvider,
+        IUserFeishuBotConfigService configService,
+        UserFeishuBotConfigEntity userConfig,
+        FeishuCompletedReplyDocumentRequest request,
+        string fullReplyContent,
+        string finalReplyContent)
+    {
+        var sourceText = !string.IsNullOrWhiteSpace(fullReplyContent)
+            ? fullReplyContent
+            : finalReplyContent;
+        if (string.IsNullOrWhiteSpace(sourceText))
+        {
+            return;
+        }
+
+        var session = await TryGetSessionAsync(serviceProvider, request.SessionId);
+        var candidates = MarkdownReferenceExtractor.Extract(sourceText, session?.WorkspacePath);
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var folderName = await ResolveReplyDocumentFolderNameAsync(serviceProvider, request);
+        if (string.IsNullOrWhiteSpace(folderName))
+        {
+            return;
+        }
+
+        var effectiveOptions = await ResolveEffectiveOptionsAsync(configService, request.Username, request.AppId);
+        string folderToken;
+        try
+        {
+            folderToken = await cardKitClient.EnsureCloudFolderAsync(
+                folderName,
+                optionsOverride: effectiveOptions);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Referenced markdown import folder resolution failed for chat {ChatId}, session {SessionId}",
+                request.ChatId,
+                request.SessionId);
+            await TrySendFailureMessageAsync(
+                cardKitClient,
+                request,
+                BuildFailureMessage(MarkdownImportLinkPrefix, ex));
+            return;
+        }
+
+        await _markdownDocumentImporter.ImportMissingAsync(
+            cardKitClient,
+            request.ChatId,
+            folderToken,
+            candidates,
+            userConfig.DocumentAdminOpenId,
+            effectiveOptions,
+            CancellationToken.None);
     }
 
     private static async Task<FeishuOptions> ResolveEffectiveOptionsAsync(

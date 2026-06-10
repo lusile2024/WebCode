@@ -182,7 +182,7 @@ public interface IFeishuCardKitClient
     Task<string> UploadCloudFileAsync(
         string fileName,
         byte[] content,
-        string folderToken,
+        string? folderToken,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
@@ -193,7 +193,7 @@ public interface IFeishuCardKitClient
         string fileName,
         byte[] content,
         string title,
-        string folderToken,
+        string? folderToken,
         CancellationToken cancellationToken = default,
         FeishuOptions? optionsOverride = null)
     {
