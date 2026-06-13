@@ -96,7 +96,7 @@ internal sealed class FeishuStreamingCardSession
 
     private async Task<bool> TryCreateReplacementAndFinishAsync(string finalContent)
     {
-        if (!await TryCreateReplacementHandleAsync(finalContent, CancellationToken.None))
+        if (!await TryCreateReplacementHandleAsync(finalContent, CancellationToken.None, finalizeStoppedHandle: false))
         {
             return false;
         }
@@ -104,7 +104,10 @@ internal sealed class FeishuStreamingCardSession
         return await CurrentHandle.FinishAsync(finalContent);
     }
 
-    private async Task<bool> TryCreateReplacementHandleAsync(string latestContent, CancellationToken cancellationToken)
+    private async Task<bool> TryCreateReplacementHandleAsync(
+        string latestContent,
+        CancellationToken cancellationToken,
+        bool finalizeStoppedHandle = true)
     {
         if (_replacementCount >= MaxReplacementCardsPerLogicalStream)
         {
@@ -118,7 +121,7 @@ internal sealed class FeishuStreamingCardSession
             return false;
         }
 
-        if (_stoppedHandleFinalizer != null)
+        if (finalizeStoppedHandle && _stoppedHandleFinalizer != null)
         {
             try
             {

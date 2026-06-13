@@ -19,6 +19,7 @@ Feishu reply delivery now works through cloud documents:
 - On mobile Feishu, open the document and use the `...` menu to start document audio.
 - Referenced local Markdown files mentioned in a completed reply can also be imported as Feishu online documents in the same session document folder.
 - When the same local Markdown file changes later, WebCode updates the existing Feishu online document in place so the shared document URL stays stable.
+- Windows installer publishing reads the release version from `Directory.Build.props`; bump the patch version before publishing a new installer so the `vX.Y.Z` tag matches the current commit.
 
 <p align="center">
   <strong>把 AI CLI、Web 会话、移动端和飞书工作流接到同一个控制面板里</strong>

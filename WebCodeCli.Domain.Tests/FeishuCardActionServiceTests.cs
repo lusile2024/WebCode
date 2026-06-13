@@ -949,8 +949,8 @@ public class FeishuCardActionServiceTests
             await feishuChannel.WaitForMessageAsync(TimeSpan.FromSeconds(3));
 
             Assert.Equal(2, cardKit.Handles.Count);
-            Assert.Equal(2, cardKit.Handles[0].FinishAttemptCount);
-            Assert.Contains("当前回复已停止", cardKit.Handles[0].FinalContent, StringComparison.Ordinal);
+            Assert.Equal(1, cardKit.Handles[0].FinishAttemptCount);
+            Assert.Null(cardKit.Handles[0].FinalContent);
             Assert.Equal("第一段\n第二段", cardKit.Handles[1].InitialContent);
             Assert.Equal("第一段\n第二段", cardKit.Handles[1].FinalContent);
         }
@@ -1423,22 +1423,21 @@ public class FeishuCardActionServiceTests
             ],
             initialChrome.BottomActions.Select(action => action.RowKey).ToArray());
 
-            Assert.Equal(10, chrome.BottomActions.Count);
+            Assert.Equal(9, chrome.BottomActions.Count);
             Assert.Equal(
             [
                 GoalQuickActionDefaults.StatusButtonText,
                 GoalQuickActionDefaults.PauseButtonText,
                 GoalQuickActionDefaults.ClearButtonText,
                 GoalQuickActionDefaults.ResumeButtonText,
-                GoalQuickActionDefaults.TemporaryExitButtonText,
-                SuperpowersQuickActionDefaults.CompleteWorktreeButtonText,
                 SuperpowersQuickActionDefaults.ContinueButtonText,
                 SuperpowersQuickActionDefaults.ExecutePlanButtonText,
                 SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText,
-                SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText
+                SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText,
+                SuperpowersQuickActionDefaults.CompleteWorktreeButtonText
             ],
             chrome.BottomActions.Select(action => action.Text).ToArray());
-            Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
+            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
@@ -1468,7 +1467,7 @@ public class FeishuCardActionServiceTests
 
             var completeWorktreeValueJson = JsonSerializer.Serialize(
                 Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText).Value);
-            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.TemporarilyExitAndCompleteWorktreeAction}\"", completeWorktreeValueJson);
+            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.ExecuteSuperpowersCompleteWorktreeAction}\"", completeWorktreeValueJson);
 
             var statusGoalValueJson = JsonSerializer.Serialize(
                 Assert.Single(chrome.BottomActions, action => action.Text == "/goal").Value);
@@ -1486,9 +1485,6 @@ public class FeishuCardActionServiceTests
                 Assert.Single(chrome.BottomActions, action => action.Text == "/goal resume").Value);
             Assert.Contains("\"action\":\"resume_goal\"", resumeGoalValueJson);
 
-            var temporaryExitValueJson = JsonSerializer.Serialize(
-                Assert.Single(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText).Value);
-            Assert.Contains($"\"action\":\"{FeishuHelpCardAction.TemporarilyExitGoalRuntimeAction}\"", temporaryExitValueJson);
         }
         finally
         {
@@ -1725,6 +1721,7 @@ public class FeishuCardActionServiceTests
         Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ClearButtonText);
         Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
         Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
+        Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
@@ -1736,6 +1733,7 @@ public class FeishuCardActionServiceTests
             "goal_row_1",
             "goal_row_2",
             "goal_row_2",
+            "goal_row_3",
             "goal_row_3"
         ],
         chrome.BottomActions.Select(action => action.RowKey).ToArray());
@@ -1743,6 +1741,10 @@ public class FeishuCardActionServiceTests
         var temporaryExitValueJson = JsonSerializer.Serialize(
             Assert.Single(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText).Value);
         Assert.Contains($"\"action\":\"{FeishuHelpCardAction.TemporarilyExitGoalRuntimeAction}\"", temporaryExitValueJson);
+
+        var completeWorktreeValueJson = JsonSerializer.Serialize(
+            Assert.Single(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText).Value);
+        Assert.Contains($"\"action\":\"{FeishuHelpCardAction.TemporarilyExitAndCompleteWorktreeAction}\"", completeWorktreeValueJson);
     }
 
     [Fact]
@@ -3036,12 +3038,22 @@ public class FeishuCardActionServiceTests
         Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ClearButtonText);
         Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
         Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
+        Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
-        Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText);
         Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.StopButtonText);
+        Assert.Equal(
+        [
+            "goal_row_1",
+            "goal_row_1",
+            "goal_row_2",
+            "goal_row_2",
+            "goal_row_3",
+            "goal_row_3"
+        ],
+        chrome.BottomActions.Select(action => action.RowKey).ToArray());
     }
 
     [Fact]
@@ -3682,8 +3694,8 @@ public class FeishuCardActionServiceTests
 
         Assert.Equal(sessionId, usedSessionId);
         Assert.Equal(2, cardKit.Handles.Count);
-        Assert.Equal(2, cardKit.Handles[0].FinishAttemptCount);
-        Assert.Contains("当前回复已停止", cardKit.Handles[0].FinalContent, StringComparison.Ordinal);
+        Assert.Equal(1, cardKit.Handles[0].FinishAttemptCount);
+        Assert.Null(cardKit.Handles[0].FinalContent);
         Assert.Equal("backlog remains -> morebacklog complete", cardKit.Handles[1].InitialContent);
         Assert.Equal("backlog remains -> morebacklog complete", cardKit.Handles[1].FinalContent);
     }

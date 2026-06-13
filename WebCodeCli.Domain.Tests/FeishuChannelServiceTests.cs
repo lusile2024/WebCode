@@ -4243,10 +4243,10 @@ public class FeishuChannelServiceTests
             Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ClearButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.ResumeButtonText);
             Assert.Contains(chrome.BottomActions, action => action.Text == GoalQuickActionDefaults.TemporaryExitButtonText);
+            Assert.Contains(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ContinueButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecutePlanButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteSubagentPlanButtonText);
-            Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.CompleteWorktreeButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.ExecuteGoalPlanButtonText);
             Assert.DoesNotContain(chrome.BottomActions, action => action.Text == SuperpowersQuickActionDefaults.StopButtonText);
             Assert.Equal(
@@ -4255,6 +4255,7 @@ public class FeishuChannelServiceTests
                 "goal_row_1",
                 "goal_row_2",
                 "goal_row_2",
+                "goal_row_3",
                 "goal_row_3"
             ],
             chrome.BottomActions.Select(action => action.RowKey).ToArray());

@@ -388,6 +388,7 @@ public class CliExecutorServiceTests
     [Fact]
     public async Task ExecuteStreamAsync_WhenGoalUsesOneTimeProcess_ExecutesWithoutPersistentProcessGate()
     {
+        const string sessionId = "session-goal-one-time";
         var tool = new CliToolConfig
         {
             Id = "codex",
@@ -397,6 +398,11 @@ public class CliExecutorServiceTests
             UsePersistentProcess = false,
             Enabled = true
         };
+
+        var stubManager = new StubCodexAppServerSessionManager();
+        stubManager.QueueGoalSnapshots(
+            sessionId,
+            new AppServerGoalSnapshot("ship this task", "complete", null, 1, 1));
 
         var service = new CliExecutorService(
             NullLogger<CliExecutorService>.Instance,
@@ -410,10 +416,10 @@ public class CliExecutorServiceTests
             new StubChatSessionService(),
             new StubCliAdapterFactory(),
             new StubCcSwitchService(includeBuiltInManagedTools: false),
-            codexAppServerSessionManager: new StubCodexAppServerSessionManager());
+            codexAppServerSessionManager: stubManager);
 
         var chunks = new List<StreamOutputChunk>();
-        await foreach (var chunk in service.ExecuteStreamAsync("session-goal-one-time", tool.Id, "/goal ship this task"))
+        await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "/goal ship this task"))
         {
             chunks.Add(chunk);
         }
@@ -1269,6 +1275,11 @@ public class CliExecutorServiceTests
                 Enabled = true
             };
 
+            var stubManager = new StubCodexAppServerSessionManager();
+            stubManager.QueueGoalSnapshots(
+                sessionId,
+                new AppServerGoalSnapshot("keep working", "complete", null, 1, 1));
+
             var service = new CliExecutorService(
                 NullLogger<CliExecutorService>.Instance,
                 Options.Create(new CliToolsOption
@@ -1295,7 +1306,7 @@ public class CliExecutorServiceTests
                         StatusMessage = "Codex 已由 cc-switch 管理并可直接启动。"
                     }
                 }),
-                codexAppServerSessionManager: new StubCodexAppServerSessionManager());
+                codexAppServerSessionManager: stubManager);
 
             var chunks = new List<StreamOutputChunk>();
             await foreach (var chunk in service.ExecuteStreamAsync(sessionId, tool.Id, "/goal keep working"))

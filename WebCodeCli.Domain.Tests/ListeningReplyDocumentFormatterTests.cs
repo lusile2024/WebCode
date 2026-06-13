@@ -198,6 +198,18 @@ Run `dotnet build` to inspect the output details.
 
     private static string GetBody(string output)
     {
-        return output.Split(Environment.NewLine + Environment.NewLine, StringSplitOptions.None)[0];
+        var appendixMarkers = new[]
+        {
+            $"{Environment.NewLine}{Environment.NewLine}文件内容1：",
+            $"{Environment.NewLine}{Environment.NewLine}命令内容1："
+        };
+
+        var bodyEnd = appendixMarkers
+            .Select(marker => output.IndexOf(marker, StringComparison.Ordinal))
+            .Where(index => index >= 0)
+            .DefaultIfEmpty(output.Length)
+            .Min();
+
+        return output[..bodyEnd];
     }
 }
