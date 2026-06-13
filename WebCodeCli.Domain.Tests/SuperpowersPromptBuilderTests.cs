@@ -30,6 +30,14 @@ public class SuperpowersPromptBuilderTests
             SuperpowersPromptBuilder.BuildSubagentExecutePlanPrompt());
     }
 
+    [Fact]
+    public void BuildCompleteWorktreePrompt_ReturnsApprovedPrompt()
+    {
+        Assert.Equal(
+            SuperpowersQuickActionDefaults.CompleteWorktreePrompt,
+            SuperpowersPromptBuilder.BuildCompleteWorktreePrompt());
+    }
+
     [Theory]
     [InlineData("写一个执行步骤", "$using-superpowers ，使用superpowers技能，写一个执行步骤\n\nReply to the user in Chinese. Write documentation in English only. 代码注释需要使用中英文双语。 Keep exception and error messages in Chinese.")]
     [InlineData("$superpowers ，使用superpowers技能，写一个执行步骤", "$using-superpowers ，使用superpowers技能，写一个执行步骤\n\nReply to the user in Chinese. Write documentation in English only. 代码注释需要使用中英文双语。 Keep exception and error messages in Chinese.")]

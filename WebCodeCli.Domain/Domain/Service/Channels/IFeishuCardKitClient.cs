@@ -170,6 +170,26 @@ public interface IFeishuCardKitClient
         throw new NotSupportedException();
     }
 
+    Task<IReadOnlyList<string>> ListCloudDocumentChildBlockIdsAsync(
+        string documentId,
+        string blockId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
+    Task DeleteCloudDocumentChildBlocksAsync(
+        string documentId,
+        string blockId,
+        int startIndex,
+        int endIndex,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        throw new NotSupportedException();
+    }
+
     Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(
         string folderToken,
         string title,

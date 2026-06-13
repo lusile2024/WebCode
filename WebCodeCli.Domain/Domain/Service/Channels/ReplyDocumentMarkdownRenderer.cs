@@ -77,9 +77,15 @@ public sealed class ReplyDocumentMarkdownRenderer
         {
             _logger.LogWarning(
                 ex,
-                "Reply document markdown block append failed for document {DocumentId}",
+                "Reply document markdown block append failed for document {DocumentId}; falling back to plain text append",
                 documentId);
-            throw;
+
+            await cardKitClient.AppendCloudDocumentTextAsync(
+                documentId,
+                rootBlockId,
+                markdown,
+                cancellationToken,
+                optionsOverride);
         }
     }
 

@@ -19,10 +19,12 @@ public class FeishuHelpCardAction
     public const string ClearGoalAction = "clear_goal";
     public const string ResumeGoalAction = "resume_goal";
     public const string TemporarilyExitGoalRuntimeAction = "temporarily_exit_goal_runtime";
+    public const string TemporarilyExitAndCompleteWorktreeAction = "temporarily_exit_and_complete_worktree";
     public const string ContinueSuperpowersAction = "continue_superpowers";
     public const string StopStreamingExecutionAction = "stop_streaming_execution";
     public const string ExecuteSuperpowersPlanAction = "execute_superpowers_plan";
     public const string ExecuteSuperpowersSubagentPlanAction = "execute_superpowers_subagent_plan";
+    public const string ExecuteSuperpowersCompleteWorktreeAction = "execute_superpowers_complete_worktree";
     public const string ExecuteSuperpowersGoalPlanAction = "execute_superpowers_goal_plan";
     public const string ConfirmBoundSuperpowersAction = "confirm_bound_superpowers_action";
     public const string ConfirmCurrentSuperpowersAction = "confirm_current_superpowers_action";

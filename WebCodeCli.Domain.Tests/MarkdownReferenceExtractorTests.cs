@@ -59,6 +59,31 @@ public sealed class MarkdownReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_FindsBareMarkdownFileNamesAndResolvesKnownPlanLikeDocumentPaths()
+    {
+        var workspaceRoot = CreateWorkspaceWithFiles(
+            ("docs/superpowers/plans/2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md", "# plan"));
+
+        try
+        {
+            var text = """
+                是，这份 2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md 就是接下来要执行的 plan。
+                """;
+
+            var results = MarkdownReferenceExtractor.Extract(text, workspaceRoot);
+
+            var candidate = Assert.Single(results);
+            Assert.Equal(
+                "docs/superpowers/plans/2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md",
+                candidate.RelativePath);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Extract_RejectsPathsOutsideWorkspaceRoot()
     {
         var workspaceRoot = CreateWorkspaceWithFiles(

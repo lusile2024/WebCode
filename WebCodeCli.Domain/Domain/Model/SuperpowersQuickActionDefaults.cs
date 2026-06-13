@@ -12,7 +12,9 @@ public static class SuperpowersQuickActionDefaults
     public const string ExecutePlanButtonText = "执行 plan";
     public const string ExecuteSubagentPlanButtonText = "SubAgent执行";
     public const string ExecuteGoalPlanButtonText = "Goal执行";
+    public const string CompleteWorktreeButtonText = "完成Worktree";
     public const string ExecuteGoalPlanPromptInput = "使用Subagent-Driven完成plan，如有询问我的，先按你推荐的继续进行，需将plan文档内的[ ]check list都检查收口后，变成[x]后才算goal完成";
+    public const string CompleteWorktreePrompt = "使用Worktree技能完成Worktree，合并到当前worktree的父分支";
     public const string WorkflowSectionTitle = "Superpowers 工作流/Goal不间断执行";
 
     public const string PromptLanguagePolicy = "Reply to the user in Chinese. Write documentation in English only. 代码注释需要使用中英文双语。 Keep exception and error messages in Chinese.";

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FeishuNetSdk.Im.Dtos;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,7 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     private const int CardUpdateSequenceConflictCode = 300317;
     private const int CardUpdateDuplicateUuidCode = 200770;
     private const int CardOverMaxSizeCode = 200860;
+    private const int CloudDocumentChildrenMaxBatchSize = 50;
     private const string ReducedContentNotice = "> 卡片已精简，前文已截断，仅显示最新内容。";
     private const int ReducedReplyTailChars = 5000;
     private const int MinimalReplyTailChars = 2400;
@@ -612,21 +614,149 @@ public class FeishuCardKitClient : IFeishuCardKitClient
 
         var effectiveOptions = GetEffectiveOptions(optionsOverride);
         var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        var blockArray = blocks.ToArray();
+
+        for (var offset = 0; offset < blockArray.Length; offset += CloudDocumentChildrenMaxBatchSize)
+        {
+            var payload = new
+            {
+                children = blockArray
+                    .Skip(offset)
+                    .Take(CloudDocumentChildrenMaxBatchSize)
+                    .Select(NormalizeCloudDocumentBlockForAppend)
+                    .ToArray(),
+                index = offset
+            };
+
+            var response = await PostAsync(
+                $"/open-apis/docx/v1/documents/{Uri.EscapeDataString(documentId)}/blocks/{Uri.EscapeDataString(blockId)}/children",
+                token,
+                payload,
+                effectiveOptions,
+                cancellationToken);
+
+            var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "Append Feishu cloud document blocks");
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> ListCloudDocumentChildBlockIdsAsync(
+        string documentId,
+        string blockId,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("文档 ID 不能为空。", nameof(documentId));
+        }
+
+        if (string.IsNullOrWhiteSpace(blockId))
+        {
+            throw new ArgumentException("块 ID 不能为空。", nameof(blockId));
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
+        string? pageToken = null;
+        var blockIds = new List<string>();
+
+        do
+        {
+            var queryBuilder = new StringBuilder(
+                $"/open-apis/docx/v1/documents/{Uri.EscapeDataString(documentId)}/blocks/{Uri.EscapeDataString(blockId)}/children?page_size=500");
+            if (!string.IsNullOrWhiteSpace(pageToken))
+            {
+                queryBuilder.Append("&page_token=").Append(Uri.EscapeDataString(pageToken));
+            }
+
+            var response = await GetAsync(
+                queryBuilder.ToString(),
+                token,
+                effectiveOptions,
+                cancellationToken);
+
+            var result = await ParseResponseAsync(response, cancellationToken);
+            EnsureBusinessSuccess(result, "List Feishu cloud document child blocks");
+
+            if (!result.TryGetProperty("data", out var data))
+            {
+                return blockIds;
+            }
+
+            if (data.TryGetProperty("items", out var items)
+                && items.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in items.EnumerateArray())
+                {
+                    var childBlockId = item.TryGetProperty("block_id", out var blockIdProp)
+                        ? blockIdProp.GetString()
+                        : null;
+
+                    if (!string.IsNullOrWhiteSpace(childBlockId))
+                    {
+                        blockIds.Add(childBlockId);
+                    }
+                }
+            }
+
+            var hasMore = data.TryGetProperty("has_more", out var hasMoreProp)
+                && hasMoreProp.ValueKind == JsonValueKind.True;
+            pageToken = hasMore
+                && data.TryGetProperty("page_token", out var nextPageTokenProp)
+                ? nextPageTokenProp.GetString()
+                : null;
+        }
+        while (!string.IsNullOrWhiteSpace(pageToken));
+
+        return blockIds;
+    }
+
+    public async Task DeleteCloudDocumentChildBlocksAsync(
+        string documentId,
+        string blockId,
+        int startIndex,
+        int endIndex,
+        CancellationToken cancellationToken = default,
+        FeishuOptions? optionsOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(documentId))
+        {
+            throw new ArgumentException("文档 ID 不能为空。", nameof(documentId));
+        }
+
+        if (string.IsNullOrWhiteSpace(blockId))
+        {
+            throw new ArgumentException("块 ID 不能为空。", nameof(blockId));
+        }
+
+        if (startIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startIndex), "起始索引不能小于 0。");
+        }
+
+        if (endIndex < startIndex)
+        {
+            throw new ArgumentOutOfRangeException(nameof(endIndex), "结束索引不能小于起始索引。");
+        }
+
+        var effectiveOptions = GetEffectiveOptions(optionsOverride);
+        var token = await EnsureTokenAsync(effectiveOptions, cancellationToken);
         var payload = new
         {
-            children = blocks.Select(block => (object)block).ToArray(),
-            index = 0
+            start_index = startIndex,
+            end_index = endIndex
         };
 
-        var response = await PostAsync(
-            $"/open-apis/docx/v1/documents/{Uri.EscapeDataString(documentId)}/blocks/{Uri.EscapeDataString(blockId)}/children",
+        var response = await DeleteAsync(
+            $"/open-apis/docx/v1/documents/{Uri.EscapeDataString(documentId)}/blocks/{Uri.EscapeDataString(blockId)}/children/batch_delete",
             token,
             payload,
             effectiveOptions,
             cancellationToken);
 
         var result = await ParseResponseAsync(response, cancellationToken);
-        EnsureBusinessSuccess(result, "Append Feishu cloud document blocks");
+        EnsureBusinessSuccess(result, "Delete Feishu cloud document child blocks");
     }
 
     public async Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(
@@ -1738,6 +1868,27 @@ public class FeishuCardKitClient : IFeishuCardKitClient
         return await SendAsync(request, options, cancellationToken);
     }
 
+    private async Task<HttpResponseMessage> DeleteAsync(
+        string path,
+        string token,
+        object payload,
+        FeishuOptions options,
+        CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Delete, $"{_baseUrl}{path}");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
+
+        if (!string.IsNullOrEmpty(token))
+        {
+            request.Headers.Add("Authorization", $"Bearer {token}");
+        }
+
+        return await SendAsync(request, options, cancellationToken);
+    }
+
     private async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         FeishuOptions options,
@@ -1756,6 +1907,93 @@ public class FeishuCardKitClient : IFeishuCardKitClient
     internal static string BuildCloudDocumentUrl(string documentId)
     {
         return $"https://feishu.cn/docx/{documentId}";
+    }
+
+    private static JsonNode NormalizeCloudDocumentBlockForAppend(JsonElement block)
+    {
+        return NormalizeCloudDocumentNode(block) ?? new JsonObject();
+    }
+
+    private static JsonNode? NormalizeCloudDocumentNode(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => NormalizeCloudDocumentObject(element),
+            JsonValueKind.Array => NormalizeCloudDocumentArray(element),
+            JsonValueKind.String => JsonValue.Create(element.GetString()),
+            JsonValueKind.Number => NormalizeCloudDocumentNumber(element),
+            JsonValueKind.True => JsonValue.Create(true),
+            JsonValueKind.False => JsonValue.Create(false),
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            _ => null
+        };
+    }
+
+    private static JsonObject NormalizeCloudDocumentObject(JsonElement element)
+    {
+        var node = new JsonObject();
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (ShouldSkipCloudDocumentProperty(property.Name))
+            {
+                continue;
+            }
+
+            if (string.Equals(property.Name, "children", StringComparison.Ordinal)
+                && property.Value.ValueKind == JsonValueKind.Array
+                && property.Value.GetArrayLength() == 0)
+            {
+                continue;
+            }
+
+            var normalized = NormalizeCloudDocumentNode(property.Value);
+            if (normalized != null)
+            {
+                node[property.Name] = normalized;
+            }
+        }
+
+        return node;
+    }
+
+    private static JsonArray NormalizeCloudDocumentArray(JsonElement element)
+    {
+        var array = new JsonArray();
+
+        foreach (var item in element.EnumerateArray())
+        {
+            var normalized = NormalizeCloudDocumentNode(item);
+            if (normalized != null)
+            {
+                array.Add(normalized);
+            }
+        }
+
+        return array;
+    }
+
+    private static JsonNode? NormalizeCloudDocumentNumber(JsonElement element)
+    {
+        if (element.TryGetInt64(out var longValue))
+        {
+            return JsonValue.Create(longValue);
+        }
+
+        if (element.TryGetDecimal(out var decimalValue))
+        {
+            return JsonValue.Create(decimalValue);
+        }
+
+        return JsonValue.Create(element.GetDouble());
+    }
+
+    private static bool ShouldSkipCloudDocumentProperty(string propertyName)
+    {
+        return string.Equals(propertyName, "block_id", StringComparison.Ordinal)
+            || string.Equals(propertyName, "block_uuid", StringComparison.Ordinal)
+            || string.Equals(propertyName, "parent_id", StringComparison.Ordinal)
+            || string.Equals(propertyName, "revision_id", StringComparison.Ordinal);
     }
 
     private async Task<string> GetRootFolderTokenAsync(

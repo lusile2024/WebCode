@@ -37,9 +37,11 @@ public sealed class ReplyDocumentOrchestratorListeningTests
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Contains("听完整回复", harness.CardKit.CreatedDocuments.Single().Title, StringComparison.Ordinal);
+        Assert.Equal("question thread-1 - 听完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.StartsWith("构建过了。文件内容1", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.Contains("文件内容1", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.Contains("文件内容1：/D:/repo/a.cs:1", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
+        Assert.EndsWith("## 用户内容\n\nquestion", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -65,9 +67,10 @@ public sealed class ReplyDocumentOrchestratorListeningTests
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Contains("听结论回复", harness.CardKit.CreatedDocuments.Single().Title, StringComparison.Ordinal);
+        Assert.Equal("question thread-2 - 听结论回复", harness.CardKit.CreatedDocuments.Single().Title);
         Assert.DoesNotContain("/D:/repo/raw.cs:2", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.Contains("文件内容1：/D:/repo/final.cs:9", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
+        Assert.EndsWith("## 用户内容\n\nquestion", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
@@ -102,6 +105,7 @@ public sealed class ReplyDocumentOrchestratorListeningTests
             services.AddScoped<IFeishuCardKitClient>(_ => CardKit);
             services.AddScoped<IChatSessionRepository>(_ => ChatSessionRepository);
             services.AddScoped<IExternalCliSessionHistoryService>(_ => HistoryService);
+            services.AddSingleton<IReferencedMarkdownImportStateStore, InMemoryReferencedMarkdownImportStateStore>();
             services.AddLogging();
 
             _serviceProvider = services.BuildServiceProvider();
@@ -120,6 +124,15 @@ public sealed class ReplyDocumentOrchestratorListeningTests
         {
             _serviceProvider.Dispose();
         }
+    }
+
+    private sealed class InMemoryReferencedMarkdownImportStateStore : IReferencedMarkdownImportStateStore
+    {
+        public Task<ReferencedMarkdownImportStateEntry?> GetAsync(string folderToken, string absolutePath, CancellationToken cancellationToken = default)
+            => Task.FromResult<ReferencedMarkdownImportStateEntry?>(null);
+
+        public Task UpsertAsync(ReferencedMarkdownImportStateEntry entry, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class TrackingUserFeishuBotConfigService(UserFeishuBotConfigEntity config) : IUserFeishuBotConfigService

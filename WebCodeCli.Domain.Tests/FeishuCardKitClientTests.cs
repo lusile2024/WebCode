@@ -304,7 +304,7 @@ public class FeishuCardKitClientTests
         ]);
 
         var client = CreateClient(handler);
-        var blocks = ParseJsonElementArray("""[{"block_type":2,"text":{"elements":[{"text_run":{"content":"转换后的段落","text_element_style":{}}}]}}]""");
+        var blocks = ParseJsonElementArray("""[{"block_id":"blk-source","block_type":2,"children":[],"text":{"elements":[{"text_run":{"content":"转换后的段落","text_element_style":{}}}]}}]""");
 
         await client.AppendCloudDocumentBlocksAsync(
             "doccn123",
@@ -321,8 +321,114 @@ public class FeishuCardKitClientTests
         using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
         var children = requestDoc.RootElement.GetProperty("children");
         Assert.Equal(1, children.GetArrayLength());
+        Assert.False(children[0].TryGetProperty("block_id", out _));
         Assert.Equal(2, children[0].GetProperty("block_type").GetInt32());
         Assert.Equal("转换后的段落", children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+        Assert.False(children[0].TryGetProperty("children", out _));
+    }
+
+    [Fact]
+    public async Task AppendCloudDocumentBlocksAsync_WhenMoreThanFiftyBlocks_BatchesChildrenRequests()
+    {
+        var responses = new List<HttpResponseMessage>
+        {
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}""")
+        };
+        responses.AddRange(
+        [
+            CreateJsonResponse("""{"code":0,"data":{"children":[{"block_id":"blk-created-1"}]}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"children":[{"block_id":"blk-created-2"}]}}""")
+        ]);
+
+        var handler = new StubHttpMessageHandler(responses);
+        var client = CreateClient(handler);
+        var blocks = Enumerable.Range(1, 51)
+            .Select(index => ParseJsonElementArray(
+                "[{\"block_id\":\"blk-" + index + "\",\"block_type\":2,\"children\":[],\"text\":{\"elements\":[{\"text_run\":{\"content\":\"段落" + index + "\",\"text_element_style\":{}}}]}}]")[0])
+            .ToArray();
+
+        await client.AppendCloudDocumentBlocksAsync(
+            "doccn123",
+            "root123",
+            blocks,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/docx/v1/documents/doccn123/blocks/root123/children",
+            "/open-apis/docx/v1/documents/doccn123/blocks/root123/children"
+        ], handler.RequestPaths);
+
+        using var firstRequestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        using var secondRequestDoc = JsonDocument.Parse(handler.RequestBodies[2]);
+        var firstChildren = firstRequestDoc.RootElement.GetProperty("children");
+        var secondChildren = secondRequestDoc.RootElement.GetProperty("children");
+        Assert.Equal(50, firstChildren.GetArrayLength());
+        Assert.Equal(1, secondChildren.GetArrayLength());
+        Assert.Equal(0, firstRequestDoc.RootElement.GetProperty("index").GetInt32());
+        Assert.Equal(50, secondRequestDoc.RootElement.GetProperty("index").GetInt32());
+        Assert.Equal("段落1", firstChildren[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+        Assert.Equal("段落50", firstChildren[49].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+        Assert.Equal("段落51", secondChildren[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task ListCloudDocumentChildBlockIdsAsync_WhenChildrenSpanMultiplePages_ReturnsAllBlockIdsInOrder()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{"items":[{"block_id":"blk-1"},{"block_id":"blk-2"}],"has_more":true,"page_token":"next-page"}}"""),
+            CreateJsonResponse("""{"code":0,"data":{"items":[{"block_id":"blk-3"}],"has_more":false}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        var blockIds = await client.ListCloudDocumentChildBlockIdsAsync(
+            "doccn123",
+            "root123",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["blk-1", "blk-2", "blk-3"], blockIds);
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/docx/v1/documents/doccn123/blocks/root123/children",
+            "/open-apis/docx/v1/documents/doccn123/blocks/root123/children"
+        ], handler.RequestPaths);
+        Assert.Contains("page_size=500", handler.RequestQueries[1], StringComparison.Ordinal);
+        Assert.Contains("page_token=next-page", handler.RequestQueries[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteCloudDocumentChildBlocksAsync_DeletesRequestedRange()
+    {
+        var handler = new StubHttpMessageHandler(
+        [
+            CreateJsonResponse("""{"tenant_access_token":"token-123","expire":7200}"""),
+            CreateJsonResponse("""{"code":0,"data":{}}""")
+        ]);
+
+        var client = CreateClient(handler);
+
+        await client.DeleteCloudDocumentChildBlocksAsync(
+            "doccn123",
+            "root123",
+            0,
+            2,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+        [
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            "/open-apis/docx/v1/documents/doccn123/blocks/root123/children/batch_delete"
+        ], handler.RequestPaths);
+        Assert.Equal("DELETE", handler.RequestMethods[1]);
+
+        using var requestDoc = JsonDocument.Parse(handler.RequestBodies[1]);
+        Assert.Equal(0, requestDoc.RootElement.GetProperty("start_index").GetInt32());
+        Assert.Equal(2, requestDoc.RootElement.GetProperty("end_index").GetInt32());
     }
 
     [Fact]

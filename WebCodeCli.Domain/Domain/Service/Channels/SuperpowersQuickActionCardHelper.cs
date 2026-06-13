@@ -132,6 +132,17 @@ internal static class SuperpowersQuickActionCardHelper
                         sessionId,
                         chatKey,
                         toolId)
+                },
+                new FeishuStreamingCardBottomAction
+                {
+                    Text = SuperpowersQuickActionDefaults.CompleteWorktreeButtonText,
+                    Type = "default",
+                    RowKey = GoalPlanActionRow,
+                    Value = BuildActionValue(
+                        FeishuHelpCardAction.ExecuteSuperpowersCompleteWorktreeAction,
+                        sessionId,
+                        chatKey,
+                        toolId)
                 }
             ]);
         }

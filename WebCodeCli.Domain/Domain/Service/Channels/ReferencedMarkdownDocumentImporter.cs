@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model.Channels;
@@ -9,10 +10,14 @@ public sealed class ReferencedMarkdownDocumentImporter
     private const string MarkdownDocumentTarget = "Markdown在线文档";
 
     private readonly ILogger<ReferencedMarkdownDocumentImporter> _logger;
+    private readonly IReferencedMarkdownImportStateStore _stateStore;
 
-    public ReferencedMarkdownDocumentImporter(ILogger<ReferencedMarkdownDocumentImporter> logger)
+    public ReferencedMarkdownDocumentImporter(
+        ILogger<ReferencedMarkdownDocumentImporter> logger,
+        IReferencedMarkdownImportStateStore stateStore)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
     }
 
     public async Task ImportMissingAsync(
@@ -36,6 +41,11 @@ public sealed class ReferencedMarkdownDocumentImporter
         {
             try
             {
+                var fingerprint = ReferencedMarkdownImportFingerprint.Compute(candidate.AbsolutePath);
+                var tracked = await _stateStore.GetAsync(
+                    folderToken,
+                    candidate.AbsolutePath,
+                    cancellationToken);
                 var existing = await cardKitClient.FindCloudDocumentInFolderByTitleAsync(
                     folderToken,
                     candidate.Title,
@@ -54,12 +64,40 @@ public sealed class ReferencedMarkdownDocumentImporter
                         candidate,
                         optionsOverride,
                         cancellationToken);
-                    successMessage = $"已生成Markdown在线文档：[{candidate.Title}]({document.Url})";
+                    successMessage = $"已生成Markdown在线文档：[${candidate.Title}]({document.Url})".Replace("[$", "[", StringComparison.Ordinal);
+                }
+                else if (tracked != null && string.Equals(tracked.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    successMessage = $"已复用Markdown在线文档：[${candidate.Title}]({document.Url})".Replace("[$", "[", StringComparison.Ordinal);
+                }
+                else if (tracked != null)
+                {
+                    await OverwriteExistingDocumentAsync(
+                        cardKitClient,
+                        document,
+                        candidate,
+                        optionsOverride,
+                        cancellationToken);
+                    successMessage = $"已更新Markdown在线文档：[${candidate.Title}]({document.Url})".Replace("[$", "[", StringComparison.Ordinal);
                 }
                 else
                 {
-                    successMessage = $"已复用Markdown在线文档：[{candidate.Title}]({document.Url})";
+                    successMessage = $"已复用Markdown在线文档：[${candidate.Title}]({document.Url})".Replace("[$", "[", StringComparison.Ordinal);
                 }
+
+                await _stateStore.UpsertAsync(
+                    new ReferencedMarkdownImportStateEntry
+                    {
+                        FolderToken = folderToken,
+                        AbsolutePath = candidate.AbsolutePath,
+                        RelativePath = candidate.RelativePath,
+                        Title = candidate.Title,
+                        Fingerprint = fingerprint,
+                        DocumentId = document.DocumentId,
+                        RootBlockId = document.RootBlockId,
+                        DocumentUrl = document.Url
+                    },
+                    cancellationToken);
 
                 if (!folderAdminGrantAttempted && !string.IsNullOrWhiteSpace(documentAdminOpenId))
                 {
@@ -122,6 +160,82 @@ public sealed class ReferencedMarkdownDocumentImporter
                     cancellationToken,
                     optionsOverride);
             }
+        }
+    }
+
+    private async Task OverwriteExistingDocumentAsync(
+        IFeishuCardKitClient cardKitClient,
+        FeishuCloudDocumentInfo document,
+        ReferencedMarkdownDocumentCandidate candidate,
+        FeishuOptions? optionsOverride,
+        CancellationToken cancellationToken)
+    {
+        var childBlockIds = await cardKitClient.ListCloudDocumentChildBlockIdsAsync(
+            document.DocumentId,
+            document.RootBlockId,
+            cancellationToken,
+            optionsOverride);
+
+        if (childBlockIds.Count > 0)
+        {
+            await cardKitClient.DeleteCloudDocumentChildBlocksAsync(
+                document.DocumentId,
+                document.RootBlockId,
+                0,
+                childBlockIds.Count - 1,
+                cancellationToken,
+                optionsOverride);
+        }
+
+        var markdown = await File.ReadAllTextAsync(candidate.AbsolutePath, cancellationToken);
+        JsonElement converted;
+        try
+        {
+            converted = await cardKitClient.ConvertMarkdownToCloudDocumentBlocksAsync(
+                markdown,
+                cancellationToken,
+                optionsOverride);
+        }
+        catch
+        {
+            await cardKitClient.AppendCloudDocumentTextAsync(
+                document.DocumentId,
+                document.RootBlockId,
+                markdown,
+                cancellationToken,
+                optionsOverride);
+            return;
+        }
+
+        var blocks = ExtractBlocks(converted);
+        if (blocks.Count == 0)
+        {
+            await cardKitClient.AppendCloudDocumentTextAsync(
+                document.DocumentId,
+                document.RootBlockId,
+                markdown,
+                cancellationToken,
+                optionsOverride);
+            return;
+        }
+
+        try
+        {
+            await cardKitClient.AppendCloudDocumentBlocksAsync(
+                document.DocumentId,
+                document.RootBlockId,
+                blocks,
+                cancellationToken,
+                optionsOverride);
+        }
+        catch
+        {
+            await cardKitClient.AppendCloudDocumentTextAsync(
+                document.DocumentId,
+                document.RootBlockId,
+                markdown,
+                cancellationToken,
+                optionsOverride);
         }
     }
 
@@ -351,7 +465,7 @@ public sealed class ReferencedMarkdownDocumentImporter
 
         return scopes.Count == 0
             ? null
-            : string.Join("\u3001", scopes);
+            : string.Join("、", scopes);
     }
 
     private static string? TryExtractPermissionGuidance(string? message)
@@ -399,5 +513,18 @@ public sealed class ReferencedMarkdownDocumentImporter
                || message.Contains("code=1061003", StringComparison.OrdinalIgnoreCase)
                || message.Contains("\"msg\":\"not found.\"", StringComparison.OrdinalIgnoreCase)
                || message.Contains("msg\":\"not found", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<JsonElement> ExtractBlocks(JsonElement converted)
+    {
+        if (!converted.TryGetProperty("blocks", out var blocksElement)
+            || blocksElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return blocksElement.EnumerateArray()
+            .Select(static block => block.Clone())
+            .ToArray();
     }
 }

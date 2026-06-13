@@ -13,7 +13,7 @@ public sealed class ReplyDocumentMarkdownRendererTests
     public async Task RenderAsync_WhenConvertSucceeds_AppendsConvertedBlocksOnly()
     {
         var cardKit = new TrackingFeishuCardKitClient();
-        cardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"鏍囬","text_element_style":{}}}]}}"""));
+        cardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"结论正文","text_element_style":{}}}]}}"""));
 
         var renderer = new ReplyDocumentMarkdownRenderer(NullLogger<ReplyDocumentMarkdownRenderer>.Instance);
 
@@ -21,7 +21,7 @@ public sealed class ReplyDocumentMarkdownRendererTests
             cardKit,
             "doc-1",
             "root-1",
-            "# 鏍囬",
+            "# 结论正文",
             optionsOverride: null,
             TestContext.Current.CancellationToken);
 
@@ -46,38 +46,41 @@ public sealed class ReplyDocumentMarkdownRendererTests
             cardKit,
             "doc-1",
             "root-1",
-            "# 鏍囬",
+            "# 结论正文",
             optionsOverride: null,
             TestContext.Current.CancellationToken);
 
         Assert.Empty(cardKit.AppendedBlockBatches);
         var appendedText = Assert.Single(cardKit.AppendedTexts);
-        Assert.Equal("# 鏍囬", appendedText.Text);
+        Assert.Equal("doc-1", appendedText.DocumentId);
+        Assert.Equal("root-1", appendedText.BlockId);
+        Assert.Equal("# 结论正文", appendedText.Text);
     }
 
     [Fact]
-    public async Task RenderAsync_WhenAppendConvertedBlocksFails_DoesNotFallbackToPlainText()
+    public async Task RenderAsync_WhenAppendConvertedBlocksFails_FallsBackToPlainTextAppend()
     {
         var cardKit = new TrackingFeishuCardKitClient
         {
             AppendBlocksException = new HttpRequestException("append failed")
         };
-        cardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"鏍囬","text_element_style":{}}}]}}"""));
+        cardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"结论正文","text_element_style":{}}}]}}"""));
 
         var renderer = new ReplyDocumentMarkdownRenderer(NullLogger<ReplyDocumentMarkdownRenderer>.Instance);
 
-        var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            renderer.RenderAsync(
-                cardKit,
-                "doc-1",
-                "root-1",
-                "# 鏍囬",
-                optionsOverride: null,
-                TestContext.Current.CancellationToken));
+        await renderer.RenderAsync(
+            cardKit,
+            "doc-1",
+            "root-1",
+            "# 结论正文",
+            optionsOverride: null,
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal("append failed", exception.Message);
         Assert.Equal(1, cardKit.AppendBlocksCallCount);
-        Assert.Empty(cardKit.AppendedTexts);
+        var appendedText = Assert.Single(cardKit.AppendedTexts);
+        Assert.Equal("doc-1", appendedText.DocumentId);
+        Assert.Equal("root-1", appendedText.BlockId);
+        Assert.Equal("# 结论正文", appendedText.Text);
     }
 
     private static JsonElement ParseJsonElement(string json)
@@ -148,8 +151,10 @@ public sealed class ReplyDocumentMarkdownRendererTests
         public Task<FeishuStreamingHandle> CreateStreamingHandleAsync(string chatId, string? replyMessageId, string initialContent, string? title = null, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null, FeishuStreamingCardChrome? chrome = null) => throw new NotSupportedException();
         public Task<FeishuDownloadedAttachment> DownloadIncomingAttachmentAsync(FeishuIncomingAttachment attachment, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task<(byte[] Content, string FileName, string MimeType)> DownloadMessageResourceAsync(string messageId, string fileKey, string resourceType, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
-        public Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(string folderToken, string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
-        public Task GrantCloudDocumentMemberFullAccessAsync(string documentId, string openId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+          public Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(string folderToken, string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+          public Task<IReadOnlyList<string>> ListCloudDocumentChildBlockIdsAsync(string documentId, string blockId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+          public Task DeleteCloudDocumentChildBlocksAsync(string documentId, string blockId, int startIndex, int endIndex, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+          public Task GrantCloudDocumentMemberFullAccessAsync(string documentId, string openId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task GrantCloudFolderMemberFullAccessAsync(string folderToken, string openId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task<FeishuCloudDocumentInfo> ImportMarkdownFileAsCloudDocumentAsync(string fileName, byte[] content, string title, string? folderToken, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task MoveCloudDocumentToFolderAsync(string documentId, string folderToken, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();

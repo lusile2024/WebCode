@@ -267,6 +267,7 @@ public class FeishuCardActionService
                 case FeishuHelpCardAction.StopStreamingExecutionAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersPlanAction:
                 case FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction:
+                case FeishuHelpCardAction.ExecuteSuperpowersCompleteWorktreeAction:
                 case FeishuHelpCardAction.ConfirmBoundSuperpowersAction:
                 case FeishuHelpCardAction.ConfirmCurrentSuperpowersAction:
                     return action.Action == FeishuHelpCardAction.StopStreamingExecutionAction
@@ -283,6 +284,8 @@ public class FeishuCardActionService
                     return await HandleGoalQuickActionAsync(action, formValueElement, chatId, operatorUserId, appId, inputValues);
                 case FeishuHelpCardAction.TemporarilyExitGoalRuntimeAction:
                     return await HandleTemporarilyExitGoalRuntimeAsync(action.SessionId, action.ChatKey ?? chatId, operatorUserId, action.ShowAllSessions, action.SessionPage);
+                case FeishuHelpCardAction.TemporarilyExitAndCompleteWorktreeAction:
+                    return await HandleTemporarilyExitAndCompleteWorktreeAsync(action, chatId, operatorUserId, appId);
                 case FeishuHelpCardAction.RetrySuperpowersCapabilityDetectionAction:
                     return await HandleRetrySuperpowersCapabilityDetectionAsync(action, chatId);
                 case LowInterruptionContinueHelper.ActionName:
@@ -882,6 +885,7 @@ public class FeishuCardActionService
             FeishuHelpCardAction.ContinueSuperpowersAction => SuperpowersPromptBuilder.BuildContinuePrompt(),
             FeishuHelpCardAction.ExecuteSuperpowersPlanAction => SuperpowersPromptBuilder.BuildExecutePlanPrompt(),
             FeishuHelpCardAction.ExecuteSuperpowersSubagentPlanAction => SuperpowersPromptBuilder.BuildSubagentExecutePlanPrompt(),
+            FeishuHelpCardAction.ExecuteSuperpowersCompleteWorktreeAction => SuperpowersPromptBuilder.BuildCompleteWorktreePrompt(),
             _ => null
         };
         if (string.IsNullOrWhiteSpace(prompt) && isConfirmSuperpowersAction && !string.IsNullOrWhiteSpace(action.Command))
@@ -1052,11 +1056,18 @@ public class FeishuCardActionService
             return _cardBuilder.BuildCardActionToastOnlyResponse("✅ 已保留当前 goal", "success");
         }
 
+        var latestAssistantReply = string.Equals(action.Action, FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction, StringComparison.OrdinalIgnoreCase)
+            ? await TryResolveLatestCompletedAssistantReplyContentAsync(activeSessionId, effectiveToolId)
+            : null;
         var prompt = string.Equals(action.Action, FeishuHelpCardAction.ConfirmOverwriteGoalAction, StringComparison.OrdinalIgnoreCase)
             ? GoalPromptBuilder.BuildGoalPrompt(action.Command)
-            : GoalPromptBuilder.BuildPromptForAction(
-                action.Action,
-                ResolveQuickInputValue(formValue, GoalQuickActionDefaults.QuickInputFieldName, inputValues));
+            : string.Equals(action.Action, FeishuHelpCardAction.ExecuteSuperpowersGoalPlanAction, StringComparison.OrdinalIgnoreCase)
+                ? GoalPromptBuilder.BuildSubagentPlanGoalPrompt(
+                    latestAssistantReply,
+                    TryGetSessionWorkspacePath(activeSessionId))
+                : GoalPromptBuilder.BuildPromptForAction(
+                    action.Action,
+                    ResolveQuickInputValue(formValue, GoalQuickActionDefaults.QuickInputFieldName, inputValues));
         if (string.IsNullOrWhiteSpace(prompt))
         {
             return _cardBuilder.BuildCardActionToastOnlyResponse("⚠️ 请输入目标", "warning");
@@ -1326,6 +1337,43 @@ public class FeishuCardActionService
             _logger.LogError(ex, "临时退出 goal 持续会话失败: SessionId={SessionId}", sessionId);
             return _cardBuilder.BuildCardActionToastOnlyResponse($"❌ 临时退出 goal 持续会话失败: {ex.Message}", "error");
         }
+    }
+
+    private async Task<CardActionTriggerResponseDto> HandleTemporarilyExitAndCompleteWorktreeAsync(
+        FeishuHelpCardAction action,
+        string? chatId,
+        string? operatorUserId,
+        string? appId)
+    {
+        var temporaryExitResponse = await HandleTemporarilyExitGoalRuntimeAsync(
+            action.SessionId,
+            action.ChatKey ?? chatId,
+            operatorUserId,
+            showAllSessions: null,
+            sessionPage: action.SessionPage);
+
+        var toastType = temporaryExitResponse.Toast?.Type;
+        if (toastType == CardActionTriggerResponseDto.ToastSuffix.ToastType.Error
+            || toastType == CardActionTriggerResponseDto.ToastSuffix.ToastType.Warning)
+        {
+            return temporaryExitResponse;
+        }
+
+        var followupAction = new FeishuHelpCardAction
+        {
+            Action = FeishuHelpCardAction.ExecuteSuperpowersCompleteWorktreeAction,
+            SessionId = action.SessionId,
+            ChatKey = action.ChatKey ?? chatId,
+            ToolId = action.ToolId
+        };
+
+        return await HandleSuperpowersQuickActionAsync(
+            followupAction,
+            formValue: null,
+            chatId,
+            operatorUserId,
+            appId,
+            inputValues: null);
     }
 
     private async Task<(bool Success, string Message)> TryAutoPauseGoalRuntimeBeforeTemporaryExitAsync(
@@ -5047,6 +5095,29 @@ public class FeishuCardActionService
         }
 
         return await BuildCompletionNotificationTextAsync(sessionId, toolId, fallbackWorkspacePath);
+    }
+
+    private async Task<string?> TryResolveLatestCompletedAssistantReplyContentAsync(
+        string sessionId,
+        string toolId)
+    {
+        var latestAssistantContent = _chatSessionService.GetMessages(sessionId)
+            .Where(message =>
+                message.IsCompleted
+                && string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(message.Content))
+            .Select(message => message.Content)
+            .LastOrDefault();
+        if (!string.IsNullOrWhiteSpace(latestAssistantContent))
+        {
+            return latestAssistantContent.Trim();
+        }
+
+        return await TryGetLatestAssistantMessageFromExternalHistoryAsync(
+            sessionId,
+            toolId,
+            expectedUserPrompt: null,
+            CancellationToken.None);
     }
 
     private static string BuildSessionOptionText(ChatSessionEntity session)

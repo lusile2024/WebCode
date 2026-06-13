@@ -91,6 +91,109 @@ public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
     }
 
     [Fact]
+    public async Task QueueCompletedReplyAsync_WhenReplyMentionsBarePlanMarkdownFileName_ImportsMarkdownFileAndSendsLink()
+    {
+        var workspaceRoot = CreateWorkspaceWithFile(
+            "docs/superpowers/plans/2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md",
+            "# plan");
+
+        try
+        {
+            using var harness = new ReplyDocumentOrchestratorHarness(
+                new UserFeishuBotConfigEntity
+                {
+                    Username = "luhaiyan",
+                    ReferencedMarkdownDocImportEnabled = true
+                },
+                session: new ReplyDocumentSessionContext
+                {
+                    SessionId = "session-md-bare-plan-import",
+                    Username = "luhaiyan",
+                    WorkspacePath = workspaceRoot,
+                    Title = "markdown import"
+                });
+
+            await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+            {
+                ChatId = "oc-md-bare-plan-import-chat",
+                SessionId = "session-md-bare-plan-import",
+                Username = "luhaiyan",
+                Output = "这份 2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md 就是接下来要执行的 plan。"
+            });
+
+            await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+            var imported = Assert.Single(harness.CardKit.ImportedMarkdownDocuments);
+            Assert.Equal(
+                "2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md",
+                imported.FileName);
+            Assert.Equal(
+                "docs/superpowers/plans/2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md",
+                imported.Title);
+            Assert.Contains(
+                "docs/superpowers/plans/2026-06-11-mmis-ai-first-operation-wave-2-implementation-plan.md",
+                harness.CardKit.TextMessages[0],
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenFinalOnlyReplyMentionsBareSpecMarkdownFileName_ImportsMarkdownFileAndSendsLink()
+    {
+        var workspaceRoot = CreateWorkspaceWithFile(
+            "docs/superpowers/specs/2026-06-11-mmis-product-v1-total-delivery-roadmap-design.md",
+            "# spec");
+
+        try
+        {
+            using var harness = new ReplyDocumentOrchestratorHarness(
+                new UserFeishuBotConfigEntity
+                {
+                    Username = "luhaiyan",
+                    ReferencedMarkdownDocImportEnabled = true
+                },
+                session: new ReplyDocumentSessionContext
+                {
+                    SessionId = "session-md-final-spec-import",
+                    Username = "luhaiyan",
+                    WorkspacePath = workspaceRoot,
+                    Title = "markdown import"
+                });
+
+            await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+            {
+                ChatId = "oc-md-final-spec-import-chat",
+                SessionId = "session-md-final-spec-import",
+                Username = "luhaiyan",
+                Output = "提交已完成，开始做收尾验证。",
+                FinalAnswerOutput = "已创建并提交文档：2026-06-11-mmis-product-v1-total-delivery-roadmap-design.md"
+            });
+
+            await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+            var imported = Assert.Single(harness.CardKit.ImportedMarkdownDocuments);
+            Assert.Equal(
+                "2026-06-11-mmis-product-v1-total-delivery-roadmap-design.md",
+                imported.FileName);
+            Assert.Equal(
+                "docs/superpowers/specs/2026-06-11-mmis-product-v1-total-delivery-roadmap-design.md",
+                imported.Title);
+            Assert.Contains(
+                "docs/superpowers/specs/2026-06-11-mmis-product-v1-total-delivery-roadmap-design.md",
+                harness.CardKit.TextMessages[0],
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task QueueCompletedReplyAsync_WhenMarkdownImportFails_StillCreatesNormalReplyDocument()
     {
         var workspaceRoot = CreateWorkspaceWithFile("docs/agent-notes/2026-06-09.md", "# note");
@@ -316,6 +419,7 @@ public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
             services.AddScoped<IFeishuCardKitClient>(_ => CardKit);
             services.AddScoped<IChatSessionRepository>(_ => ChatSessionRepository);
             services.AddScoped<IExternalCliSessionHistoryService>(_ => HistoryService);
+            services.AddSingleton<IReferencedMarkdownImportStateStore, InMemoryReferencedMarkdownImportStateStore>();
             services.AddLogging();
 
             _serviceProvider = services.BuildServiceProvider();
@@ -458,11 +562,13 @@ public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
         public List<(string Title, string DocumentId, string RootBlockId, string Url, string? FolderToken)> CreatedDocuments { get; } = [];
         public List<(string DocumentId, string BlockId, string Text)> AppendedTexts { get; } = [];
         public List<(string DocumentId, string BlockId, IReadOnlyList<JsonElement> Blocks)> AppendedBlockBatches { get; } = [];
+        public Dictionary<(string DocumentId, string BlockId), List<string>> ChildBlockIdsByDocumentAndBlock { get; } = [];
         public List<string> PermissionUpdates { get; } = [];
         public List<string> TextMessages { get; } = [];
         public List<string> EnsuredFolderNames { get; } = [];
         public Dictionary<string, FeishuCloudDocumentInfo> ExistingFolderDocumentsByTitle { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<(string FileName, string Title, string FolderToken, string Body)> ImportedMarkdownDocuments { get; } = [];
+        public List<(string DocumentId, string BlockId, int StartIndex, int EndIndex)> DeletedChildRanges { get; } = [];
         public List<(string DocumentId, string OpenId)> DocumentAdminGrants { get; } = [];
         public List<(string FolderToken, string OpenId)> FolderAdminGrants { get; } = [];
 
@@ -512,6 +618,20 @@ public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
         public Task<FeishuCloudDocumentInfo?> FindCloudDocumentInFolderByTitleAsync(string folderToken, string title, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
         {
             return Task.FromResult(ExistingFolderDocumentsByTitle.TryGetValue(title, out var existing) ? existing : null);
+        }
+
+        public Task<IReadOnlyList<string>> ListCloudDocumentChildBlockIdsAsync(string documentId, string blockId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(
+                ChildBlockIdsByDocumentAndBlock.TryGetValue((documentId, blockId), out var blockIds)
+                    ? [.. blockIds]
+                    : []);
+        }
+
+        public Task DeleteCloudDocumentChildBlocksAsync(string documentId, string blockId, int startIndex, int endIndex, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            DeletedChildRanges.Add((documentId, blockId, startIndex, endIndex));
+            return Task.CompletedTask;
         }
 
         public Task<FeishuCloudDocumentInfo> ImportMarkdownFileAsCloudDocumentAsync(string fileName, byte[] content, string title, string? folderToken, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
@@ -572,6 +692,25 @@ public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
         public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task<string> UploadCloudFileAsync(string fileName, byte[] content, string? folderToken, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+    }
+
+    private sealed class InMemoryReferencedMarkdownImportStateStore : IReferencedMarkdownImportStateStore
+    {
+        private readonly Dictionary<(string FolderToken, string AbsolutePath), ReferencedMarkdownImportStateEntry> _entries = new();
+
+        public Task<ReferencedMarkdownImportStateEntry?> GetAsync(string folderToken, string absolutePath, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                _entries.TryGetValue((folderToken, absolutePath), out var entry)
+                    ? entry
+                    : null);
+        }
+
+        public Task UpsertAsync(ReferencedMarkdownImportStateEntry entry, CancellationToken cancellationToken = default)
+        {
+            _entries[(entry.FolderToken, entry.AbsolutePath)] = entry;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ReplyDocumentSessionContext

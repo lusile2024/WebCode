@@ -73,8 +73,8 @@ public sealed class ReplyDocumentOrchestratorTests
         await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
-        Assert.Equal("thread-1 question - 完整回复", document.Title);
-        Assert.Equal(FullReplyBody, Assert.Single(harness.CardKit.AppendedTexts).Text);
+        Assert.Equal("question thread-1 - 完整回复", document.Title);
+        Assert.Equal("## 用户内容\n\nquestion\n\n完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Single(harness.CardKit.PermissionUpdates);
         Assert.Single(harness.CardKit.TextMessages);
         Assert.Contains("已生成完整回复文档：", harness.CardKit.TextMessages.Single(), StringComparison.Ordinal);
@@ -106,8 +106,8 @@ public sealed class ReplyDocumentOrchestratorTests
         await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
-        Assert.Equal($"thread-2 {ContinueQuestion} - 结论回复", document.Title);
-        Assert.Equal(FinalReplyBody, Assert.Single(harness.CardKit.AppendedTexts).Text);
+        Assert.Equal($"{ContinueQuestion} thread-2 - 结论回复", document.Title);
+        Assert.Equal("## 用户内容\n\n继续\n\n结论正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Equal(0, harness.HistoryService.FinalAnswerLookupCount);
         Assert.Contains("已生成结论回复文档：", Assert.Single(harness.CardKit.TextMessages), StringComparison.Ordinal);
     }
@@ -148,7 +148,7 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(1, harness.HistoryService.FinalAnswerLookupCount);
         Assert.Equal("thread-fallback", harness.HistoryService.LastCliThreadId);
         Assert.Equal(@"D:\repo\superpowers", harness.HistoryService.LastWorkspacePath);
-        Assert.Equal("rollout 结论", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        Assert.Equal("## 用户内容\n\n继续\n\nrollout 结论", Assert.Single(harness.CardKit.AppendedTexts).Text);
     }
 
     [Fact]
@@ -179,8 +179,8 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(2, harness.CardKit.AppendedTexts.Count);
         Assert.Equal(2, harness.CardKit.PermissionUpdates.Count);
         Assert.Equal(2, harness.CardKit.TextMessages.Count);
-        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both question - 完整回复");
-        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "thread-both question - 结论回复");
+        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "question thread-both - 完整回复");
+        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "question thread-both - 结论回复");
     }
 
     [Fact]
@@ -345,7 +345,7 @@ public sealed class ReplyDocumentOrchestratorTests
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Equal($"session-fallback-id {ContinueQuestion} - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.Equal($"{ContinueQuestion} session-fallback-id - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
     }
 
     [Fact]
@@ -699,8 +699,63 @@ public sealed class ReplyDocumentOrchestratorTests
 
         Assert.Collection(
             harness.CardKit.CreatedDocuments,
-            first => Assert.Equal("session-1 first - 完整回复", first.Title),
-            second => Assert.Equal("session-2 second - 完整回复", second.Title));
+            first => Assert.Equal("first session-1 - 完整回复", first.Title),
+            second => Assert.Equal("second session-2 - 完整回复", second.Title));
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenRolloutHasRealUserMessage_UsesItForTitleInsteadOfControlPrompt()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            },
+            session: new ReplyDocumentSessionContext
+            {
+                SessionId = "session-title-history",
+                Username = "luhaiyan",
+                ToolId = "codex",
+                CliThreadId = "thread-title-history",
+                WorkspacePath = @"D:\repo\superpowers"
+            });
+
+        harness.HistoryService.RecentMessages = [
+            new ExternalCliHistoryMessage
+            {
+                Role = "user",
+                Content = "/goal 使用Subagent-Driven完成plan文档 plan.md"
+            },
+            new ExternalCliHistoryMessage
+            {
+                Role = "assistant",
+                Content = "收到"
+            },
+            new ExternalCliHistoryMessage
+            {
+                Role = "user",
+                Content = "先把这个关键产品约束定掉"
+            }
+        ];
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-title-history-chat",
+            SessionId = "session-title-history",
+            CliThreadId = "thread-title-history",
+            OriginalUserQuestion = "使用Subagent-Driven完成plan文档 plan.md",
+            Username = "luhaiyan",
+            Output = FullReplyBody
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
+
+        Assert.Equal(1, harness.HistoryService.RecentMessagesLookupCount);
+        Assert.Equal("thread-title-history", harness.HistoryService.LastRecentMessagesCliThreadId);
+        Assert.Equal(@"D:\repo\superpowers", harness.HistoryService.LastRecentMessagesWorkspacePath);
+        Assert.Equal("先把这个关键产品约束定掉 thread-title-history - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.Equal("## 用户内容\n\n先把这个关键产品约束定掉\n\n完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
@@ -742,6 +797,7 @@ public sealed class ReplyDocumentOrchestratorTests
             services.AddScoped<IFeishuCardKitClient>(_ => CardKit);
             services.AddScoped<IChatSessionRepository>(_ => ChatSessionRepository);
             services.AddScoped<IExternalCliSessionHistoryService>(_ => HistoryService);
+            services.AddSingleton<IReferencedMarkdownImportStateStore, InMemoryReferencedMarkdownImportStateStore>();
             services.AddLogging();
 
             _serviceProvider = services.BuildServiceProvider();
@@ -764,6 +820,15 @@ public sealed class ReplyDocumentOrchestratorTests
         {
             _serviceProvider.Dispose();
         }
+    }
+
+    private sealed class InMemoryReferencedMarkdownImportStateStore : IReferencedMarkdownImportStateStore
+    {
+        public Task<ReferencedMarkdownImportStateEntry?> GetAsync(string folderToken, string absolutePath, CancellationToken cancellationToken = default)
+            => Task.FromResult<ReferencedMarkdownImportStateEntry?>(null);
+
+        public Task UpsertAsync(ReferencedMarkdownImportStateEntry entry, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class TrackingUserFeishuBotConfigService(UserFeishuBotConfigEntity config) : IUserFeishuBotConfigService
@@ -900,12 +965,22 @@ public sealed class ReplyDocumentOrchestratorTests
     private sealed class TrackingExternalCliSessionHistoryService : IExternalCliSessionHistoryService
     {
         public int FinalAnswerLookupCount { get; private set; }
+        public int RecentMessagesLookupCount { get; private set; }
         public string? FinalAnswerText { get; set; }
+        public List<ExternalCliHistoryMessage> RecentMessages { get; set; } = [];
         public string? LastCliThreadId { get; private set; }
         public string? LastWorkspacePath { get; private set; }
+        public string? LastRecentMessagesCliThreadId { get; private set; }
+        public string? LastRecentMessagesWorkspacePath { get; private set; }
 
         public Task<ExternalCliHistoryResult> GetRecentHistoryAsync(string toolId, string cliThreadId, int maxCount = 20, string? workspacePath = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<List<ExternalCliHistoryMessage>> GetRecentMessagesAsync(string toolId, string cliThreadId, int maxCount = 20, string? workspacePath = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<List<ExternalCliHistoryMessage>> GetRecentMessagesAsync(string toolId, string cliThreadId, int maxCount = 20, string? workspacePath = null, CancellationToken cancellationToken = default)
+        {
+            RecentMessagesLookupCount++;
+            LastRecentMessagesCliThreadId = cliThreadId;
+            LastRecentMessagesWorkspacePath = workspacePath;
+            return Task.FromResult(RecentMessages);
+        }
 
         public Task<string?> GetCodexFinalAnswerTextAsync(string cliThreadId, string? workspacePath = null, CancellationToken cancellationToken = default)
         {

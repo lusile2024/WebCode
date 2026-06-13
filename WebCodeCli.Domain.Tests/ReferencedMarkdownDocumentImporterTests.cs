@@ -11,6 +11,116 @@ namespace WebCodeCli.Domain.Tests;
 public sealed class ReferencedMarkdownDocumentImporterTests
 {
     [Fact]
+    public async Task ImportMissingAsync_WhenTrackedMarkdownIsUnchanged_ReusesTrackedDocumentWithoutReimport()
+    {
+        var workspaceRoot = CreateWorkspaceWithFile("docs/agent-notes/2026-06-09.md", "# note");
+        var stateStore = new InMemoryReferencedMarkdownImportStateStore();
+        var candidate = new ReferencedMarkdownDocumentCandidate(
+            AbsolutePath: Path.Combine(workspaceRoot, "docs", "agent-notes", "2026-06-09.md"),
+            RelativePath: "docs/agent-notes/2026-06-09.md",
+            Title: "docs/agent-notes/2026-06-09.md");
+
+        try
+        {
+            var existingDocument = new FeishuCloudDocumentInfo
+            {
+                DocumentId = "doc-existing",
+                RootBlockId = "root-existing",
+                Url = "https://feishu.cn/docx/doc-existing"
+            };
+
+            await SeedTrackingStateAsync(stateStore, "fld-session", candidate, existingDocument);
+
+            var cardKit = new TrackingFeishuCardKitClient();
+            cardKit.ExistingFolderDocumentsByTitle[candidate.Title] = existingDocument;
+
+            var importer = CreateImporter(stateStore);
+
+            await importer.ImportMissingAsync(
+                cardKit,
+                "oc-chat",
+                "fld-session",
+                [candidate],
+                documentAdminOpenId: null,
+                optionsOverride: null,
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Empty(cardKit.ImportedMarkdownDocuments);
+            Assert.Empty(cardKit.ConvertedMarkdownRequests);
+            Assert.Empty(cardKit.DeletedChildRanges);
+            Assert.Single(cardKit.TextMessages);
+            Assert.Contains("已复用Markdown在线文档", cardKit.TextMessages[0], StringComparison.Ordinal);
+            Assert.Contains("https://feishu.cn/docx/doc-existing", cardKit.TextMessages[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportMissingAsync_WhenTrackedMarkdownChanges_OverwritesExistingDocumentAndKeepsLink()
+    {
+        var workspaceRoot = CreateWorkspaceWithFile("docs/agent-notes/2026-06-09.md", "# note");
+        var stateStore = new InMemoryReferencedMarkdownImportStateStore();
+        var candidate = new ReferencedMarkdownDocumentCandidate(
+            AbsolutePath: Path.Combine(workspaceRoot, "docs", "agent-notes", "2026-06-09.md"),
+            RelativePath: "docs/agent-notes/2026-06-09.md",
+            Title: "docs/agent-notes/2026-06-09.md");
+
+        try
+        {
+            var existingDocument = new FeishuCloudDocumentInfo
+            {
+                DocumentId = "doc-existing",
+                RootBlockId = "root-existing",
+                Url = "https://feishu.cn/docx/doc-existing"
+            };
+
+            await SeedTrackingStateAsync(stateStore, "fld-session", candidate, existingDocument);
+            await File.WriteAllTextAsync(candidate.AbsolutePath, "# updated note", Encoding.UTF8, TestContext.Current.CancellationToken);
+
+            var cardKit = new TrackingFeishuCardKitClient();
+            cardKit.ExistingFolderDocumentsByTitle[candidate.Title] = existingDocument;
+            cardKit.ChildBlockIdsByDocumentAndBlock[(existingDocument.DocumentId, existingDocument.RootBlockId)] = ["blk-1", "blk-2", "blk-3"];
+            cardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"updated note","text_element_style":{}}}]}}"""));
+
+            var importer = CreateImporter(stateStore);
+
+            await importer.ImportMissingAsync(
+                cardKit,
+                "oc-chat",
+                "fld-session",
+                [candidate],
+                documentAdminOpenId: null,
+                optionsOverride: null,
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Empty(cardKit.ImportedMarkdownDocuments);
+            Assert.Single(cardKit.ConvertedMarkdownRequests);
+            Assert.Equal("# updated note", cardKit.ConvertedMarkdownRequests[0]);
+            Assert.Equal([("doc-existing", "root-existing", 0, 2)], cardKit.DeletedChildRanges);
+            var appendedBatch = Assert.Single(cardKit.AppendedBlockBatches);
+            Assert.Equal("doc-existing", appendedBatch.DocumentId);
+            Assert.Equal("root-existing", appendedBatch.BlockId);
+            Assert.Single(appendedBatch.Blocks);
+            Assert.Single(cardKit.TextMessages);
+            Assert.Contains("已更新Markdown在线文档", cardKit.TextMessages[0], StringComparison.Ordinal);
+            Assert.Contains("https://feishu.cn/docx/doc-existing", cardKit.TextMessages[0], StringComparison.Ordinal);
+
+            var updatedState = await stateStore.GetAsync("fld-session", candidate.AbsolutePath, TestContext.Current.CancellationToken);
+            Assert.NotNull(updatedState);
+            Assert.Equal("doc-existing", updatedState!.DocumentId);
+            Assert.Equal("root-existing", updatedState.RootBlockId);
+            Assert.Equal("https://feishu.cn/docx/doc-existing", updatedState.DocumentUrl);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ImportMissingAsync_WhenDocumentAlreadyExistsInFolder_ReusesExistingLink()
     {
         var cardKit = new TrackingFeishuCardKitClient();
@@ -282,8 +392,32 @@ public sealed class ReferencedMarkdownDocumentImporterTests
         }
     }
 
-    private static ReferencedMarkdownDocumentImporter CreateImporter()
-        => new(NullLogger<ReferencedMarkdownDocumentImporter>.Instance);
+    private static ReferencedMarkdownDocumentImporter CreateImporter(IReferencedMarkdownImportStateStore? stateStore = null)
+        => new(
+            NullLogger<ReferencedMarkdownDocumentImporter>.Instance,
+            stateStore ?? new InMemoryReferencedMarkdownImportStateStore());
+
+    private static async Task SeedTrackingStateAsync(
+        IReferencedMarkdownImportStateStore stateStore,
+        string folderToken,
+        ReferencedMarkdownDocumentCandidate candidate,
+        FeishuCloudDocumentInfo document)
+    {
+        var fingerprint = ReferencedMarkdownImportFingerprint.Compute(candidate.AbsolutePath);
+        await stateStore.UpsertAsync(
+            new ReferencedMarkdownImportStateEntry
+            {
+                FolderToken = folderToken,
+                AbsolutePath = candidate.AbsolutePath,
+                RelativePath = candidate.RelativePath,
+                Title = candidate.Title,
+                Fingerprint = fingerprint,
+                DocumentId = document.DocumentId,
+                RootBlockId = document.RootBlockId,
+                DocumentUrl = document.Url
+            },
+            TestContext.Current.CancellationToken);
+    }
 
     private static string CreateWorkspaceWithFile(string relativePath, string content)
     {
@@ -292,6 +426,12 @@ public sealed class ReferencedMarkdownDocumentImporterTests
         Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
         File.WriteAllText(absolutePath, content, Encoding.UTF8);
         return root;
+    }
+
+    private static JsonElement ParseJsonElement(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
     }
 
     private sealed class TrackingFeishuCardKitClient : IFeishuCardKitClient
@@ -308,9 +448,17 @@ public sealed class ReferencedMarkdownDocumentImporterTests
 
         public Dictionary<string, FeishuCloudDocumentInfo> ExistingFolderDocumentsByTitle { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        public Dictionary<(string DocumentId, string BlockId), List<string>> ChildBlockIdsByDocumentAndBlock { get; } = [];
+
         public List<(string FileName, string Title, string FolderToken, string Content)> ImportedMarkdownDocuments { get; } = [];
 
         public List<(string FileName, string Title, string? FolderToken)> ImportAttempts { get; } = [];
+
+        public List<string> ConvertedMarkdownRequests { get; } = [];
+
+        public List<(string DocumentId, string BlockId, IReadOnlyList<JsonElement> Blocks)> AppendedBlockBatches { get; } = [];
+
+        public List<(string DocumentId, string BlockId, int StartIndex, int EndIndex)> DeletedChildRanges { get; } = [];
 
         public List<string> TextMessages { get; } = [];
 
@@ -327,6 +475,30 @@ public sealed class ReferencedMarkdownDocumentImporterTests
             FeishuOptions? optionsOverride = null)
         {
             return Task.FromResult(ExistingFolderDocumentsByTitle.TryGetValue(title, out var existing) ? existing : null);
+        }
+
+        public Task<IReadOnlyList<string>> ListCloudDocumentChildBlockIdsAsync(
+            string documentId,
+            string blockId,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(
+                ChildBlockIdsByDocumentAndBlock.TryGetValue((documentId, blockId), out var blockIds)
+                    ? [.. blockIds]
+                    : []);
+        }
+
+        public Task DeleteCloudDocumentChildBlocksAsync(
+            string documentId,
+            string blockId,
+            int startIndex,
+            int endIndex,
+            CancellationToken cancellationToken = default,
+            FeishuOptions? optionsOverride = null)
+        {
+            DeletedChildRanges.Add((documentId, blockId, startIndex, endIndex));
+            return Task.CompletedTask;
         }
 
         public Task<FeishuCloudDocumentInfo> ImportMarkdownFileAsCloudDocumentAsync(
@@ -427,9 +599,44 @@ public sealed class ReferencedMarkdownDocumentImporterTests
         public Task<string> SendCardMessageAsync(string chatId, string cardId, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task<string> SendRawCardAsync(string chatId, string cardJson, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task AppendCloudDocumentTextAsync(string documentId, string blockId, string text, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
-        public Task<JsonElement> ConvertMarkdownToCloudDocumentBlocksAsync(string markdown, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
-        public Task AppendCloudDocumentBlocksAsync(string documentId, string blockId, IReadOnlyCollection<JsonElement> blocks, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+        public Task<JsonElement> ConvertMarkdownToCloudDocumentBlocksAsync(string markdown, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            ConvertedMarkdownRequests.Add(markdown);
+            var blocksJson = string.Join(",", ConvertedBlocks.Select(static block => block.GetRawText()));
+            using var document = JsonDocument.Parse($$"""{"blocks":[{{blocksJson}}]}""");
+            return Task.FromResult(document.RootElement.Clone());
+        }
+        public Task AppendCloudDocumentBlocksAsync(string documentId, string blockId, IReadOnlyCollection<JsonElement> blocks, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null)
+        {
+            AppendedBlockBatches.Add((documentId, blockId, blocks.Select(static block => block.Clone()).ToArray()));
+            return Task.CompletedTask;
+        }
+        public List<JsonElement> ConvertedBlocks { get; } = [];
         public Task<string> UploadCloudFileAsync(string fileName, byte[] content, string? folderToken, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
         public Task<bool> UpdateCardAsync(string cardId, string content, int sequence, CancellationToken cancellationToken = default, FeishuOptions? optionsOverride = null) => throw new NotSupportedException();
+    }
+
+    private sealed class InMemoryReferencedMarkdownImportStateStore : IReferencedMarkdownImportStateStore
+    {
+        private readonly Dictionary<(string FolderToken, string AbsolutePath), ReferencedMarkdownImportStateEntry> _entries = new();
+
+        public Task<ReferencedMarkdownImportStateEntry?> GetAsync(
+            string folderToken,
+            string absolutePath,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                _entries.TryGetValue((folderToken, absolutePath), out var entry)
+                    ? entry with { }
+                    : null);
+        }
+
+        public Task UpsertAsync(
+            ReferencedMarkdownImportStateEntry entry,
+            CancellationToken cancellationToken = default)
+        {
+            _entries[(entry.FolderToken, entry.AbsolutePath)] = entry with { };
+            return Task.CompletedTask;
+        }
     }
 }

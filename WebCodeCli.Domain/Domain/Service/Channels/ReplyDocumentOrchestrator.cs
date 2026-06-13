@@ -47,7 +47,8 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             ?? NullLogger<ReplyDocumentMarkdownRenderer>.Instance);
         _markdownDocumentImporter = new ReferencedMarkdownDocumentImporter(
             serviceProvider.GetService<ILogger<ReferencedMarkdownDocumentImporter>>()
-            ?? NullLogger<ReferencedMarkdownDocumentImporter>.Instance);
+            ?? NullLogger<ReferencedMarkdownDocumentImporter>.Instance,
+            serviceProvider.GetRequiredService<IReferencedMarkdownImportStateStore>());
     }
 
     public Task QueueCompletedReplyAsync(FeishuCompletedReplyDocumentRequest request)
@@ -97,7 +98,18 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         var cardKitClient = scope.ServiceProvider.GetRequiredService<IFeishuCardKitClient>();
         var fullReplyContent = NormalizeDocumentBody(request.Output);
         var finalReplyContent = NormalizeDocumentBody(await ResolveFinalOnlyOutputAsync(scope.ServiceProvider, request));
-        var titlePrefix = BuildTitlePrefix(request);
+        var titleQuestion = await ResolveTitleQuestionAsync(scope.ServiceProvider, request);
+        var titlePrefix = BuildTitlePrefix(request, titleQuestion);
+        var fullReplyDocumentBody = BuildReplyDocumentBody(fullReplyContent, titleQuestion, appendUserQuestionToEnd: false);
+        var finalReplyDocumentBody = BuildReplyDocumentBody(finalReplyContent, titleQuestion, appendUserQuestionToEnd: false);
+        var audioFullReplyDocumentBody = BuildReplyDocumentBody(
+            ListeningReplyDocumentFormatter.Format(fullReplyContent),
+            titleQuestion,
+            appendUserQuestionToEnd: true);
+        var audioFinalReplyDocumentBody = BuildReplyDocumentBody(
+            ListeningReplyDocumentFormatter.Format(finalReplyContent),
+            titleQuestion,
+            appendUserQuestionToEnd: true);
 
         if (userConfig.FullReplyDocEnabled && !string.IsNullOrWhiteSpace(fullReplyContent))
         {
@@ -107,7 +119,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 configService,
                 request,
                 $"{titlePrefix}{FullReplySuffix}",
-                fullReplyContent,
+                fullReplyDocumentBody,
                 FullReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
         }
@@ -120,7 +132,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 configService,
                 request,
                 $"{titlePrefix}{FinalReplySuffix}",
-                finalReplyContent,
+                finalReplyDocumentBody,
                 FinalReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
         }
@@ -133,7 +145,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 configService,
                 request,
                 $"{titlePrefix}{AudioFullReplySuffix}",
-                ListeningReplyDocumentFormatter.Format(fullReplyContent),
+                audioFullReplyDocumentBody,
                 AudioFullReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
         }
@@ -146,7 +158,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 configService,
                 request,
                 $"{titlePrefix}{AudioFinalReplySuffix}",
-                ListeningReplyDocumentFormatter.Format(finalReplyContent),
+                audioFinalReplyDocumentBody,
                 AudioFinalReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
         }
@@ -687,7 +699,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         return content.Replace("\r\n", "\n").Trim();
     }
 
-    private static string BuildTitlePrefix(FeishuCompletedReplyDocumentRequest request)
+    private static string BuildTitlePrefix(FeishuCompletedReplyDocumentRequest request, string? titleQuestion)
     {
         var threadOrSessionId = string.IsNullOrWhiteSpace(request.CliThreadId)
             ? request.SessionId?.Trim()
@@ -698,13 +710,113 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             threadOrSessionId = "unknown-session";
         }
 
-        var normalizedQuestion = NormalizeQuestionForTitle(request.OriginalUserQuestion);
+        var normalizedQuestion = NormalizeQuestionForTitle(titleQuestion);
         if (string.IsNullOrWhiteSpace(normalizedQuestion))
         {
             return threadOrSessionId;
         }
 
-        return $"{threadOrSessionId} {normalizedQuestion}";
+        return $"{normalizedQuestion} {threadOrSessionId}";
+    }
+
+    private async Task<string?> ResolveTitleQuestionAsync(IServiceProvider serviceProvider, FeishuCompletedReplyDocumentRequest request)
+    {
+        var resolvedFromHistory = await TryResolveLastRealUserMessageAsync(serviceProvider, request);
+        if (!string.IsNullOrWhiteSpace(resolvedFromHistory))
+        {
+            return resolvedFromHistory;
+        }
+
+        return request.OriginalUserQuestion;
+    }
+
+    private async Task<string?> TryResolveLastRealUserMessageAsync(IServiceProvider serviceProvider, FeishuCompletedReplyDocumentRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            return null;
+        }
+
+        try
+        {
+            var sessionRepository = serviceProvider.GetService<IChatSessionRepository>();
+            var historyService = serviceProvider.GetService<IExternalCliSessionHistoryService>();
+            if (sessionRepository == null || historyService == null)
+            {
+                return null;
+            }
+
+            var session = await sessionRepository.GetByIdAsync(request.SessionId.Trim());
+            if (session == null)
+            {
+                return null;
+            }
+
+            var effectiveToolId = SessionLaunchOverrideHelper.ResolveEffectiveToolId(
+                session.ToolId,
+                session.CcSwitchSnapshotToolId);
+            if (string.IsNullOrWhiteSpace(effectiveToolId))
+            {
+                return null;
+            }
+
+            var cliThreadId = string.IsNullOrWhiteSpace(request.CliThreadId)
+                ? session.CliThreadId?.Trim()
+                : request.CliThreadId.Trim();
+            if (string.IsNullOrWhiteSpace(cliThreadId))
+            {
+                return null;
+            }
+
+            var messages = await historyService.GetRecentMessagesAsync(
+                effectiveToolId,
+                cliThreadId,
+                maxCount: 12,
+                workspacePath: session.WorkspacePath);
+
+            if (messages.Count == 0)
+            {
+                return null;
+            }
+
+            var latestUserMessage = messages
+                .LastOrDefault(message =>
+                    string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(message.Content)
+                    && !LooksLikeControlPrompt(message.Content));
+
+            return latestUserMessage?.Content?.Trim();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "Reply document title question rollout fallback failed for session {SessionId}",
+                request.SessionId);
+            return null;
+        }
+    }
+
+    private static bool LooksLikeControlPrompt(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        var normalized = content.Trim();
+        if (normalized.StartsWith("/goal", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (normalized.StartsWith("/goal ", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return normalized.Contains("使用Subagent-Driven完成plan", StringComparison.Ordinal)
+               || normalized.Contains("使用Worktree技能完成Worktree", StringComparison.Ordinal);
     }
 
     private static string NormalizeQuestionForTitle(string? originalUserQuestion)
@@ -719,6 +831,29 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             originalUserQuestion
                 .Replace("\r\n", "\n")
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    private static string BuildReplyDocumentBody(
+        string body,
+        string? userQuestion,
+        bool appendUserQuestionToEnd)
+    {
+        var normalizedBody = NormalizeDocumentBody(body);
+        var normalizedQuestion = NormalizeQuestionForTitle(userQuestion);
+        if (string.IsNullOrWhiteSpace(normalizedQuestion))
+        {
+            return normalizedBody;
+        }
+
+        var questionBlock = $"## 用户内容\n\n{normalizedQuestion}";
+        if (string.IsNullOrWhiteSpace(normalizedBody))
+        {
+            return questionBlock;
+        }
+
+        return appendUserQuestionToEnd
+            ? $"{normalizedBody}\n\n{questionBlock}"
+            : $"{questionBlock}\n\n{normalizedBody}";
     }
 
     private static string TruncateTitle(string title)
@@ -956,18 +1091,17 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         string fullReplyContent,
         string finalReplyContent)
     {
-        var sourceText = !string.IsNullOrWhiteSpace(fullReplyContent)
-            ? fullReplyContent
-            : finalReplyContent;
-        if (string.IsNullOrWhiteSpace(sourceText))
-        {
-            return;
-        }
-
         var session = await TryGetSessionAsync(serviceProvider, request.SessionId);
-        var candidates = MarkdownReferenceExtractor.Extract(sourceText, session?.WorkspacePath);
+        var candidates = ExtractReferencedMarkdownCandidates(
+            fullReplyContent,
+            finalReplyContent,
+            session?.WorkspacePath);
         if (candidates.Count == 0)
         {
+            _logger.LogDebug(
+                "Referenced markdown import skipped because no local markdown candidates were resolved: Session={SessionId}, WorkspacePath={WorkspacePath}",
+                request.SessionId,
+                session?.WorkspacePath ?? "<null>");
             return;
         }
 
@@ -1007,6 +1141,41 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
             userConfig.DocumentAdminOpenId,
             effectiveOptions,
             CancellationToken.None);
+    }
+
+    private static IReadOnlyList<ReferencedMarkdownDocumentCandidate> ExtractReferencedMarkdownCandidates(
+        string fullReplyContent,
+        string finalReplyContent,
+        string? workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return [];
+        }
+
+        var results = new List<ReferencedMarkdownDocumentCandidate>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        AppendCandidates(fullReplyContent);
+        AppendCandidates(finalReplyContent);
+
+        return results;
+
+        void AppendCandidates(string sourceText)
+        {
+            if (string.IsNullOrWhiteSpace(sourceText))
+            {
+                return;
+            }
+
+            foreach (var candidate in MarkdownReferenceExtractor.Extract(sourceText, workspacePath))
+            {
+                if (seen.Add(candidate.RelativePath))
+                {
+                    results.Add(candidate);
+                }
+            }
+        }
     }
 
     private static async Task<FeishuOptions> ResolveEffectiveOptionsAsync(
