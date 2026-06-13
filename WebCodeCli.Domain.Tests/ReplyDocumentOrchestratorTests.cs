@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.RegularExpressions;
 using SqlSugar;
 using WebCodeCli.Domain.Common.Options;
 using WebCodeCli.Domain.Domain.Model;
@@ -73,8 +74,8 @@ public sealed class ReplyDocumentOrchestratorTests
         await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
-        Assert.Equal("question thread-1 - 完整回复", document.Title);
-        Assert.Equal("## 用户内容\n\nquestion\n\n完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        AssertTitleMatches("question", document.Title);
+        Assert.Equal("## 用户内容\n\nquestion\n\n---\n\n完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Single(harness.CardKit.PermissionUpdates);
         Assert.Single(harness.CardKit.TextMessages);
         Assert.Contains("已生成完整回复文档：", harness.CardKit.TextMessages.Single(), StringComparison.Ordinal);
@@ -106,8 +107,8 @@ public sealed class ReplyDocumentOrchestratorTests
         await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
-        Assert.Equal($"{ContinueQuestion} thread-2 - 结论回复", document.Title);
-        Assert.Equal("## 用户内容\n\n继续\n\n结论正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        AssertTitleMatches(ContinueQuestion, document.Title);
+        Assert.Equal("## 用户内容\n\n继续\n\n---\n\n结论正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
         Assert.Equal(0, harness.HistoryService.FinalAnswerLookupCount);
         Assert.Contains("已生成结论回复文档：", Assert.Single(harness.CardKit.TextMessages), StringComparison.Ordinal);
     }
@@ -148,7 +149,7 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(1, harness.HistoryService.FinalAnswerLookupCount);
         Assert.Equal("thread-fallback", harness.HistoryService.LastCliThreadId);
         Assert.Equal(@"D:\repo\superpowers", harness.HistoryService.LastWorkspacePath);
-        Assert.Equal("## 用户内容\n\n继续\n\nrollout 结论", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        Assert.Equal("## 用户内容\n\n继续\n\n---\n\nrollout 结论", Assert.Single(harness.CardKit.AppendedTexts).Text);
     }
 
     [Fact]
@@ -179,8 +180,7 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(2, harness.CardKit.AppendedTexts.Count);
         Assert.Equal(2, harness.CardKit.PermissionUpdates.Count);
         Assert.Equal(2, harness.CardKit.TextMessages.Count);
-        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "question thread-both - 完整回复");
-        Assert.Contains(harness.CardKit.CreatedDocuments, item => item.Title == "question thread-both - 结论回复");
+        Assert.All(harness.CardKit.CreatedDocuments, item => AssertTitleMatches("question", item.Title));
     }
 
     [Fact]
@@ -325,7 +325,7 @@ public sealed class ReplyDocumentOrchestratorTests
     }
 
     [Fact]
-    public async Task QueueCompletedReplyAsync_WhenCliThreadIdMissing_FallsBackToSessionIdInTitle()
+    public async Task QueueCompletedReplyAsync_WhenCliThreadIdMissing_TitleStillUsesQuestionAndTimestamp()
     {
         using var harness = new ReplyDocumentOrchestratorHarness(
             new UserFeishuBotConfigEntity
@@ -345,7 +345,7 @@ public sealed class ReplyDocumentOrchestratorTests
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Equal($"{ContinueQuestion} session-fallback-id - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+        AssertTitleMatches(ContinueQuestion, harness.CardKit.CreatedDocuments.Single().Title);
     }
 
     [Fact]
@@ -377,7 +377,7 @@ public sealed class ReplyDocumentOrchestratorTests
 
         await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
-        Assert.Equal([NamedSessionTitle], harness.CardKit.EnsuredFolderNames);
+        Assert.Equal([$"{NamedSessionTitle} [thread-folder-title]"], harness.CardKit.EnsuredFolderNames);
         var document = Assert.Single(harness.CardKit.CreatedDocuments);
         Assert.Equal("folder-1", document.FolderToken);
         Assert.Empty(harness.CardKit.MovedDocuments);
@@ -699,8 +699,8 @@ public sealed class ReplyDocumentOrchestratorTests
 
         Assert.Collection(
             harness.CardKit.CreatedDocuments,
-            first => Assert.Equal("first session-1 - 完整回复", first.Title),
-            second => Assert.Equal("second session-2 - 完整回复", second.Title));
+            first => AssertTitleMatches("first", first.Title),
+            second => AssertTitleMatches("second", second.Title));
     }
 
     [Fact]
@@ -754,8 +754,86 @@ public sealed class ReplyDocumentOrchestratorTests
         Assert.Equal(1, harness.HistoryService.RecentMessagesLookupCount);
         Assert.Equal("thread-title-history", harness.HistoryService.LastRecentMessagesCliThreadId);
         Assert.Equal(@"D:\repo\superpowers", harness.HistoryService.LastRecentMessagesWorkspacePath);
-        Assert.Equal("先把这个关键产品约束定掉 thread-title-history - 完整回复", harness.CardKit.CreatedDocuments.Single().Title);
-        Assert.Equal("## 用户内容\n\n先把这个关键产品约束定掉\n\n完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
+        AssertTitleMatches("先把这个关键产品约束定掉", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.Equal("## 用户内容\n\n先把这个关键产品约束定掉\n\n---\n\n完整回复正文", Assert.Single(harness.CardKit.AppendedTexts).Text);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenQuestionTooLong_TruncatesQuestionAndStillUsesTimestampTitle()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            });
+
+        var longQuestion = string.Concat(Enumerable.Repeat("超长用户问题内容", 30));
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-title-truncated-chat",
+            SessionId = "session-title-truncated",
+            CliThreadId = "thread-title-visible",
+            OriginalUserQuestion = longQuestion,
+            Username = "luhaiyan",
+            Output = FullReplyBody
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
+
+        var documentTitle = harness.CardKit.CreatedDocuments.Single().Title;
+        Assert.StartsWith("超长用户问题内容", documentTitle, StringComparison.Ordinal);
+        Assert.Matches(@"^.+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$", documentTitle);
+        Assert.True(documentTitle.Length <= 180, "Document title should respect the Feishu title length limit.");
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenFullReplyContainsStructuredContent_PreservesAssistantBodyOrderAfterSeparator()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            });
+
+        var assistantBody = """
+我会继续按 Route 07 的单问题澄清推进；刚才通知边界已确认：Route 07 产出事件和通知意图，System Notifications 负责模板、规则、收件人和发送。下一步确认 AI-first 操作面边界，因为这会决定后续是否需要脚本/后端 operation surface，而不是让 AI 去点 UI。Route 07 第十六个需要确认的问题：Route 07 是否需要为 AI 提供独立的后端/脚本化操作面，还是只依赖人工 UI 配置？
+
+我推荐 B：
+
+B. 需要 AI-first 操作面，但分阶段建设，不要求 V1 一次做全。
+Route 07 的路线、计划、点位、检查项、发布、生成预览、生成执行、回滚、运行时确认，都属于 backend-owned runtime configuration，不应该只靠 AI 模拟浏览器 UI。
+V1 实施时至少要定义 operation contract 目标形态：inspect、validate、save draft、submit approval、publish、rollback、preview generation、execute generation、retry generation、runtime confirm。
+如果本 route 实施量过大，可以先交付核心后端 authoring API，再把 PowerShell 脚本/专用 skill 作为稳定后补项；但 spec 要先明确这是目标边界。
+对 trigger policy 的仿真、发布、执行日志、直接修订验证，也应纳入 AI-first 操作面目标，避免 AI 通过 UI 点复杂规则。
+已存在的菜单、权限、页面元数据、国际化、字典、参数、工作流、通知继续使用已有 AI-first operation skills，不在 Route 07 重造。
+后续如果 Inspection authoring surface 稳定且重复使用，再创建独立 mmis-inspection-authoring-operations skill；否则先记录为 Route 07 的技能治理候选。
+不推荐 A：只靠 UI。路线/计划/发布/生成/回滚/运行时确认是状态型配置，AI 点 UI 容易漏发布、漏确认、误以为草稿已生效。
+
+不推荐 C：V1 一次性做完整脚本和独立 skill。方向对，但容易把 Route 07 变成平台工程，建议先定义 contract 和核心 authoring surface，再按重复性升级技能。
+
+你是否认可按 B 写入 Route 07 设计？
+""";
+
+        var userQuestion = "Route 07 是否需要为 AI 提供独立的后端/脚本化操作面，还是只依赖人工 UI 配置？";
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-structured-body-chat",
+            SessionId = "session-structured-body",
+            CliThreadId = "thread-structured-body",
+            OriginalUserQuestion = userQuestion,
+            Username = "luhaiyan",
+            Output = assistantBody
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
+
+        Assert.Equal(
+            $"## 用户内容\n\n{userQuestion}\n\n---\n\n{assistantBody}",
+            Assert.Single(harness.CardKit.AppendedTexts).Text);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
@@ -772,6 +850,12 @@ public sealed class ReplyDocumentOrchestratorTests
         }
 
         Assert.True(condition(), "Timed out waiting for the expected condition.");
+    }
+
+    private static void AssertTitleMatches(string expectedQuestion, string actualTitle)
+    {
+        var pattern = $"^{Regex.Escape(expectedQuestion)} \\d{{4}}-\\d{{2}}-\\d{{2}} \\d{{2}}:\\d{{2}}:\\d{{2}}\\.\\d{{3}}$";
+        Assert.Matches(pattern, actualTitle);
     }
 
     private static void SetStringProperty(object target, string propertyName, string value)

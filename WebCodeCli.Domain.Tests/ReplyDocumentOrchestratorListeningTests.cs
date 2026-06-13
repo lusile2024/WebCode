@@ -37,7 +37,7 @@ public sealed class ReplyDocumentOrchestratorListeningTests
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Equal("question thread-1 - 听完整回复", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.Matches(@"^question \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$", harness.CardKit.CreatedDocuments.Single().Title);
         Assert.StartsWith("构建过了。文件内容1", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.Contains("文件内容1", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.Contains("文件内容1：/D:/repo/a.cs:1", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
@@ -67,7 +67,7 @@ public sealed class ReplyDocumentOrchestratorListeningTests
 
         await WaitUntilAsync(() => harness.CardKit.CreatedDocuments.Count == 1);
 
-        Assert.Equal("question thread-2 - 听结论回复", harness.CardKit.CreatedDocuments.Single().Title);
+        Assert.Matches(@"^question \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$", harness.CardKit.CreatedDocuments.Single().Title);
         Assert.DoesNotContain("/D:/repo/raw.cs:2", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.Contains("文件内容1：/D:/repo/final.cs:9", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);
         Assert.EndsWith("## 用户内容\n\nquestion", harness.CardKit.AppendedTexts.Single().Text, StringComparison.Ordinal);

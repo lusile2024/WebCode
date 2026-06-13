@@ -99,7 +99,10 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         var fullReplyContent = NormalizeDocumentBody(request.Output);
         var finalReplyContent = NormalizeDocumentBody(await ResolveFinalOnlyOutputAsync(scope.ServiceProvider, request));
         var titleQuestion = await ResolveTitleQuestionAsync(scope.ServiceProvider, request);
-        var titlePrefix = BuildTitlePrefix(request, titleQuestion);
+        var fullReplyTitle = BuildDocumentTitle(request, titleQuestion, FullReplySuffix);
+        var finalReplyTitle = BuildDocumentTitle(request, titleQuestion, FinalReplySuffix);
+        var audioFullReplyTitle = BuildDocumentTitle(request, titleQuestion, AudioFullReplySuffix);
+        var audioFinalReplyTitle = BuildDocumentTitle(request, titleQuestion, AudioFinalReplySuffix);
         var fullReplyDocumentBody = BuildReplyDocumentBody(fullReplyContent, titleQuestion, appendUserQuestionToEnd: false);
         var finalReplyDocumentBody = BuildReplyDocumentBody(finalReplyContent, titleQuestion, appendUserQuestionToEnd: false);
         var audioFullReplyDocumentBody = BuildReplyDocumentBody(
@@ -118,7 +121,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 scope.ServiceProvider,
                 configService,
                 request,
-                $"{titlePrefix}{FullReplySuffix}",
+                fullReplyTitle,
                 fullReplyDocumentBody,
                 FullReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
@@ -131,7 +134,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 scope.ServiceProvider,
                 configService,
                 request,
-                $"{titlePrefix}{FinalReplySuffix}",
+                finalReplyTitle,
                 finalReplyDocumentBody,
                 FinalReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
@@ -144,7 +147,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 scope.ServiceProvider,
                 configService,
                 request,
-                $"{titlePrefix}{AudioFullReplySuffix}",
+                audioFullReplyTitle,
                 audioFullReplyDocumentBody,
                 AudioFullReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
@@ -157,7 +160,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                 scope.ServiceProvider,
                 configService,
                 request,
-                $"{titlePrefix}{AudioFinalReplySuffix}",
+                audioFinalReplyTitle,
                 audioFinalReplyDocumentBody,
                 AudioFinalReplyLinkPrefix,
                 userConfig.DocumentAdminOpenId);
@@ -302,13 +305,11 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
                     optionsOverride: effectiveOptions);
             }
 
-            await _markdownRenderer.RenderAsync(
-                cardKitClient,
+            await cardKitClient.AppendCloudDocumentTextAsync(
                 document.DocumentId,
                 document.RootBlockId,
                 body,
-                effectiveOptions,
-                CancellationToken.None);
+                optionsOverride: effectiveOptions);
 
             await cardKitClient.SetCloudDocumentTenantReadableAsync(
                 document.DocumentId,
@@ -699,24 +700,60 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         return content.Replace("\r\n", "\n").Trim();
     }
 
-    private static string BuildTitlePrefix(FeishuCompletedReplyDocumentRequest request, string? titleQuestion)
+    private static string BuildDocumentTitle(
+        FeishuCompletedReplyDocumentRequest request,
+        string? titleQuestion,
+        string suffix)
     {
-        var threadOrSessionId = string.IsNullOrWhiteSpace(request.CliThreadId)
-            ? request.SessionId?.Trim()
-            : request.CliThreadId.Trim();
-
-        if (string.IsNullOrWhiteSpace(threadOrSessionId))
-        {
-            threadOrSessionId = "unknown-session";
-        }
-
         var normalizedQuestion = NormalizeQuestionForTitle(titleQuestion);
         if (string.IsNullOrWhiteSpace(normalizedQuestion))
         {
-            return threadOrSessionId;
+            normalizedQuestion = "未命名";
         }
 
-        return $"{normalizedQuestion} {threadOrSessionId}";
+        var _ = suffix;
+        const string timestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+        var timestamp = DateTime.Now.ToString(timestampFormat);
+        var maxQuestionLength = MaxTitleLength - timestamp.Length - 1;
+
+        var truncatedQuestion = maxQuestionLength > 0 && normalizedQuestion.Length > maxQuestionLength
+            ? normalizedQuestion[..maxQuestionLength].TrimEnd()
+            : normalizedQuestion;
+
+        if (string.IsNullOrWhiteSpace(truncatedQuestion))
+        {
+            truncatedQuestion = "未命名";
+        }
+
+        return $"{truncatedQuestion} {timestamp}";
+    }
+
+    private static string? ResolveEffectiveCliThreadId(
+        ChatSessionEntity? session,
+        FeishuCompletedReplyDocumentRequest request)
+    {
+        var cliThreadId = !string.IsNullOrWhiteSpace(request.CliThreadId)
+            ? request.CliThreadId
+            : session?.CliThreadId;
+
+        return string.IsNullOrWhiteSpace(cliThreadId)
+            ? null
+            : cliThreadId.Trim();
+    }
+
+    private static string? AppendThreadIdToNamedFolder(string? sessionTitle, string? cliThreadId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionTitle))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(cliThreadId))
+        {
+            return sessionTitle;
+        }
+
+        return $"{sessionTitle} [{cliThreadId}]";
     }
 
     private async Task<string?> ResolveTitleQuestionAsync(IServiceProvider serviceProvider, FeishuCompletedReplyDocumentRequest request)
@@ -839,7 +876,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         bool appendUserQuestionToEnd)
     {
         var normalizedBody = NormalizeDocumentBody(body);
-        var normalizedQuestion = NormalizeQuestionForTitle(userQuestion);
+        var normalizedQuestion = NormalizeDocumentBody(userQuestion);
         if (string.IsNullOrWhiteSpace(normalizedQuestion))
         {
             return normalizedBody;
@@ -853,7 +890,7 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
 
         return appendUserQuestionToEnd
             ? $"{normalizedBody}\n\n{questionBlock}"
-            : $"{questionBlock}\n\n{normalizedBody}";
+            : $"{questionBlock}\n\n---\n\n{normalizedBody}";
     }
 
     private static string TruncateTitle(string title)
@@ -1018,14 +1055,13 @@ public sealed class ReplyDocumentOrchestrator : IReplyDocumentOrchestrator
         ChatSessionEntity? session,
         FeishuCompletedReplyDocumentRequest request)
     {
+        var cliThreadId = ResolveEffectiveCliThreadId(session, request);
+
         if (!IsUnnamedSessionTitle(session?.Title))
         {
-            return session?.Title;
+            return AppendThreadIdToNamedFolder(session?.Title?.Trim(), cliThreadId);
         }
 
-        var cliThreadId = !string.IsNullOrWhiteSpace(request.CliThreadId)
-            ? request.CliThreadId
-            : session?.CliThreadId;
         if (!string.IsNullOrWhiteSpace(cliThreadId))
         {
             return cliThreadId;

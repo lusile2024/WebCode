@@ -17,7 +17,7 @@ namespace WebCodeCli.Domain.Tests;
 public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
 {
     [Fact]
-    public async Task QueueCompletedReplyAsync_WhenMarkdownConvertSucceeds_AppendsConvertedBlocksInsteadOfPlainText()
+    public async Task QueueCompletedReplyAsync_WhenReplyDocumentBodyContainsMarkdown_AppendsPlainTextInsteadOfConvertedBlocks()
     {
         using var harness = new ReplyDocumentOrchestratorHarness(
             new UserFeishuBotConfigEntity
@@ -40,10 +40,69 @@ public sealed class ReplyDocumentOrchestratorMarkdownIntegrationTests
 
         await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
 
-        Assert.Empty(harness.CardKit.AppendedTexts);
-        var batch = Assert.Single(harness.CardKit.AppendedBlockBatches);
-        Assert.Equal("doc-1", batch.DocumentId);
-        Assert.Single(batch.Blocks);
+        Assert.Empty(harness.CardKit.AppendedBlockBatches);
+        var appendedText = Assert.Single(harness.CardKit.AppendedTexts);
+        Assert.Equal("doc-1", appendedText.DocumentId);
+        Assert.Equal("## 用户内容\n\nquestion\n\n---\n\n# 标题", appendedText.Text);
+    }
+
+    [Fact]
+    public async Task QueueCompletedReplyAsync_WhenReplyDocumentBodyContainsStructuredSections_PreservesOriginalBodyOrderInPlainTextAppend()
+    {
+        using var harness = new ReplyDocumentOrchestratorHarness(
+            new UserFeishuBotConfigEntity
+            {
+                Username = "luhaiyan",
+                FullReplyDocEnabled = true
+            });
+
+        harness.CardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"乱序块A","text_element_style":{}}}]}}"""));
+        harness.CardKit.ConvertedBlocks.Add(ParseJsonElement("""{"block_type":2,"text":{"elements":[{"text_run":{"content":"乱序块B","text_element_style":{}}}]}}"""));
+
+        var assistantBody = """
+我会把刚才的 AI-first 操作面确认纳入 Route 07 设计记录，继续做最后几类设计收口：人工 UI 验证、公共/领域组件、后端契约和技能治理。先重新加载本轮必须使用的 superpowers 与 MMIS 约束，然后继续单问题确认。Route 07 第十七个需要确认的问题：人工 UI 验证应该验证哪些主流程，后续是否需要形成独立的人类操作测试技能？
+
+我推荐 B：
+
+B. Route 07 spec 先定义人类 UI 验证路径，实施后如果页面稳定再沉淀为技能。
+
+Route 07 人工 UI 验证至少覆盖这些路径：
+- 巡检路线：创建/编辑路线、配置点位顺序、必检/选检、跳过规则、证据要求，发布后确认运行时可用。
+- 巡检计划：绑定路线、目标范围、频率/日历、默认责任人、生成窗口、工作流/通知策略，执行生成预览。
+- 点检计划：选择设备/部件/维护对象、配置点检项、阈值/判定规则、证据要求，执行生成预览。
+- 计划生成：从已发布计划生成 WorkOrders，检查生成批次、幂等键、失败重试、来源版本。
+- 一次性发起：从计划、异常或人工入口临时发起一次巡检/点检，确认不修改已发布计划。
+- 执行快照：进入 WorkOrders 执行页，确认路线点位、检查项、标准版本、证据要求、目标快照是生成时冻结的。
+- 异常发现：从执行证据创建/合并异常，确认 Product Abnormal 拥有异常生命周期。
+- 调整提案/直接修订：触发低风险直接修订或高风险提案/审批，确认版本化、审计和运行时效果。
+
+不建议现在就强制创建 mmis-inspection-ui-verification skill，因为页面和 authoring surface 还没实现，容易写成空泛规则。更稳的是：Route 07 spec 先列预期人类 UI 验证路径，Route 07 实施完成且页面稳定后，如果这些流程可复用，再创建或更新对应的 UI 验证 skill。
+
+不推荐 A：只写后端验证，不写人类 UI 路径。巡检/点检大量是现场操作，人工验证路径必须提前定边界。
+
+不推荐 C：现在立即创建完整 UI 技能。当前还处于设计期，没有稳定页面和真实路径，技能会过早固化。
+
+你是否认可按 B 写入 Route 07 设计？
+""";
+
+        await harness.Orchestrator.QueueCompletedReplyAsync(new FeishuCompletedReplyDocumentRequest
+        {
+            ChatId = "oc-structured-order-chat",
+            SessionId = "session-structured-order",
+            CliThreadId = "thread-structured-order",
+            OriginalUserQuestion = "人工 UI 验证应该验证哪些主流程，后续是否需要形成独立的人类操作测试技能？",
+            Username = "luhaiyan",
+            Output = assistantBody
+        });
+
+        await WaitUntilAsync(() => harness.CardKit.TextMessages.Count == 1);
+
+        Assert.Empty(harness.CardKit.AppendedBlockBatches);
+        var appendedText = Assert.Single(harness.CardKit.AppendedTexts).Text;
+        Assert.StartsWith("## 用户内容\n\n人工 UI 验证应该验证哪些主流程，后续是否需要形成独立的人类操作测试技能？\n\n---\n\n我会把刚才的 AI-first 操作面确认纳入 Route 07 设计记录", appendedText, StringComparison.Ordinal);
+        Assert.Contains("- 巡检计划：绑定路线、目标范围、频率/日历、默认责任人、生成窗口、工作流/通知策略，执行生成预览。", appendedText, StringComparison.Ordinal);
+        Assert.Contains("- 计划生成：从已发布计划生成 WorkOrders，检查生成批次、幂等键、失败重试、来源版本。", appendedText, StringComparison.Ordinal);
+        Assert.Contains("你是否认可按 B 写入 Route 07 设计？", appendedText, StringComparison.Ordinal);
     }
 
     [Fact]
